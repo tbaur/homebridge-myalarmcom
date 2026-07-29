@@ -26,7 +26,6 @@ import {
 import type { DiagnosticsSnapshot } from './diagnostics/types'
 import { PartitionAccessory } from './devices/partition'
 import { SensorAccessory } from './devices/sensor'
-import { AlarmComError } from './errors'
 import {
   KEEPALIVE_INTERVAL_MS,
   MANUFACTURER,
@@ -38,8 +37,11 @@ import {
 import type { PartitionAttributes, Resource, SensorAttributes } from './types/alarm'
 import { readSensorEventHint, type AlarmComEvent } from './types/events'
 import type { MyAlarmComPlatformConfig, ResolvedConfig } from './types/config'
+import { initialDiscoveryRetryDelayMs } from './utils/discovery-retry'
+import { failureLogLevel } from './utils/failure-log-level'
 import { createScopedLogger, type Logger } from './utils/logger'
 import { toSensorServiceKind } from './utils/mappers'
+import { sleep } from './utils/retry'
 import { sanitizeError } from './utils/sanitizers'
 import { validateConfig } from './utils/validators'
 
@@ -82,6 +84,8 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   #keepAliveTimer: NodeJS.Timeout | null = null
   #refreshTimer: NodeJS.Timeout | null = null
   #diagnosticsTimer: NodeJS.Timeout | null = null
+  /** Interrupts a pending initial-discovery backoff when Homebridge shuts down. */
+  #startupRetryResolve: (() => void) | null = null
   #pendingRefreshIds = new Set<string>()
   #systemId: string | null = null
   #isShuttingDown = false
@@ -146,10 +150,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   }
 
   async #start(sessionManager: SessionManager): Promise<void> {
-    try {
-      await this.#discover()
-    } catch (error) {
-      this.#reportFailure('Initial discovery failed', error)
+    if (!(await this.#awaitInitialDiscovery())) {
       return
     }
 
@@ -178,6 +179,67 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     this.#log.info('Ready')
   }
 
+  /**
+   * Discover devices, retrying transient failures until success or shutdown.
+   *
+   * Without this, a network blip at boot left the platform idle with no Ready,
+   * no polling, and — for retryable errors — only a debug log.
+   */
+  async #awaitInitialDiscovery(): Promise<boolean> {
+    let attempt = 0
+
+    for (;;) {
+      if (this.#isShuttingDown) {
+        return false
+      }
+
+      try {
+        await this.#discover()
+        return true
+      } catch (error) {
+        const detail = sanitizeError(error)
+        const delayMs = initialDiscoveryRetryDelayMs(error, attempt + 1)
+
+        if (delayMs === null) {
+          this.#log.error(`Initial discovery failed: ${detail}`)
+          return false
+        }
+
+        attempt++
+        this.#log.warn(
+          `Initial discovery failed: ${detail}. Retrying in ${Math.round(delayMs / 1000)}s.`,
+        )
+
+        if (!(await this.#sleepUnlessShuttingDown(delayMs))) {
+          return false
+        }
+      }
+    }
+  }
+
+  /** Backoff wait that resolves early (as false) when {@link #shutdown} runs. */
+  #sleepUnlessShuttingDown(ms: number): Promise<boolean> {
+    if (this.#isShuttingDown) {
+      return Promise.resolve(false)
+    }
+
+    return new Promise((resolve) => {
+      let settled = false
+      const finish = (continued: boolean): void => {
+        if (settled) {
+          return
+        }
+        settled = true
+        this.#startupRetryResolve = null
+        resolve(continued)
+      }
+
+      this.#startupRetryResolve = () => finish(false)
+      // Uses the shared sleep helper so tests can skip real wall-clock waits.
+      void sleep(ms).then(() => finish(!this.#isShuttingDown))
+    })
+  }
+
   /** Enumerate the account's devices and publish them to HomeKit. */
   async #discover(): Promise<void> {
     // Stamped before the work, not after. Recording only successful runs meant
@@ -200,6 +262,15 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     // the panel went on being polled until a whole interval later.
     this.#reconcileKnownDevices(devices)
 
+    // Unregister HomeKit accessories for devices deleted at the panel (and for
+    // explicitly ignored IDs) immediately, so a later detail-read failure
+    // cannot leave ghosts until the next hourly rediscovery.
+    const liveForHomeKit = new Set(
+      [...devices.partitionIds, ...devices.sensorIds]
+        .filter((id) => !this.#config.ignoredDeviceIds.has(id)),
+    )
+    this.#removeStaleAccessories(liveForHomeKit)
+
     const partitions = await this.client.getPartitions(
       devices.partitionIds.filter((id) => !this.#config.ignoredDeviceIds.has(id)),
     )
@@ -214,6 +285,8 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       this.#syncSensor(sensor)
     }
 
+    // After sync, prune accessories that are still on the account but were not
+    // published (unsupported types, unmonitored sensors when disabled).
     this.#removeStaleAccessories()
   }
 
@@ -288,6 +361,9 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       this.#log.info(
         `Skipping "${attributes.description}": Alarm.com device type ${attributes.deviceType} is not supported yet.`,
       )
+      // Drop a previously published handler so post-sync stale removal can
+      // unregister the HomeKit accessory on a live rediscovery.
+      this.#sensors.delete(deviceId)
       return
     }
 
@@ -295,6 +371,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       this.#log.info(
         `Skipping "${attributes.description}": Alarm.com reports monitoring is disabled. Set "includeUnmonitoredSensors" to expose it anyway.`,
       )
+      this.#sensors.delete(deviceId)
       return
     }
 
@@ -346,13 +423,13 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   }
 
   /** Unregister accessories for devices that no longer exist on the account. */
-  #removeStaleAccessories(): void {
-    const liveIds = new Set([...this.#partitions.keys(), ...this.#sensors.keys()])
+  #removeStaleAccessories(liveIds?: ReadonlySet<string>): void {
+    const live = liveIds ?? new Set([...this.#partitions.keys(), ...this.#sensors.keys()])
 
     for (const [uuid, accessory] of this.#cachedAccessories) {
       const deviceId = (accessory.context as { deviceId?: string }).deviceId
 
-      if (deviceId && liveIds.has(deviceId)) {
+      if (deviceId && live.has(deviceId)) {
         continue
       }
 
@@ -363,7 +440,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   }
 
   #startPolling(): void {
-    if (this.#isShuttingDown) {
+    if (this.#isShuttingDown || this.#pollTimer) {
       return
     }
     const intervalMs = this.#config.pollIntervalSeconds * 1_000
@@ -380,11 +457,15 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
    * keep-alive is the cheaper and safer way to stay authenticated.
    */
   #startKeepAlive(sessionManager: SessionManager): void {
-    if (this.#isShuttingDown) {
+    if (this.#isShuttingDown || this.#keepAliveTimer) {
       return
     }
     this.#keepAliveTimer = setInterval(() => {
-      void sessionManager.touch()
+      void sessionManager.touch().then((isAlive) => {
+        if (!isAlive) {
+          this.#log.debug('Session keep-alive did not confirm a live session')
+        }
+      })
     }, KEEPALIVE_INTERVAL_MS)
   }
 
@@ -400,6 +481,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
         this.#log.warn('Continuing with polling only; HomeKit updates will be slower.')
       },
       onReconnect: () => this.#diagnostics.wsReconnect(),
+      onRecovered: () => this.#log.debug('Event stream recovery recorded'),
     })
 
     await this.#eventStream.start()
@@ -448,7 +530,9 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       this.#refreshTimer = null
       const ids = [...this.#pendingRefreshIds]
       this.#pendingRefreshIds.clear()
-      void this.#refreshDevices(ids)
+      void this.#refreshDevices(ids).catch((error: unknown) => {
+        this.#reportFailure('Targeted refresh failed', error)
+      })
     }, REFRESH_DEBOUNCE_MS)
   }
 
@@ -457,15 +541,11 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     const partitionIds = deviceIds.filter((id) => this.#partitions.has(id))
     const sensorIds = deviceIds.filter((id) => this.#sensors.has(id))
 
-    try {
-      for (const resource of await this.client.getPartitions(partitionIds)) {
-        this.#partitions.get(resource.id)?.update(resource)
-      }
-      for (const resource of await this.client.getSensors(sensorIds)) {
-        this.#sensors.get(resource.id)?.update(resource)
-      }
-    } catch (error) {
-      this.#reportFailure('Targeted refresh failed', error)
+    for (const resource of await this.client.getPartitions(partitionIds)) {
+      this.#partitions.get(resource.id)?.update(resource)
+    }
+    for (const resource of await this.client.getSensors(sensorIds)) {
+      this.#sensors.get(resource.id)?.update(resource)
     }
   }
 
@@ -515,13 +595,8 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
    */
   #reportFailure(context: string, error: unknown): void {
     const message = `${context}: ${sanitizeError(error)}`
-
-    if (error instanceof AlarmComError && error.isRetryable) {
-      this.#log.debug(message)
-      return
-    }
-
-    this.#log.error(message)
+    const level = failureLogLevel(error)
+    this.#log[level](message)
   }
 
   #diagnosticsIntervalMs(): number {
@@ -617,6 +692,10 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
 
   #shutdown(): void {
     this.#isShuttingDown = true
+
+    const resolveStartupRetry = this.#startupRetryResolve
+    this.#startupRetryResolve = null
+    resolveStartupRetry?.()
 
     if (this.#diagnosticsTimer) {
       try {

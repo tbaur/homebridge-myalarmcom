@@ -18,6 +18,8 @@ export interface RetryOptions {
     onRetry?: (attempt: number, delayMs: number, error: unknown) => void;
     /** Injectable sleep, so tests need not wait in real time. */
     sleep?: (ms: number) => Promise<void>;
+    /** Override which errors are worth another attempt. */
+    isRetryable?: (error: unknown) => boolean;
 }
 /** Resolve after the given delay. */
 export declare const sleep: (ms: number) => Promise<void>;

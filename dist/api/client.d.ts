@@ -76,9 +76,11 @@ export declare class AlarmComClient {
      * to reject them: `nightArming` and `forceBypass` break the command outright
      * on panels that do not support them, and neither applies to a disarm.
      *
-     * Not wrapped in retry. Arming is not idempotent from the user's point of
-     * view — a duplicate command can produce a second exit-delay countdown — so a
-     * failure is reported rather than silently repeated.
+     * Not wrapped in {@link withRetry}: arming is not idempotent from the user's
+     * point of view — a duplicate command can produce a second exit-delay
+     * countdown. A lapsed session is still recovered once (invalidate + one
+     * retry), matching read paths, so dead cookies do not fail a user command
+     * that the next poll would have survived.
      */
     commandPartition(partitionId: string, action: PartitionAction, options?: PartitionCommandOptions): Promise<Resource<PartitionAttributes>>;
     /**

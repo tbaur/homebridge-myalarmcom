@@ -18,6 +18,13 @@ exports.SessionManager = void 0;
 const errors_1 = require("../errors");
 const retry_1 = require("../utils/retry");
 const auth_1 = require("./auth");
+/**
+ * Consecutive keep-alive transport failures before the session is discarded.
+ *
+ * A single network blip is inconclusive; repeated failures mean the cookies
+ * are almost certainly dead and the next caller should re-authenticate.
+ */
+const KEEPALIVE_FAILURE_LIMIT = 3;
 /** Establishes, reuses, and refreshes the Alarm.com session. */
 class SessionManager {
     #credentials;
@@ -28,6 +35,8 @@ class SessionManager {
     #lastLoginAttempt = 0;
     /** In-flight login, so concurrent callers share one attempt. */
     #pendingLogin = null;
+    /** Consecutive keep-alive transport failures against the current session. */
+    #keepAliveFailures = 0;
     constructor(options) {
         this.#credentials = options.credentials;
         this.#sessionLifetimeMs = options.authIntervalMinutes * 60_000;
@@ -61,30 +70,37 @@ class SessionManager {
         }
     }
     async #login() {
-        // Never allow logins closer together than the configured lifetime, even if
-        // something upstream is calling in a loop after repeated failures.
+        // Never allow logins closer together than the configured lifetime after a
+        // successful sign-in (or a permanent credential rejection). Transient
+        // failures intentionally leave the floor alone so a boot-time network blip
+        // can be retried on the discovery backoff rather than waiting ten minutes.
         const sinceLastAttempt = Date.now() - this.#lastLoginAttempt;
         if (this.#lastLoginAttempt > 0 && sinceLastAttempt < this.#sessionLifetimeMs) {
             const waitMs = this.#sessionLifetimeMs - sinceLastAttempt;
             this.#log.debug(`deferring re-authentication for ${Math.round(waitMs / 1000)}s to stay within the login floor`);
             await (0, retry_1.sleep)(waitMs);
         }
-        this.#lastLoginAttempt = Date.now();
         this.#log.debug('Signing in to Alarm.com');
         try {
             this.#session = await (0, auth_1.authenticate)(this.#credentials, this.#log);
+            this.#lastLoginAttempt = Date.now();
+            this.#keepAliveFailures = 0;
             this.#log.debug('Alarm.com session established');
             this.#onSessionEstablished?.();
             return this.#session;
         }
         catch (error) {
             this.#session = null;
+            this.#keepAliveFailures = 0;
             // These two are permanent until the user changes something. Say so
             // plainly, because the alternative is a log full of identical retries.
+            // Stamp the floor so we do not hammer Alarm.com with the same rejection.
             if (error instanceof errors_1.TwoFactorRequiredError) {
+                this.#lastLoginAttempt = Date.now();
                 this.#log.error('Alarm.com requires two-factor verification. Copy a fresh "twoFactorAuthenticationId" cookie from a signed-in browser into the plugin config.');
             }
             else if (error instanceof errors_1.AuthenticationError) {
+                this.#lastLoginAttempt = Date.now();
                 this.#log.error('Alarm.com rejected the configured credentials. Fix them before restarting; repeated failed sign-ins can lock the account.');
             }
             throw error;
@@ -109,18 +125,33 @@ class SessionManager {
                 // was in flight; wiping that would force another policed login.
                 if (this.#session === session) {
                     this.#session = null;
+                    this.#keepAliveFailures = 0;
                 }
+                return false;
             }
-            return isAlive;
+            this.#keepAliveFailures = 0;
+            return true;
         }
         catch (error) {
-            this.#log.debug(`keep-alive failed: ${String(error)}`);
+            // Transport errors are inconclusive once; repeated failures against the
+            // same session mean the cookies are almost certainly dead.
+            if (this.#session !== session) {
+                return false;
+            }
+            this.#keepAliveFailures++;
+            this.#log.debug(`keep-alive failed (${this.#keepAliveFailures}/${KEEPALIVE_FAILURE_LIMIT}): ${String(error)}`);
+            if (this.#keepAliveFailures >= KEEPALIVE_FAILURE_LIMIT) {
+                this.#log.warn('Alarm.com keep-alive failed repeatedly; discarding the session so the next request re-authenticates');
+                this.#session = null;
+                this.#keepAliveFailures = 0;
+            }
             return false;
         }
     }
     /** Discard the current session so the next call re-authenticates. */
     invalidate() {
         this.#session = null;
+        this.#keepAliveFailures = 0;
     }
     /** Whether a session is currently held. Does not trigger a login. */
     get hasSession() {

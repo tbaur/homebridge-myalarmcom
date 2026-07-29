@@ -75,6 +75,8 @@ describe('re-enumerating the account while running', () => {
   let api: FakeHomebridgeApi
   let log: RecordingLogging
   let sensorReads: string[][]
+  /** Per-id attribute overrides applied by the persistent sensor interceptor. */
+  let sensorAttributeOverrides: Record<string, Record<string, unknown>>
 
   function requestedIds(uri: string): string[] {
     return new URL(uri, BASE_URL).searchParams.getAll('ids[]')
@@ -103,7 +105,23 @@ describe('re-enumerating the account while running', () => {
       .reply(200, (uri: string) => {
         const ids = requestedIds(uri)
         sensorReads.push(ids)
-        return { data: sensorsFixture.data.filter((sensor) => ids.includes(sensor.id)) }
+        return {
+          data: sensorsFixture.data
+            .filter((sensor) => ids.includes(sensor.id))
+            .map((sensor) => {
+              const overrides = sensorAttributeOverrides[sensor.id]
+              if (!overrides) {
+                return sensor
+              }
+              return {
+                ...sensor,
+                attributes: {
+                  ...sensor.attributes,
+                  ...overrides,
+                },
+              }
+            }),
+        }
       })
   }
 
@@ -145,6 +163,7 @@ describe('re-enumerating the account while running', () => {
     api = new FakeHomebridgeApi()
     log = createHomebridgeLogging()
     sensorReads = []
+    sensorAttributeOverrides = {}
     interceptSignInAndDevices()
     nock(BASE_URL).get(SYSTEM_PATH).reply(200, systemFixture)
   })
@@ -174,6 +193,10 @@ describe('re-enumerating the account while running', () => {
     poll()
     await waitFor(() => api.unregistered.length > 0, { description: 'the device to be dropped' })
 
+    // Further polls may also be rediscoveries (short interval + waitFor latency);
+    // keep the reduced system list available so they do not hang on a missing nock.
+    nock(BASE_URL).persist().get(SYSTEM_PATH).reply(200, SYSTEM_WITHOUT_FRONT_DOOR)
+
     sensorReads.length = 0
     poll()
     await waitFor(() => sensorReads.length > 0, { description: 'the next ordinary poll' })
@@ -192,6 +215,21 @@ describe('re-enumerating the account while running', () => {
 
     expect(api.unregistered).toEqual([])
     expect(api.registeredNames).toContain('Front Door')
+  })
+
+  it('unregisters a sensor that becomes unmonitored on rediscovery', async () => {
+    await launch()
+    expect(api.registeredNames).toContain('Front Door')
+
+    sensorAttributeOverrides[FRONT_DOOR] = { isMonitoringEnabled: false }
+    nock(BASE_URL).get(SYSTEM_PATH).reply(200, systemFixture)
+
+    await waitOutRediscoveryInterval()
+    poll()
+
+    await waitFor(() => api.unregistered.length > 0, { description: 'the unmonitored sensor to be dropped' })
+    expect(api.unregistered.map((accessory) => accessory.displayName)).toEqual(['Front Door'])
+    expect(log.infoMessages.join('\n')).toMatch(/monitoring is disabled/)
   })
 
   /**

@@ -162,6 +162,17 @@ export const DEFAULT_AUTH_INTERVAL_MIN = 10
 /** How often to touch {@link KEEPALIVE_URL} to hold the session open. */
 export const KEEPALIVE_INTERVAL_MS = 4 * 60_000
 
+/**
+ * Base delay before retrying a failed initial device discovery.
+ *
+ * Startup cannot reach Ready without a successful discovery. Transient failures
+ * must retry with backoff rather than leaving the platform idle forever.
+ */
+export const INITIAL_DISCOVERY_RETRY_BASE_MS = 5_000
+
+/** Cap on the delay between initial discovery retries. */
+export const INITIAL_DISCOVERY_RETRY_MAX_MS = 5 * 60_000
+
 /** Maximum attempts for a single API request before surfacing the failure. */
 export const MAX_API_RETRY_ATTEMPTS = 3
 
@@ -205,21 +216,35 @@ export const WEBSOCKET_RECONNECT_MAX_MS = 5 * 60_000
  * Consecutive stream failures tolerated before falling back to polling.
  *
  * The event stream is the primary state source; polling is the safety net.
+ * After this many failures the stream schedules a longer recovery attempt
+ * rather than giving up for the process lifetime.
  */
 export const WEBSOCKET_MAX_FAILURES = 5
+
+/**
+ * How long to wait after giving up before trying the event stream again.
+ *
+ * Polling continues in the meantime. Without this, a transient outage would
+ * leave push updates dead until Homebridge restarted.
+ */
+export const WEBSOCKET_RECOVERY_INTERVAL_MS = 15 * 60_000
 
 /**
  * Proactively re-establish the event stream on this interval.
  *
  * Alarm.com's stream token dies around five minutes; refreshing at five minutes
- * (plus jitter) races the server close and loses — the drop path then logs a
- * noisy info-level "reconnected". Refresh before expiry so the routine path
- * (`refreshed` at debug) wins instead.
+ * races the server close and loses — the drop path then logs a noisy info-level
+ * "reconnected". Refresh well before expiry so the routine path (`refreshed` at
+ * debug) wins instead. Jitter *subtracts* from this value (see
+ * {@link WEBSOCKET_REFRESH_JITTER_MS}).
  */
-export const WEBSOCKET_REFRESH_INTERVAL_MS = 4 * 60_000
+export const WEBSOCKET_REFRESH_INTERVAL_MS = 3 * 60_000 + 30_000
 
 /**
- * Random spread added to the stream refresh so reconnects do not synchronize.
- * Kept well below the gap between this interval and the ~5-minute token lifetime.
+ * Random amount subtracted from {@link WEBSOCKET_REFRESH_INTERVAL_MS}.
+ *
+ * Subtractive (not additive) so refresh always lands earlier than the base,
+ * preserving margin before the ~5-minute token lifetime. Also desynchronizes
+ * multiple Homebridge instances.
  */
-export const WEBSOCKET_REFRESH_JITTER_MS = 15_000
+export const WEBSOCKET_REFRESH_JITTER_MS = 30_000

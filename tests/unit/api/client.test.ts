@@ -14,7 +14,7 @@ import { CircuitBreaker } from '../../../src/api/circuit-breaker'
 import { AlarmComClient, chunkIds } from '../../../src/api/client'
 import { RateLimiter } from '../../../src/api/rate-limiter'
 import type { SessionManager } from '../../../src/api/session-manager'
-import { ApiParseError, ForbiddenError } from '../../../src/errors'
+import { ApiParseError, ConfigurationError, ForbiddenError } from '../../../src/errors'
 import { BASE_URL, MAX_IDS_PER_REQUEST } from '../../../src/settings'
 import type { PartitionAttributes, Resource } from '../../../src/types/alarm'
 import * as retry from '../../../src/utils/retry'
@@ -109,14 +109,14 @@ describe('AlarmComClient', () => {
       const { client } = createClient()
       nock(BASE_URL).get('/web/api/identities').reply(200, { data: [{ id: '1', relationships: {} }] })
 
-      await expect(client.getSystemId()).rejects.toThrow(ApiParseError)
+      await expect(client.getSystemId()).rejects.toThrow(ConfigurationError)
     })
 
     it('complains when the identity list is empty', async () => {
       const { client } = createClient()
       nock(BASE_URL).get('/web/api/identities').reply(200, { data: [] })
 
-      await expect(client.getSystemId()).rejects.toThrow(ApiParseError)
+      await expect(client.getSystemId()).rejects.toThrow(ConfigurationError)
     })
   })
 
@@ -255,6 +255,22 @@ describe('AlarmComClient', () => {
       expect(partition.id).toBe(partitionId)
     })
 
+    it('re-authenticates once when a command hits a lapsed session', async () => {
+      const { client, sessionManager } = createClient()
+      nock(BASE_URL)
+        .post(`/web/api/devices/partitions/${partitionId}/disarm`)
+        .reply(401, '{"errors":["Unauthorized"]}')
+      nock(BASE_URL)
+        .post(`/web/api/devices/partitions/${partitionId}/disarm`)
+        .reply(200, partitionResponse)
+
+      await expect(client.commandPartition(partitionId, 'disarm')).resolves.toMatchObject({
+        id: partitionId,
+      })
+      expect(sessionManager.invalidate).toHaveBeenCalledTimes(1)
+      expect(sessionManager.getSession).toHaveBeenCalledTimes(2)
+    })
+
     it('always asks for a real command rather than a state poll', async () => {
       const body = await captureCommandBody(
         (client) => client.commandPartition(partitionId, 'armStay'),
@@ -333,10 +349,26 @@ describe('AlarmComClient', () => {
       await expect(client.commandPartition(partitionId, 'armAway')).rejects.toThrow(ForbiddenError)
     })
 
-    it('reports an HTML login page as a parse failure, not as data', async () => {
-      const { client } = createClient()
+    it('re-authenticates once when a command gets an HTML login page', async () => {
+      const { client, sessionManager } = createClient()
       nock(BASE_URL)
         .post(`/web/api/devices/partitions/${partitionId}/disarm`)
+        .reply(200, '<!DOCTYPE html><html><body>Sign in to Alarm.com</body></html>')
+      nock(BASE_URL)
+        .post(`/web/api/devices/partitions/${partitionId}/disarm`)
+        .reply(200, partitionResponse)
+
+      await expect(client.commandPartition(partitionId, 'disarm')).resolves.toMatchObject({
+        id: partitionId,
+      })
+      expect(sessionManager.invalidate).toHaveBeenCalledTimes(1)
+    })
+
+    it('surfaces a parse failure when re-authentication still returns HTML', async () => {
+      const { client, sessionManager } = createClient()
+      nock(BASE_URL)
+        .post(`/web/api/devices/partitions/${partitionId}/disarm`)
+        .times(2)
         .reply(200, '<!DOCTYPE html><html><body>Sign in to Alarm.com</body></html>')
 
       const error = await captureRejection(client.commandPartition(partitionId, 'disarm'))
@@ -344,6 +376,7 @@ describe('AlarmComClient', () => {
       expect(error).toBeInstanceOf(ApiParseError)
       expect(error.message).toMatch(/the session may have expired/)
       expect(error.message).not.toContain('?')
+      expect(sessionManager.invalidate).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -413,6 +446,36 @@ describe('AlarmComClient', () => {
       await expect(client.getSystemId()).resolves.toBe('7654321')
       expect(sessionManager.invalidate).toHaveBeenCalledTimes(1)
       expect(sessionManager.getSession).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not multiply re-logins when the HTML login page persists', async () => {
+      const { client, sessionManager } = createClient()
+      nock(BASE_URL)
+        .get('/web/api/identities')
+        .times(2)
+        .reply(200, '<!DOCTYPE html><html><body>Sign in to Alarm.com</body></html>')
+
+      await expect(client.getSystemId()).rejects.toThrow(ApiParseError)
+      expect(sessionManager.invalidate).toHaveBeenCalledTimes(1)
+      expect(sessionManager.getSession).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('rate limiting', () => {
+    afterEach(() => {
+      jest.restoreAllMocks()
+    })
+
+    it('honours Retry-After from a 429 before retrying', async () => {
+      const wait = jest.spyOn(retry, 'sleep').mockResolvedValue(undefined)
+      const { client } = createClient()
+      nock(BASE_URL)
+        .get('/web/api/identities')
+        .reply(429, 'slow down', { 'Retry-After': '7' })
+      nock(BASE_URL).get('/web/api/identities').reply(200, identitiesFixture)
+
+      await expect(client.getSystemId()).resolves.toBe('7654321')
+      expect(wait).toHaveBeenCalledWith(7_000)
     })
   })
 

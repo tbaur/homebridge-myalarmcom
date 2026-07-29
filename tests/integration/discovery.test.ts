@@ -111,6 +111,7 @@ describe('discovering an Alarm.com account', () => {
   }
 
   beforeEach(() => {
+    nock.cleanAll()
     api = new FakeHomebridgeApi()
     log = createHomebridgeLogging()
     interceptSignIn()
@@ -212,6 +213,24 @@ describe('discovering an Alarm.com account', () => {
     expect(api.unregistered).toContain(stale)
   })
 
+  it('unregisters a cached accessory that is now ignored in config', async () => {
+    const platform = new MyAlarmComPlatform(log, {
+      ...CONFIG,
+      ignoredDeviceIds: ['1234567-1'],
+    }, api.asApi())
+    const ignored = new api.platformAccessory('Front Door', api.hap.uuid.generate('myalarmcom-1234567-1'))
+    ignored.context = { deviceId: '1234567-1', kind: 'contact', displayName: 'Front Door' }
+    platform.configureAccessory(ignored as never)
+
+    api.emit('didFinishLaunching')
+    // Wait for Ready so #start finishes before afterEach shutdown; otherwise the
+    // in-flight discovery races the next test's nock interceptors.
+    await waitForDiscovery()
+
+    expect(api.unregistered).toContain(ignored)
+    expect(api.registeredNames).not.toContain('Front Door')
+  })
+
   it('reports a sign-in failure without publishing anything', async () => {
     nock.cleanAll()
     nock(BASE_URL).get('/login').reply(200, LOGIN_PAGE_HTML)
@@ -223,6 +242,20 @@ describe('discovering an Alarm.com account', () => {
 
     expect(api.registered).toEqual([])
     expect(log.errors.join('\n')).toMatch(/Initial discovery failed/)
+  })
+
+  it('retries initial discovery after a transient failure and still reaches Ready', async () => {
+    nock.cleanAll()
+    interceptSignIn()
+    // Exhaust the client's per-request retries, then succeed on the platform retry.
+    nock(BASE_URL).get('/web/api/identities').times(3).reply(503, 'unavailable')
+    interceptDiscovery()
+
+    await launch()
+
+    expect(log.warnings.join('\n')).toMatch(/Initial discovery failed:.*Retrying/)
+    expect(log.infoMessages.some((message) => message.includes('Ready'))).toBe(true)
+    expect(api.registered.length).toBeGreaterThan(0)
   })
 
   it('refuses to start at all when the credentials are missing', () => {

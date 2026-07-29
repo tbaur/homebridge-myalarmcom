@@ -137,17 +137,25 @@ export declare class ApiParseError extends AlarmComError {
 }
 /**
  * Circuit breaker is open; Alarm.com is being treated as unavailable.
- * Callers should fail fast until {@link CircuitBreakerError.retryAfterMs} elapses.
+ * Not retryable: callers should fail fast until {@link CircuitBreakerError.retryAfterMs}
+ * elapses rather than burning paced attempts against a known-open circuit.
  */
 export declare class CircuitBreakerError extends AlarmComError {
     readonly code = "CIRCUIT_OPEN";
-    readonly isRetryable = true;
+    readonly isRetryable = false;
     readonly resetTime: Date;
     constructor(resetTimeMs: number, options?: {
         cause?: Error;
     });
     get retryAfterMs(): number;
 }
+/**
+ * Parse an HTTP `Retry-After` value into a millisecond delay.
+ *
+ * Accepts either a delay in seconds or an HTTP-date. Invalid values are ignored
+ * so callers fall back to computed backoff.
+ */
+export declare function parseRetryAfterMs(header: string | null | undefined): number | undefined;
 /**
  * Map an HTTP status and body to the appropriate error type.
  *
@@ -157,5 +165,6 @@ export declare class CircuitBreakerError extends AlarmComError {
 export declare function createApiError(status: number, message: string, options?: {
     body?: string;
     cause?: Error;
+    retryAfterMs?: number;
 }): AlarmComError;
 //# sourceMappingURL=index.d.ts.map

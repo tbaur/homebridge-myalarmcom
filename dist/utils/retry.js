@@ -45,7 +45,7 @@ function isRetryable(error) {
  * @param operation Must be idempotent. Do not wrap arming commands in this.
  */
 async function withRetry(operation, options = {}) {
-    const { maxAttempts = settings_1.MAX_API_RETRY_ATTEMPTS, baseDelayMs = DEFAULT_BASE_DELAY_MS, maxDelayMs = settings_1.MAX_RETRY_BACKOFF_MS, onRetry, sleep: wait = exports.sleep, } = options;
+    const { maxAttempts = settings_1.MAX_API_RETRY_ATTEMPTS, baseDelayMs = DEFAULT_BASE_DELAY_MS, maxDelayMs = settings_1.MAX_RETRY_BACKOFF_MS, onRetry, sleep: wait = exports.sleep, isRetryable: shouldRetry = isRetryable, } = options;
     let lastError;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
@@ -53,7 +53,7 @@ async function withRetry(operation, options = {}) {
         }
         catch (error) {
             lastError = error;
-            if (!isRetryable(error) || attempt === maxAttempts) {
+            if (!shouldRetry(error) || attempt === maxAttempts) {
                 throw error;
             }
             const serverDelay = error instanceof errors_1.RateLimitError ? error.retryAfterMs : undefined;
