@@ -119,15 +119,21 @@ export class SessionManager {
    * @returns Whether a live session is still held afterwards.
    */
   async touch(): Promise<boolean> {
-    if (!this.#session) {
+    const session = this.#session
+    if (!session) {
       return false
     }
 
     try {
-      const isAlive = await keepAlive(this.#session)
+      const isAlive = await keepAlive(session)
       if (!isAlive) {
         this.#log.debug('keep-alive reported the session is no longer valid')
-        this.#session = null
+        // Only clear if this is still the session we probed. A concurrent
+        // invalidate()+re-login can install a newer session while keep-alive
+        // was in flight; wiping that would force another policed login.
+        if (this.#session === session) {
+          this.#session = null
+        }
       }
       return isAlive
     } catch (error) {
