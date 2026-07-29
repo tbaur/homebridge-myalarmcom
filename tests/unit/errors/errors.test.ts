@@ -16,6 +16,7 @@ import {
   CircuitBreakerError,
   createApiError,
   ForbiddenError,
+  parseRetryAfterMs,
   RateLimitError,
   ReadOnlyPartitionError,
   SessionExpiredError,
@@ -45,6 +46,13 @@ describe('createApiError', () => {
     expect(error).toBeInstanceOf(RateLimitError)
     expect(error.isRetryable).toBe(true)
     expect(error.httpStatus).toBe(429)
+  })
+
+  it('carries Retry-After on a 429 when the caller parsed one', () => {
+    const error = createApiError(429, 'Alarm.com returned 429', { retryAfterMs: 7_000 })
+
+    expect(error).toBeInstanceOf(RateLimitError)
+    expect((error as RateLimitError).retryAfterMs).toBe(7_000)
   })
 
   it('maps 5xx to a retryable response error', () => {
@@ -153,7 +161,33 @@ describe('CircuitBreakerError', () => {
     expect(error.message).toMatch(/Circuit breaker is open/)
   })
 
+  it('is not retryable, so callers fail fast instead of burning paced attempts', () => {
+    expect(new CircuitBreakerError(1_000).isRetryable).toBe(false)
+  })
+
   it('never reports a negative wait once the reset time has passed', () => {
     expect(new CircuitBreakerError(-1_000).retryAfterMs).toBe(0)
+  })
+})
+
+describe('parseRetryAfterMs', () => {
+  it('reads a delay-seconds value', () => {
+    expect(parseRetryAfterMs('7')).toBe(7_000)
+    expect(parseRetryAfterMs('0')).toBe(0)
+  })
+
+  it('reads an HTTP-date value', () => {
+    const when = new Date(Date.now() + 5_000).toUTCString()
+    const delay = parseRetryAfterMs(when)
+
+    expect(delay).toBeGreaterThan(3_000)
+    expect(delay).toBeLessThanOrEqual(5_000)
+  })
+
+  it('ignores missing or unparseable values', () => {
+    expect(parseRetryAfterMs(undefined)).toBeUndefined()
+    expect(parseRetryAfterMs(null)).toBeUndefined()
+    expect(parseRetryAfterMs('')).toBeUndefined()
+    expect(parseRetryAfterMs('not-a-delay')).toBeUndefined()
   })
 })

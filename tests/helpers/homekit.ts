@@ -193,15 +193,17 @@ export function createHomebridgeLogging(): RecordingLogging {
  * Poll until a condition holds.
  *
  * Homebridge starts discovery from a fire-and-forget `didFinishLaunching`
- * handler, so there is no promise for a test to await.
+ * handler, so there is no promise for a test to await. Uses `performance.now`
+ * so tests that advance a mocked `Date.now` (e.g. circuit-breaker cooldowns)
+ * do not extend or collapse this deadline.
  */
 export async function waitFor(
   predicate: () => boolean,
   { timeoutMs = 5_000, description = 'condition' }: { timeoutMs?: number, description?: string } = {},
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs
+  const deadline = performance.now() + timeoutMs
   while (!predicate()) {
-    if (Date.now() > deadline) {
+    if (performance.now() > deadline) {
       throw new Error(`Timed out after ${timeoutMs}ms waiting for ${description}`)
     }
     await new Promise((resolve) => setTimeout(resolve, 5))

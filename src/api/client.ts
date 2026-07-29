@@ -13,9 +13,12 @@
  */
 
 import {
+  AlarmComError,
   ApiParseError,
   CircuitBreakerError,
+  ConfigurationError,
   createApiError,
+  parseRetryAfterMs,
   SessionExpiredError,
 } from '../errors'
 import {
@@ -190,7 +193,10 @@ export class AlarmComClient {
       throw createApiError(
         response.status,
         `Alarm.com returned ${response.status} for ${sanitizeUrl(url)}`,
-        { body: text },
+        {
+          body: text,
+          retryAfterMs: parseRetryAfterMs(response.headers.get('retry-after')),
+        },
       )
     }
 
@@ -211,7 +217,9 @@ export class AlarmComClient {
    *
    * A lapsed session is retried exactly once with a fresh login. Beyond that it
    * propagates, because repeatedly re-authenticating against a service that
-   * keeps rejecting us is how accounts get locked.
+   * keeps rejecting us is how accounts get locked. Session errors are excluded
+   * from {@link withRetry} so a failed recovery cannot multiply into three
+   * logins per request.
    */
   async #request<T>(url: string, options: RequestOptions = {}): Promise<T> {
     const attempt = (): Promise<T> => this.#timedAttempt(() =>
@@ -236,6 +244,18 @@ export class AlarmComClient {
         }
       },
       {
+        isRetryable: (error) => {
+          // Session recovery is one-shot (above). Open-circuit must fail fast
+          // rather than burning paced attempts against a known-unavailable service.
+          if (
+            error instanceof SessionExpiredError
+            || error instanceof ApiParseError
+            || error instanceof CircuitBreakerError
+          ) {
+            return false
+          }
+          return error instanceof AlarmComError && error.isRetryable
+        },
         onRetry: (attemptNumber, delayMs, error) => {
           this.#onRetry?.()
           this.#log.debug(
@@ -280,7 +300,10 @@ export class AlarmComClient {
     const selected = identity?.relationships?.selectedSystem?.data
 
     if (!selected || Array.isArray(selected)) {
-      throw new ApiParseError('Alarm.com did not report a selected system for this account')
+      // Account configuration problem, not a transient parse glitch — do not
+      // treat this like an HTML login page (ApiParseError) or discovery will
+      // retry forever.
+      throw new ConfigurationError('Alarm.com did not report a selected system for this account')
     }
 
     return selected.id
@@ -330,9 +353,11 @@ export class AlarmComClient {
    * to reject them: `nightArming` and `forceBypass` break the command outright
    * on panels that do not support them, and neither applies to a disarm.
    *
-   * Not wrapped in retry. Arming is not idempotent from the user's point of
-   * view — a duplicate command can produce a second exit-delay countdown — so a
-   * failure is reported rather than silently repeated.
+   * Not wrapped in {@link withRetry}: arming is not idempotent from the user's
+   * point of view — a duplicate command can produce a second exit-delay
+   * countdown. A lapsed session is still recovered once (invalidate + one
+   * retry), matching read paths, so dead cookies do not fail a user command
+   * that the next poll would have survived.
    */
   async commandPartition(
     partitionId: string,
@@ -357,13 +382,24 @@ export class AlarmComClient {
 
     this.#log.debug(`Sending "${action}" to partition ${partitionId}`)
 
-    const response = await this.#limiter.execute(() =>
-      this.#breaker.execute(() =>
-        this.#send<SingleResponse<PartitionAttributes>>(url, { method: 'POST', body }),
+    const attempt = (): Promise<SingleResponse<PartitionAttributes>> => this.#timedAttempt(() =>
+      this.#limiter.execute(() =>
+        this.#breaker.execute(() =>
+          this.#send<SingleResponse<PartitionAttributes>>(url, { method: 'POST', body }),
+        ),
       ),
     )
 
-    return response.data
+    try {
+      return (await attempt()).data
+    } catch (error) {
+      if (error instanceof SessionExpiredError || error instanceof ApiParseError) {
+        this.#log.debug('session rejected during command; re-authenticating once before giving up')
+        this.#sessionManager.invalidate()
+        return (await attempt()).data
+      }
+      throw error
+    }
   }
 
   /**

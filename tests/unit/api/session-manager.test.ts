@@ -146,12 +146,28 @@ describe('SessionManager', () => {
     expect(log.error).not.toHaveBeenCalled()
   })
 
-  it('lets a later caller try again after a failed sign-in', async () => {
+  it('lets a later caller try again immediately after a transient sign-in failure', async () => {
     const manager = createManager()
     mockedAuthenticate.mockRejectedValueOnce(new Error('socket hang up'))
 
     await expect(manager.getSession()).rejects.toThrow('socket hang up')
     await expect(manager.getSession()).resolves.toBeDefined()
+
+    expect(mockedSleep).not.toHaveBeenCalled()
+    expect(mockedAuthenticate).toHaveBeenCalledTimes(2)
+  })
+
+  it('starts the login floor after a permanent credential rejection', async () => {
+    const manager = createManager()
+    mockedAuthenticate
+      .mockRejectedValueOnce(new AuthenticationError())
+      .mockResolvedValue(sessionAt())
+
+    await expect(manager.getSession()).rejects.toThrow(AuthenticationError)
+    await expect(manager.getSession()).resolves.toBeDefined()
+
+    expect(mockedSleep).toHaveBeenCalledTimes(1)
+    expect(mockedSleep).toHaveBeenCalledWith(10 * 60_000)
   })
 
   describe('touch', () => {
@@ -200,6 +216,29 @@ describe('SessionManager', () => {
       expect(manager.hasSession).toBe(true)
       await expect(manager.getSession()).resolves.toBe(second)
       expect(mockedAuthenticate).toHaveBeenCalledTimes(2)
+    })
+
+    it('tolerates a single keep-alive transport failure without discarding the session', async () => {
+      const manager = createManager()
+      await manager.getSession()
+      mockedKeepAlive.mockRejectedValueOnce(new Error('socket hang up'))
+
+      await expect(manager.touch()).resolves.toBe(false)
+      expect(manager.hasSession).toBe(true)
+      expect(messagesAt(log, 'warn')).toHaveLength(0)
+    })
+
+    it('discards the session after repeated keep-alive transport failures', async () => {
+      const manager = createManager()
+      await manager.getSession()
+      mockedKeepAlive.mockRejectedValue(new Error('socket hang up'))
+
+      await expect(manager.touch()).resolves.toBe(false)
+      await expect(manager.touch()).resolves.toBe(false)
+      await expect(manager.touch()).resolves.toBe(false)
+
+      expect(manager.hasSession).toBe(false)
+      expect(messagesAt(log, 'warn').join('\n')).toMatch(/keep-alive failed repeatedly/)
     })
   })
 

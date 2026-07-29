@@ -9,6 +9,7 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CircuitBreakerError = exports.ApiParseError = exports.ApiResponseError = exports.RateLimitError = exports.TimeoutError = exports.NetworkError = exports.ReadOnlyPartitionError = exports.ForbiddenError = exports.SessionExpiredError = exports.LoginFormError = exports.TwoFactorRequiredError = exports.AuthenticationError = exports.ConfigurationError = exports.AlarmComError = void 0;
+exports.parseRetryAfterMs = parseRetryAfterMs;
 exports.createApiError = createApiError;
 /**
  * Base class for all plugin errors.
@@ -168,11 +169,12 @@ class ApiParseError extends AlarmComError {
 exports.ApiParseError = ApiParseError;
 /**
  * Circuit breaker is open; Alarm.com is being treated as unavailable.
- * Callers should fail fast until {@link CircuitBreakerError.retryAfterMs} elapses.
+ * Not retryable: callers should fail fast until {@link CircuitBreakerError.retryAfterMs}
+ * elapses rather than burning paced attempts against a known-open circuit.
  */
 class CircuitBreakerError extends AlarmComError {
     code = 'CIRCUIT_OPEN';
-    isRetryable = true;
+    isRetryable = false;
     resetTime;
     constructor(resetTimeMs, options) {
         const resetTime = new Date(Date.now() + resetTimeMs);
@@ -186,6 +188,30 @@ class CircuitBreakerError extends AlarmComError {
 exports.CircuitBreakerError = CircuitBreakerError;
 /** Marker Alarm.com returns in a 409 body when it wants two-factor verification. */
 const TWO_FACTOR_MARKER = 'twofactorauthenticationrequired';
+/**
+ * Parse an HTTP `Retry-After` value into a millisecond delay.
+ *
+ * Accepts either a delay in seconds or an HTTP-date. Invalid values are ignored
+ * so callers fall back to computed backoff.
+ */
+function parseRetryAfterMs(header) {
+    if (!header) {
+        return undefined;
+    }
+    const trimmed = header.trim();
+    if (!trimmed) {
+        return undefined;
+    }
+    const asSeconds = Number(trimmed);
+    if (Number.isFinite(asSeconds) && asSeconds >= 0) {
+        return Math.round(asSeconds * 1_000);
+    }
+    const asDate = Date.parse(trimmed);
+    if (!Number.isNaN(asDate)) {
+        return Math.max(0, asDate - Date.now());
+    }
+    return undefined;
+}
 /**
  * Map an HTTP status and body to the appropriate error type.
  *
@@ -204,7 +230,10 @@ function createApiError(status, message, options) {
         return new ForbiddenError(message, cause);
     }
     if (status === 429) {
-        return new RateLimitError(message, cause);
+        return new RateLimitError(message, {
+            cause: options?.cause,
+            retryAfterMs: options?.retryAfterMs,
+        });
     }
     return new ApiResponseError(status, message, cause);
 }

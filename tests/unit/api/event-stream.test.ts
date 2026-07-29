@@ -16,8 +16,8 @@ import { EventStream, type AlarmComEvent } from '../../../src/api/event-stream'
 import {
   DEFAULT_WEBSOCKET_ENDPOINT,
   WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
-  WEBSOCKET_MAX_FAILURES,
   WEBSOCKET_RECONNECT_BASE_MS,
+  WEBSOCKET_RECONNECT_MAX_MS,
   WEBSOCKET_REFRESH_INTERVAL_MS,
 } from '../../../src/settings'
 import { createRecordingLogger, messagesAt, type RecordingLogger } from '../../helpers/logger'
@@ -145,6 +145,7 @@ describe('EventStream', () => {
 
   afterEach(() => {
     stream.stop()
+    jest.restoreAllMocks()
     jest.useRealTimers()
   })
 
@@ -229,7 +230,7 @@ describe('EventStream', () => {
       await jest.advanceTimersByTimeAsync(WEBSOCKET_HANDSHAKE_TIMEOUT_MS)
       await pending
 
-      expect(messagesAt(log, 'debug').join('\n')).toMatch(/handshake timed out/)
+      expect(messagesAt(log, 'warn').join('\n')).toMatch(/handshake timed out/)
       expect(MockWebSocket.instances[0].closeCount).toBe(1)
 
       await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
@@ -304,12 +305,45 @@ describe('EventStream', () => {
       requestToken.mockRejectedValue(new Error('no token for you'))
 
       await stream.start()
-      for (let attempt = 0; attempt < WEBSOCKET_MAX_FAILURES; attempt++) {
-        await jest.advanceTimersByTimeAsync(300_000)
+      for (let attempt = 0; attempt < 20 && onUnavailable.mock.calls.length === 0; attempt++) {
+        await jest.advanceTimersByTimeAsync(WEBSOCKET_RECONNECT_MAX_MS)
       }
 
       expect(onUnavailable).toHaveBeenCalledTimes(1)
       expect(messagesAt(log, 'warn').join('\n')).toMatch(/falling back to polling/)
+    })
+
+    it('retries the stream after giving up, once the recovery interval elapses', async () => {
+      requestToken.mockRejectedValue(new Error('no token for you'))
+
+      await stream.start()
+      for (let attempt = 0; attempt < 20 && onUnavailable.mock.calls.length === 0; attempt++) {
+        await jest.advanceTimersByTimeAsync(WEBSOCKET_RECONNECT_MAX_MS)
+      }
+      expect(onUnavailable).toHaveBeenCalledTimes(1)
+
+      requestToken.mockResolvedValue({ token: 'stream-token' })
+
+      // Step only to the recovery timer. A bulk advance of the full recovery
+      // interval would also expire the new handshake and burn another give-up.
+      for (let step = 0; step < 50; step++) {
+        await jest.advanceTimersToNextTimerAsync()
+        await flushConnect()
+        if (messagesAt(log, 'info').some((message) => (
+          message.includes('Retrying the Alarm.com event stream after a prior give-up')
+        ))) {
+          break
+        }
+      }
+
+      const recovered = currentSocket()
+      expect(recovered.closeCount).toBe(0)
+      recovered.readyState = MockWebSocket.OPEN
+      recovered.emit('open')
+      await flushConnect()
+
+      expect(messagesAt(log, 'info')).toContain('Alarm.com event stream recovered; push updates resumed')
+      expect(stream.isConnected).toBe(true)
     })
 
     it('explains the first failure loudly and the rest quietly', async () => {
@@ -351,14 +385,225 @@ describe('EventStream', () => {
 
   describe('refreshing before the token expires', () => {
     it('reconnects on its own schedule even while the socket is healthy', async () => {
+      jest.spyOn(Math, 'random').mockReturnValue(0)
+
       await startOpen()
 
-      await openAfterReconnect(WEBSOCKET_REFRESH_INTERVAL_MS + 15_001)
+      await openAfterReconnect(WEBSOCKET_REFRESH_INTERVAL_MS)
 
       expect(requestToken).toHaveBeenCalledTimes(2)
       expect(MockWebSocket.instances[0].closeCount).toBe(1)
       expect(messagesAt(log, 'debug')).toContain('Alarm.com event stream refreshed')
       expect(messagesAt(log, 'info')).not.toContain('Alarm.com event stream reconnected')
+    })
+
+    it('keeps the live socket until a refresh token arrives', async () => {
+      jest.spyOn(Math, 'random').mockReturnValue(0)
+
+      await startOpen()
+      const firstSocket = currentSocket()
+
+      let releaseToken!: (value: { token: string }) => void
+      requestToken.mockImplementation(() => new Promise((resolve) => {
+        releaseToken = resolve
+      }))
+
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_REFRESH_INTERVAL_MS)
+      await flushConnect()
+
+      expect(firstSocket.closeCount).toBe(0)
+      expect(stream.isConnected).toBe(true)
+      expect(MockWebSocket.instances).toHaveLength(1)
+
+      releaseToken({ token: 'next-token' })
+      await flushConnect()
+      const secondSocket = currentSocket()
+      secondSocket.readyState = MockWebSocket.OPEN
+      secondSocket.emit('open')
+      await flushConnect()
+
+      expect(firstSocket.closeCount).toBe(1)
+      expect(MockWebSocket.instances).toHaveLength(2)
+      expect(messagesAt(log, 'debug')).toContain('Alarm.com event stream refreshed')
+    })
+
+    it('keeps the live socket when a refresh token fetch fails', async () => {
+      jest.spyOn(Math, 'random').mockReturnValue(0)
+
+      await startOpen()
+      const firstSocket = currentSocket()
+      requestToken.mockRejectedValueOnce(new Error('token endpoint down'))
+
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_REFRESH_INTERVAL_MS)
+      await flushConnect()
+
+      expect(firstSocket.closeCount).toBe(0)
+      expect(stream.isConnected).toBe(true)
+      expect(messagesAt(log, 'warn').join('\n')).not.toMatch(/could not obtain a stream token/)
+      expect(messagesAt(log, 'debug').join('\n')).toMatch(/keeping the live socket/)
+    })
+
+    it('still WARNs about a later drop failure after a quiet refresh-token miss', async () => {
+      jest.spyOn(Math, 'random').mockReturnValue(0)
+
+      await startOpen()
+      requestToken.mockRejectedValueOnce(new Error('token endpoint down'))
+
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_REFRESH_INTERVAL_MS)
+      await flushConnect()
+      expect(messagesAt(log, 'warn')).toHaveLength(0)
+
+      requestToken.mockRejectedValue(new Error('still no token'))
+      currentSocket().emit('close', 1006)
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_RECONNECT_BASE_MS)
+      await flushConnect()
+
+      expect(messagesAt(log, 'warn')).toEqual([
+        'Alarm.com event stream could not connect: could not obtain a stream token: Error: still no token',
+      ])
+    })
+
+    it('abandons a deferred refresh when the socket drops and recovers during the token fetch', async () => {
+      jest.spyOn(Math, 'random').mockReturnValue(0)
+
+      await startOpen()
+      const firstSocket = currentSocket()
+
+      let releaseRefreshToken!: (value: { token: string }) => void
+      let isRefreshTokenPending = true
+      requestToken.mockImplementation(() => {
+        if (isRefreshTokenPending) {
+          isRefreshTokenPending = false
+          return new Promise((resolve) => {
+            releaseRefreshToken = resolve
+          })
+        }
+        return Promise.resolve({ token: 'recovered-token' })
+      })
+
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_REFRESH_INTERVAL_MS)
+      await flushConnect()
+      expect(requestToken).toHaveBeenCalledTimes(2)
+
+      firstSocket.readyState = 3
+      firstSocket.emit('close', 1006)
+      const recovered = await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
+      expect(stream.isConnected).toBe(true)
+      expect(messagesAt(log, 'info')).toContain('Alarm.com event stream reconnected')
+
+      const socketsBeforeStaleResume = MockWebSocket.instances.length
+      releaseRefreshToken({ token: 'stale-refresh-token' })
+      await flushConnect()
+      await flushConnect()
+
+      expect(MockWebSocket.instances).toHaveLength(socketsBeforeStaleResume)
+      expect(recovered.closeCount).toBe(0)
+      expect(stream.isConnected).toBe(true)
+      expect(messagesAt(log, 'debug')).not.toContain('Alarm.com event stream refreshed')
+    })
+
+    it('treats a failed refresh handshake as a reconnect, not a quiet refresh', async () => {
+      const onReconnect = jest.fn()
+      stream = new EventStream({
+        log,
+        requestToken: requestToken as unknown as () => Promise<{ token: string, endpoint?: string }>,
+        onDeviceEvent: onDeviceEvent as unknown as (id: string, event: AlarmComEvent) => void,
+        onUnavailable: onUnavailable as unknown as () => void,
+        onReconnect: onReconnect as unknown as () => void,
+      })
+      jest.spyOn(Math, 'random').mockReturnValue(0)
+
+      await startOpen()
+
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_REFRESH_INTERVAL_MS)
+      await flushConnect()
+      expect(MockWebSocket.instances).toHaveLength(2)
+
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_HANDSHAKE_TIMEOUT_MS)
+      await flushConnect()
+
+      await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
+
+      expect(onReconnect).toHaveBeenCalled()
+      expect(messagesAt(log, 'info')).toContain('Alarm.com event stream reconnected')
+      expect(messagesAt(log, 'debug').filter((message) => message === 'Alarm.com event stream refreshed'))
+        .toHaveLength(0)
+    })
+
+    it('does not WARN when a deferred refresh token fails while drop reconnect is pending', async () => {
+      jest.spyOn(Math, 'random').mockReturnValue(0)
+
+      await startOpen()
+      const firstSocket = currentSocket()
+
+      let rejectRefreshToken!: (error: Error) => void
+      let isRefreshTokenPending = true
+      requestToken.mockImplementation(() => {
+        if (isRefreshTokenPending) {
+          isRefreshTokenPending = false
+          return new Promise((_resolve, reject) => {
+            rejectRefreshToken = reject
+          })
+        }
+        return Promise.resolve({ token: 'recovered-token' })
+      })
+
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_REFRESH_INTERVAL_MS)
+      await flushConnect()
+
+      firstSocket.readyState = 3
+      firstSocket.emit('close', 1006)
+      await flushConnect()
+
+      rejectRefreshToken(new Error('stale refresh token failed while drop pending'))
+      await flushConnect()
+      await flushConnect()
+
+      expect(messagesAt(log, 'warn').join('\n')).not.toMatch(/stale refresh token failed/)
+      expect(messagesAt(log, 'debug').join('\n')).toMatch(/abandoned refresh token fetch after drop/)
+
+      await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
+      expect(stream.isConnected).toBe(true)
+    })
+
+    it('does not schedule a competing reconnect when a deferred refresh token fails after drop recovery', async () => {
+      jest.spyOn(Math, 'random').mockReturnValue(0)
+
+      await startOpen()
+      const firstSocket = currentSocket()
+
+      let rejectRefreshToken!: (error: Error) => void
+      let isRefreshTokenPending = true
+      requestToken.mockImplementation(() => {
+        if (isRefreshTokenPending) {
+          isRefreshTokenPending = false
+          return new Promise((_resolve, reject) => {
+            rejectRefreshToken = reject
+          })
+        }
+        return Promise.resolve({ token: 'recovered-token' })
+      })
+
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_REFRESH_INTERVAL_MS)
+      await flushConnect()
+
+      firstSocket.readyState = 3
+      firstSocket.emit('close', 1006)
+      const recovered = await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
+      const socketsAfterRecovery = MockWebSocket.instances.length
+      const tokenCallsAfterRecovery = requestToken.mock.calls.length
+
+      rejectRefreshToken(new Error('stale refresh token failed'))
+      await flushConnect()
+      await flushConnect()
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_RECONNECT_BASE_MS)
+      await flushConnect()
+
+      expect(MockWebSocket.instances).toHaveLength(socketsAfterRecovery)
+      expect(requestToken).toHaveBeenCalledTimes(tokenCallsAfterRecovery)
+      expect(recovered.closeCount).toBe(0)
+      expect(stream.isConnected).toBe(true)
+      expect(messagesAt(log, 'warn').join('\n')).not.toMatch(/stale refresh token failed/)
     })
 
     it('cancels a pending refresh when the socket drops, so only one reconnect runs', async () => {

@@ -22,6 +22,8 @@ export interface RetryOptions {
   onRetry?: (attempt: number, delayMs: number, error: unknown) => void
   /** Injectable sleep, so tests need not wait in real time. */
   sleep?: (ms: number) => Promise<void>
+  /** Override which errors are worth another attempt. */
+  isRetryable?: (error: unknown) => boolean
 }
 
 const DEFAULT_BASE_DELAY_MS = 1_000
@@ -74,6 +76,7 @@ export async function withRetry<T>(
     maxDelayMs = MAX_RETRY_BACKOFF_MS,
     onRetry,
     sleep: wait = sleep,
+    isRetryable: shouldRetry = isRetryable,
   } = options
 
   let lastError: unknown
@@ -84,7 +87,7 @@ export async function withRetry<T>(
     } catch (error) {
       lastError = error
 
-      if (!isRetryable(error) || attempt === maxAttempts) {
+      if (!shouldRetry(error) || attempt === maxAttempts) {
         throw error
       }
 

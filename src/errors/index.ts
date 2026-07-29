@@ -184,11 +184,12 @@ export class ApiParseError extends AlarmComError {
 
 /**
  * Circuit breaker is open; Alarm.com is being treated as unavailable.
- * Callers should fail fast until {@link CircuitBreakerError.retryAfterMs} elapses.
+ * Not retryable: callers should fail fast until {@link CircuitBreakerError.retryAfterMs}
+ * elapses rather than burning paced attempts against a known-open circuit.
  */
 export class CircuitBreakerError extends AlarmComError {
   readonly code = 'CIRCUIT_OPEN'
-  readonly isRetryable = true
+  readonly isRetryable = false
   readonly resetTime: Date
 
   constructor(resetTimeMs: number, options?: { cause?: Error }) {
@@ -206,6 +207,35 @@ export class CircuitBreakerError extends AlarmComError {
 const TWO_FACTOR_MARKER = 'twofactorauthenticationrequired'
 
 /**
+ * Parse an HTTP `Retry-After` value into a millisecond delay.
+ *
+ * Accepts either a delay in seconds or an HTTP-date. Invalid values are ignored
+ * so callers fall back to computed backoff.
+ */
+export function parseRetryAfterMs(header: string | null | undefined): number | undefined {
+  if (!header) {
+    return undefined
+  }
+
+  const trimmed = header.trim()
+  if (!trimmed) {
+    return undefined
+  }
+
+  const asSeconds = Number(trimmed)
+  if (Number.isFinite(asSeconds) && asSeconds >= 0) {
+    return Math.round(asSeconds * 1_000)
+  }
+
+  const asDate = Date.parse(trimmed)
+  if (!Number.isNaN(asDate)) {
+    return Math.max(0, asDate - Date.now())
+  }
+
+  return undefined
+}
+
+/**
  * Map an HTTP status and body to the appropriate error type.
  *
  * The body is inspected only for the 409 case, where the status alone does not
@@ -214,7 +244,7 @@ const TWO_FACTOR_MARKER = 'twofactorauthenticationrequired'
 export function createApiError(
   status: number,
   message: string,
-  options?: { body?: string; cause?: Error },
+  options?: { body?: string; cause?: Error; retryAfterMs?: number },
 ): AlarmComError {
   const cause = options?.cause ? { cause: options.cause } : undefined
 
@@ -228,7 +258,10 @@ export function createApiError(
     return new ForbiddenError(message, cause)
   }
   if (status === 429) {
-    return new RateLimitError(message, cause)
+    return new RateLimitError(message, {
+      cause: options?.cause,
+      retryAfterMs: options?.retryAfterMs,
+    })
   }
   return new ApiResponseError(status, message, cause)
 }

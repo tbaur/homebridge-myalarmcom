@@ -27,6 +27,8 @@ export interface EventStreamOptions {
     onUnavailable: () => void;
     /** Invoked when the stream reconnects after a prior disconnect. */
     onReconnect?: () => void;
+    /** Invoked when the stream resumes after a prior give-up. */
+    onRecovered?: () => void;
 }
 /** Live status of the event stream, for diagnostics. */
 export interface EventStreamStatus {

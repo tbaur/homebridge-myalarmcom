@@ -14,7 +14,7 @@
  * nothing external will tell you when it changes.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WEBSOCKET_REFRESH_JITTER_MS = exports.WEBSOCKET_REFRESH_INTERVAL_MS = exports.WEBSOCKET_MAX_FAILURES = exports.WEBSOCKET_RECONNECT_MAX_MS = exports.WEBSOCKET_RECONNECT_BASE_MS = exports.WEBSOCKET_HANDSHAKE_TIMEOUT_MS = exports.WEBSOCKET_HOST_SUFFIX = exports.DEFAULT_WEBSOCKET_ENDPOINT = exports.REDISCOVERY_INTERVAL_MS = exports.MAX_RETRY_BACKOFF_MS = exports.MAX_API_RETRY_ATTEMPTS = exports.KEEPALIVE_INTERVAL_MS = exports.DEFAULT_AUTH_INTERVAL_MIN = exports.MIN_AUTH_INTERVAL_MIN = exports.DEFAULT_POLL_INTERVAL_SEC = exports.MIN_POLL_INTERVAL_SEC = exports.DEFAULT_REQUEST_TIMEOUT_MS = exports.MAX_IDS_PER_REQUEST = exports.CSRF_HEADER_NAME = exports.CSRF_COOKIE_NAME = exports.MFA_COOKIE_NAME = exports.EVENT_FIELD_SENTINEL = exports.PASSWORD_FIELD = exports.USERNAME_FIELD = exports.LOGIN_FORM_FIELDS = exports.JSON_API_ACCEPT = exports.HOME_REFERER = exports.WEBSOCKET_TOKEN_URL = exports.SENSORS_URL = exports.PARTITIONS_URL = exports.SYSTEM_URL = exports.KEEPALIVE_URL = exports.IDENTITIES_URL = exports.LOGIN_POST_URL = exports.LOGIN_PAGE_URL = exports.BASE_URL = exports.MANUFACTURER = exports.UUID_PREFIX = exports.PLATFORM_NAME = exports.PLUGIN_NAME = void 0;
+exports.WEBSOCKET_REFRESH_JITTER_MS = exports.WEBSOCKET_REFRESH_INTERVAL_MS = exports.WEBSOCKET_RECOVERY_INTERVAL_MS = exports.WEBSOCKET_MAX_FAILURES = exports.WEBSOCKET_RECONNECT_MAX_MS = exports.WEBSOCKET_RECONNECT_BASE_MS = exports.WEBSOCKET_HANDSHAKE_TIMEOUT_MS = exports.WEBSOCKET_HOST_SUFFIX = exports.DEFAULT_WEBSOCKET_ENDPOINT = exports.REDISCOVERY_INTERVAL_MS = exports.MAX_RETRY_BACKOFF_MS = exports.MAX_API_RETRY_ATTEMPTS = exports.INITIAL_DISCOVERY_RETRY_MAX_MS = exports.INITIAL_DISCOVERY_RETRY_BASE_MS = exports.KEEPALIVE_INTERVAL_MS = exports.DEFAULT_AUTH_INTERVAL_MIN = exports.MIN_AUTH_INTERVAL_MIN = exports.DEFAULT_POLL_INTERVAL_SEC = exports.MIN_POLL_INTERVAL_SEC = exports.DEFAULT_REQUEST_TIMEOUT_MS = exports.MAX_IDS_PER_REQUEST = exports.CSRF_HEADER_NAME = exports.CSRF_COOKIE_NAME = exports.MFA_COOKIE_NAME = exports.EVENT_FIELD_SENTINEL = exports.PASSWORD_FIELD = exports.USERNAME_FIELD = exports.LOGIN_FORM_FIELDS = exports.JSON_API_ACCEPT = exports.HOME_REFERER = exports.WEBSOCKET_TOKEN_URL = exports.SENSORS_URL = exports.PARTITIONS_URL = exports.SYSTEM_URL = exports.KEEPALIVE_URL = exports.IDENTITIES_URL = exports.LOGIN_POST_URL = exports.LOGIN_PAGE_URL = exports.BASE_URL = exports.MANUFACTURER = exports.UUID_PREFIX = exports.PLATFORM_NAME = exports.PLUGIN_NAME = void 0;
 /** Name used to register the plugin with Homebridge (must match package.json name). */
 exports.PLUGIN_NAME = 'homebridge-myalarmcom';
 /** Platform identifier referenced in the user's Homebridge config. */
@@ -132,6 +132,15 @@ exports.MIN_AUTH_INTERVAL_MIN = 10;
 exports.DEFAULT_AUTH_INTERVAL_MIN = 10;
 /** How often to touch {@link KEEPALIVE_URL} to hold the session open. */
 exports.KEEPALIVE_INTERVAL_MS = 4 * 60_000;
+/**
+ * Base delay before retrying a failed initial device discovery.
+ *
+ * Startup cannot reach Ready without a successful discovery. Transient failures
+ * must retry with backoff rather than leaving the platform idle forever.
+ */
+exports.INITIAL_DISCOVERY_RETRY_BASE_MS = 5_000;
+/** Cap on the delay between initial discovery retries. */
+exports.INITIAL_DISCOVERY_RETRY_MAX_MS = 5 * 60_000;
 /** Maximum attempts for a single API request before surfacing the failure. */
 exports.MAX_API_RETRY_ATTEMPTS = 3;
 /** Cap on how long a retry may back off. */
@@ -166,20 +175,33 @@ exports.WEBSOCKET_RECONNECT_MAX_MS = 5 * 60_000;
  * Consecutive stream failures tolerated before falling back to polling.
  *
  * The event stream is the primary state source; polling is the safety net.
+ * After this many failures the stream schedules a longer recovery attempt
+ * rather than giving up for the process lifetime.
  */
 exports.WEBSOCKET_MAX_FAILURES = 5;
+/**
+ * How long to wait after giving up before trying the event stream again.
+ *
+ * Polling continues in the meantime. Without this, a transient outage would
+ * leave push updates dead until Homebridge restarted.
+ */
+exports.WEBSOCKET_RECOVERY_INTERVAL_MS = 15 * 60_000;
 /**
  * Proactively re-establish the event stream on this interval.
  *
  * Alarm.com's stream token dies around five minutes; refreshing at five minutes
- * (plus jitter) races the server close and loses — the drop path then logs a
- * noisy info-level "reconnected". Refresh before expiry so the routine path
- * (`refreshed` at debug) wins instead.
+ * races the server close and loses — the drop path then logs a noisy info-level
+ * "reconnected". Refresh well before expiry so the routine path (`refreshed` at
+ * debug) wins instead. Jitter *subtracts* from this value (see
+ * {@link WEBSOCKET_REFRESH_JITTER_MS}).
  */
-exports.WEBSOCKET_REFRESH_INTERVAL_MS = 4 * 60_000;
+exports.WEBSOCKET_REFRESH_INTERVAL_MS = 3 * 60_000 + 30_000;
 /**
- * Random spread added to the stream refresh so reconnects do not synchronize.
- * Kept well below the gap between this interval and the ~5-minute token lifetime.
+ * Random amount subtracted from {@link WEBSOCKET_REFRESH_INTERVAL_MS}.
+ *
+ * Subtractive (not additive) so refresh always lands earlier than the base,
+ * preserving margin before the ~5-minute token lifetime. Also desynchronizes
+ * multiple Homebridge instances.
  */
-exports.WEBSOCKET_REFRESH_JITTER_MS = 15_000;
+exports.WEBSOCKET_REFRESH_JITTER_MS = 30_000;
 //# sourceMappingURL=settings.js.map

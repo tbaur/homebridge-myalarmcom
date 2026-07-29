@@ -154,6 +154,20 @@ describe('withRetry', () => {
     expect(onRetry).toHaveBeenCalledTimes(1)
     expect(onRetry).toHaveBeenCalledWith(1, expect.any(Number), error)
   })
+
+  it('honours a custom isRetryable predicate', async () => {
+    const error = new ApiParseError('not json')
+    const operation = jest.fn().mockRejectedValue(error)
+
+    await expect(
+      withRetry(operation, {
+        sleep: wait,
+        isRetryable: () => false,
+      }),
+    ).rejects.toThrow(ApiParseError)
+
+    expect(operation).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('sleep', () => {
