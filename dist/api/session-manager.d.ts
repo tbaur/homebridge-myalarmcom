@@ -19,6 +19,8 @@ export interface SessionManagerOptions {
     /** Session lifetime before a proactive re-login, in minutes. */
     authIntervalMinutes: number;
     log: Logger;
+    /** Called after a successful sign-in, for diagnostics. */
+    onSessionEstablished?: () => void;
 }
 /** Establishes, reuses, and refreshes the Alarm.com session. */
 export declare class SessionManager {

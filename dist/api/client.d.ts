@@ -16,6 +16,13 @@ import type { Logger } from '../utils/logger';
 import { CircuitBreaker } from './circuit-breaker';
 import { RateLimiter } from './rate-limiter';
 import type { SessionManager } from './session-manager';
+/** One timed API call outcome for diagnostics. */
+export interface ApiRequestMetric {
+    durationMs: number;
+    ok: boolean;
+    /** False when the call never reached the network (breaker open, rate limited). */
+    networked: boolean;
+}
 /** Arming commands Alarm.com accepts on a partition. */
 export type PartitionAction = 'armStay' | 'armAway' | 'disarm';
 /** Modifiers that may accompany an arming command. */
@@ -41,6 +48,14 @@ export interface AlarmComClientOptions {
     log: Logger;
     circuitBreaker?: CircuitBreaker;
     rateLimiter?: RateLimiter;
+    /** Called after every request attempt, for diagnostics. */
+    metrics?: (sample: ApiRequestMetric) => void;
+    /** Called when the circuit breaker opens. */
+    onCircuitOpen?: () => void;
+    /** Called when pacing refuses a request because the wait would be too long. */
+    onThrottle?: () => void;
+    /** Called when a transient failure is about to be retried. */
+    onRetry?: () => void;
 }
 /** Split a list into chunks no larger than the API will accept. */
 export declare function chunkIds(ids: readonly string[], size?: number): string[][];
@@ -74,6 +89,14 @@ export declare class AlarmComClient {
      */
     getEventStreamToken(): Promise<EventStreamToken>;
     /** Diagnostics for the resilience layers. */
-    getStatus(): Record<string, unknown>;
+    getStatus(): {
+        circuitBreaker: {
+            state: string;
+        };
+        rateLimiter: {
+            remaining: number;
+        };
+        hasSession: boolean;
+    };
 }
 //# sourceMappingURL=client.d.ts.map

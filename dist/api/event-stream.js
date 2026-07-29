@@ -29,6 +29,7 @@ class EventStream {
     #requestToken;
     #onDeviceEvent;
     #onUnavailable;
+    #onReconnect;
     #socket = null;
     #reconnectTimer = null;
     #refreshTimer = null;
@@ -36,15 +37,31 @@ class EventStream {
     #isStopped = false;
     /** Whether a failure reason has already been surfaced at warn level. */
     #hasReportedFailure = false;
+    #isConnecting = false;
+    #hadConnected = false;
+    #lastEventAt = null;
     constructor(options) {
         this.#log = options.log;
         this.#requestToken = options.requestToken;
         this.#onDeviceEvent = options.onDeviceEvent;
         this.#onUnavailable = options.onUnavailable;
+        this.#onReconnect = options.onReconnect;
     }
     /** Whether a socket is currently open. */
     get isConnected() {
         return this.#socket?.readyState === ws_1.default.OPEN;
+    }
+    /** In-memory status for diagnostics; never touches the network. */
+    getStatus() {
+        const isConnected = this.isConnected;
+        return {
+            isConnected,
+            isConnecting: this.#isConnecting && !isConnected,
+            isClosed: this.#isStopped || this.#socket?.readyState === ws_1.default.CLOSED,
+            lastEventAgeSec: this.#lastEventAt === null
+                ? null
+                : Math.round((Date.now() - this.#lastEventAt) / 1000),
+        };
     }
     /** Open the stream and keep it open until {@link stop} is called. */
     async start() {
@@ -105,6 +122,7 @@ class EventStream {
         if (this.#isStopped) {
             return;
         }
+        this.#isConnecting = true;
         try {
             const { token, endpoint } = await this.#requestToken();
             const target = this.#resolveEndpoint(endpoint);
@@ -130,6 +148,7 @@ class EventStream {
             });
         }
         catch (error) {
+            this.#isConnecting = false;
             this.#recordFailureReason(`could not obtain a stream token: ${String(error)}`);
             this.#scheduleReconnect();
         }
@@ -151,9 +170,15 @@ class EventStream {
         this.#log.warn(`Alarm.com event stream could not connect: ${reason}`);
     }
     #handleOpen() {
+        this.#isConnecting = false;
         this.#consecutiveFailures = 0;
         this.#hasReportedFailure = false;
         this.#log.debug('event stream connected');
+        // Count recoveries, not the first successful open.
+        if (this.#hadConnected) {
+            this.#onReconnect?.();
+        }
+        this.#hadConnected = true;
         this.#scheduleRefresh();
     }
     /**
@@ -223,6 +248,7 @@ class EventStream {
         // Device resource IDs are the unit and device numbers joined by a hyphen,
         // e.g. unit 1234 device 17 is sensor "1234-17".
         const deviceResourceId = `${event.UnitId}-${event.DeviceId}`;
+        this.#lastEventAt = Date.now();
         this.#log.debug(`event type ${event.EventType} for device ${deviceResourceId}`);
         this.#onDeviceEvent(deviceResourceId, event);
     }

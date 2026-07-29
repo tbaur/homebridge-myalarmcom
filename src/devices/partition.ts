@@ -229,6 +229,7 @@ export class PartitionAccessory {
 
     try {
       await this.#platform.client.commandPartition(this.deviceId, action, options)
+      this.#platform.recordCommand()
       // Arming takes 20-30 seconds to settle at the panel, so the confirming
       // read is left to the next poll or event rather than done inline.
       this.#platform.requestDeviceRefresh(this.deviceId)

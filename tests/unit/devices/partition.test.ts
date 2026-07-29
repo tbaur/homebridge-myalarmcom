@@ -196,6 +196,7 @@ describe('PartitionAccessory', () => {
       await requestTarget(HomeKitSecurityTarget.AWAY_ARM)
 
       expect(bed.commandPartition).toHaveBeenCalledWith('1234567-127', 'armAway', expect.any(Object))
+      expect(bed.recordCommand).toHaveBeenCalledTimes(1)
     })
 
     it('disarms', async () => {

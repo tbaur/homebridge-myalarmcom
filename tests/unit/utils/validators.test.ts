@@ -168,6 +168,7 @@ describe('defaults', () => {
       useEventStream: true,
       includeUnmonitoredSensors: false,
       debug: false,
+      diagnosticsInterval: 0,
     })
     expect(warnings).toEqual([])
   })
@@ -204,5 +205,26 @@ describe('defaults', () => {
 
     expect(config.useEventStream).toBe(true)
     expect(config.debug).toBe(false)
+  })
+})
+
+describe('diagnosticsInterval', () => {
+  it('accepts zero and the configured floor', () => {
+    expect(validateConfig(configWith({ diagnosticsInterval: 0 })).config.diagnosticsInterval).toBe(0)
+    expect(validateConfig(configWith({ diagnosticsInterval: 120 })).config.diagnosticsInterval).toBe(120)
+  })
+
+  it('raises sub-floor values with a warning', () => {
+    const { config, warnings } = validateConfig(configWith({ diagnosticsInterval: 10 }))
+    expect(config.diagnosticsInterval).toBe(30)
+    expect(warnings[0]).toMatch(/diagnosticsInterval/)
+  })
+
+  it('rejects values above the ceiling', () => {
+    expect(() => validateConfig(configWith({ diagnosticsInterval: 3601 }))).toThrow(ConfigurationError)
+  })
+
+  it('rejects non-numbers', () => {
+    expect(() => validateConfig(configWith({ diagnosticsInterval: 'often' }))).toThrow(ConfigurationError)
   })
 })

@@ -39,6 +39,16 @@ export interface EventStreamOptions {
   onDeviceEvent: (deviceResourceId: string, event: AlarmComEvent) => void
   /** Invoked when the stream gives up, so the caller can lean on polling. */
   onUnavailable: () => void
+  /** Invoked when the stream reconnects after a prior disconnect. */
+  onReconnect?: () => void
+}
+
+/** Live status of the event stream, for diagnostics. */
+export interface EventStreamStatus {
+  isConnected: boolean
+  isConnecting: boolean
+  isClosed: boolean
+  lastEventAgeSec: number | null
 }
 
 /** Maintains a live connection to the Alarm.com event stream. */
@@ -47,6 +57,7 @@ export class EventStream {
   readonly #requestToken: () => Promise<EventStreamToken>
   readonly #onDeviceEvent: (deviceResourceId: string, event: AlarmComEvent) => void
   readonly #onUnavailable: () => void
+  readonly #onReconnect?: () => void
 
   #socket: WebSocket | null = null
   #reconnectTimer: NodeJS.Timeout | null = null
@@ -55,17 +66,34 @@ export class EventStream {
   #isStopped = false
   /** Whether a failure reason has already been surfaced at warn level. */
   #hasReportedFailure = false
+  #isConnecting = false
+  #hadConnected = false
+  #lastEventAt: number | null = null
 
   constructor(options: EventStreamOptions) {
     this.#log = options.log
     this.#requestToken = options.requestToken
     this.#onDeviceEvent = options.onDeviceEvent
     this.#onUnavailable = options.onUnavailable
+    this.#onReconnect = options.onReconnect
   }
 
   /** Whether a socket is currently open. */
   get isConnected(): boolean {
     return this.#socket?.readyState === WebSocket.OPEN
+  }
+
+  /** In-memory status for diagnostics; never touches the network. */
+  getStatus(): EventStreamStatus {
+    const isConnected = this.isConnected
+    return {
+      isConnected,
+      isConnecting: this.#isConnecting && !isConnected,
+      isClosed: this.#isStopped || this.#socket?.readyState === WebSocket.CLOSED,
+      lastEventAgeSec: this.#lastEventAt === null
+        ? null
+        : Math.round((Date.now() - this.#lastEventAt) / 1000),
+    }
   }
 
   /** Open the stream and keep it open until {@link stop} is called. */
@@ -138,6 +166,8 @@ export class EventStream {
       return
     }
 
+    this.#isConnecting = true
+
     try {
       const { token, endpoint } = await this.#requestToken()
       const target = this.#resolveEndpoint(endpoint)
@@ -169,6 +199,7 @@ export class EventStream {
         )
       })
     } catch (error) {
+      this.#isConnecting = false
       this.#recordFailureReason(`could not obtain a stream token: ${String(error)}`)
       this.#scheduleReconnect()
     }
@@ -193,9 +224,17 @@ export class EventStream {
   }
 
   #handleOpen(): void {
+    this.#isConnecting = false
     this.#consecutiveFailures = 0
     this.#hasReportedFailure = false
     this.#log.debug('event stream connected')
+
+    // Count recoveries, not the first successful open.
+    if (this.#hadConnected) {
+      this.#onReconnect?.()
+    }
+    this.#hadConnected = true
+
     this.#scheduleRefresh()
   }
 
@@ -285,6 +324,8 @@ export class EventStream {
     // Device resource IDs are the unit and device numbers joined by a hyphen,
     // e.g. unit 1234 device 17 is sensor "1234-17".
     const deviceResourceId = `${event.UnitId}-${event.DeviceId}`
+
+    this.#lastEventAt = Date.now()
 
     this.#log.debug(
       `event type ${event.EventType} for device ${deviceResourceId}`,

@@ -23,6 +23,8 @@ export interface SessionManagerOptions {
   /** Session lifetime before a proactive re-login, in minutes. */
   authIntervalMinutes: number
   log: Logger
+  /** Called after a successful sign-in, for diagnostics. */
+  onSessionEstablished?: () => void
 }
 
 /** Establishes, reuses, and refreshes the Alarm.com session. */
@@ -30,6 +32,7 @@ export class SessionManager {
   readonly #credentials: Credentials
   readonly #sessionLifetimeMs: number
   readonly #log: Logger
+  readonly #onSessionEstablished?: () => void
 
   #session: Session | null = null
   #lastLoginAttempt = 0
@@ -40,6 +43,7 @@ export class SessionManager {
     this.#credentials = options.credentials
     this.#sessionLifetimeMs = options.authIntervalMinutes * 60_000
     this.#log = options.log
+    this.#onSessionEstablished = options.onSessionEstablished
   }
 
   /** Whether the current session is still within its configured lifetime. */
@@ -88,6 +92,7 @@ export class SessionManager {
     try {
       this.#session = await authenticate(this.#credentials, this.#log)
       this.#log.info('Alarm.com session established')
+      this.#onSessionEstablished?.()
       return this.#session
     } catch (error) {
       this.#session = null

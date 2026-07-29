@@ -18,6 +18,12 @@ import type {
 import { AlarmComClient, type SystemDevices } from './api/client'
 import { EventStream } from './api/event-stream'
 import { SessionManager } from './api/session-manager'
+import {
+  DiagnosticsCollector,
+  type DeviceGauges,
+  type DiagnosticsReaders,
+} from './diagnostics/collector'
+import type { DiagnosticsSnapshot } from './diagnostics/types'
 import { PartitionAccessory } from './devices/partition'
 import { SensorAccessory } from './devices/sensor'
 import { AlarmComError } from './errors'
@@ -36,6 +42,24 @@ import { createScopedLogger, type Logger } from './utils/logger'
 import { toSensorServiceKind } from './utils/mappers'
 import { sanitizeError } from './utils/sanitizers'
 import { validateConfig } from './utils/validators'
+
+/**
+ * Installed plugin version, used for diagnostics lifecycle reporting.
+ *
+ * Resolved once via `require` rather than a static `import`: `package.json`
+ * lives outside the TypeScript `rootDir` (`src/`), so importing it would alter
+ * the emitted `dist/` layout. The require resolves correctly from both the
+ * compiled `dist/` output and ts-jest.
+ */
+function readPluginVersion(): string {
+  try {
+    return (require('../package.json') as { version: string }).version || 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+const PLUGIN_VERSION = readPluginVersion()
 
 /** Window over which event-triggered refreshes are coalesced. */
 const REFRESH_DEBOUNCE_MS = 750
@@ -57,11 +81,14 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   #pollTimer: NodeJS.Timeout | null = null
   #keepAliveTimer: NodeJS.Timeout | null = null
   #refreshTimer: NodeJS.Timeout | null = null
+  #diagnosticsTimer: NodeJS.Timeout | null = null
   #pendingRefreshIds = new Set<string>()
   #systemId: string | null = null
   #isShuttingDown = false
   /** When the account was last re-enumerated, driving periodic rediscovery. */
   #lastDiscoveryAt = 0
+  readonly #diagnostics: DiagnosticsCollector
+  #lastDiagnosticsHealth: 'healthy' | 'degraded' | null = null
 
   constructor(log: Logging, config: MyAlarmComPlatformConfig, api: API) {
     this.api = api
@@ -80,6 +107,13 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       this.#log.warn(warning)
     }
 
+    // Counters always accumulate; heartbeats are only emitted when
+    // diagnosticsInterval > 0.
+    this.#diagnostics = new DiagnosticsCollector({
+      pluginVersion: PLUGIN_VERSION,
+      config: resolved,
+    })
+
     const sessionManager = new SessionManager({
       credentials: {
         username: resolved.username,
@@ -88,11 +122,16 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       },
       authIntervalMinutes: resolved.authIntervalMinutes,
       log: createScopedLogger(log, 'auth', resolved.debug),
+      onSessionEstablished: () => this.#diagnostics.sessionLogin(),
     })
 
     this.client = new AlarmComClient({
       sessionManager,
       log: createScopedLogger(log, 'api', resolved.debug),
+      metrics: (sample) => this.#diagnostics.apiRequest(sample.durationMs, sample.ok, sample.networked),
+      onCircuitOpen: () => this.#diagnostics.breakerTrip(),
+      onThrottle: () => this.#diagnostics.throttle(),
+      onRetry: () => this.#diagnostics.retry(),
     })
 
     api.on('didFinishLaunching', () => void this.#start(sessionManager))
@@ -118,6 +157,8 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     if (this.#config.useEventStream) {
       this.#startEventStream()
     }
+
+    this.#startDiagnostics()
   }
 
   /** Enumerate the account's devices and publish them to HomeKit. */
@@ -332,6 +373,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       onUnavailable: () => {
         this.#log.warn('Continuing with polling only; HomeKit updates will be slower.')
       },
+      onReconnect: () => this.#diagnostics.wsReconnect(),
     })
 
     void this.#eventStream.start()
@@ -354,7 +396,13 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       sensor.applyImmediateState(hint.isTriggered)
     }
 
+    this.#diagnostics.externalChange()
     this.requestDeviceRefresh(deviceId)
+  }
+
+  /** Record a HomeKit-originated arming command for diagnostics. */
+  recordCommand(): void {
+    this.#diagnostics.command()
   }
 
   /**
@@ -409,16 +457,25 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     }
 
     const isRediscoveryDue = Date.now() - this.#lastDiscoveryAt >= REDISCOVERY_INTERVAL_MS
+    const started = Date.now()
+    let ok = 0
+    let failed = 0
 
     try {
       if (isRediscoveryDue) {
         await this.#discover()
+        ok = this.#partitions.size + this.#sensors.size
         return
       }
 
-      await this.#refreshDevices([...this.#partitions.keys(), ...this.#sensors.keys()])
+      const deviceIds = [...this.#partitions.keys(), ...this.#sensors.keys()]
+      await this.#refreshDevices(deviceIds)
+      ok = deviceIds.length
     } catch (error) {
+      failed = 1
       this.#reportFailure(isRediscoveryDue ? 'Rediscovery failed' : 'Poll failed', error)
+    } finally {
+      this.#diagnostics.pollCycle(ok, failed, Date.now() - started)
     }
   }
 
@@ -439,8 +496,101 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     this.#log.error(message)
   }
 
+  #diagnosticsIntervalMs(): number {
+    const seconds = this.#config.diagnosticsInterval
+    return seconds > 0 ? seconds * 1_000 : 0
+  }
+
+  /**
+   * Starts the diagnostics subsystem: emits the boot snapshot and schedules the
+   * heartbeat. No-op unless diagnosticsInterval > 0.
+   */
+  #startDiagnostics(): void {
+    const interval = this.#diagnosticsIntervalMs()
+    if (interval <= 0 || this.#isShuttingDown || this.#diagnosticsTimer) {
+      return
+    }
+
+    // Diagnostics must never be able to crash the host.
+    try {
+      const startReport = this.#diagnostics.snapshot('diagnostics.start', this.#buildDiagnosticsReaders())
+      this.#lastDiagnosticsHealth = startReport.lifecycle.health
+      this.#emitDiagnostic('info', startReport)
+    } catch (error) {
+      this.#log.debug(`Failed to emit diagnostics start snapshot: ${sanitizeError(error)}`)
+    }
+
+    this.#diagnosticsTimer = setInterval(() => this.#diagnosticsHeartbeat(), interval)
+  }
+
+  #diagnosticsHeartbeat(): void {
+    try {
+      const report = this.#diagnostics.buildHeartbeat(this.#buildDiagnosticsReaders())
+      this.#emitDiagnostic('info', report)
+
+      const health = report.lifecycle.health
+      if (this.#lastDiagnosticsHealth !== null && health !== this.#lastDiagnosticsHealth) {
+        const isDegraded = health === 'degraded'
+        const transition: DiagnosticsSnapshot = {
+          ...report,
+          msg: isDegraded ? 'health.degraded' : 'health.recovered',
+        }
+        this.#emitDiagnostic(isDegraded ? 'warn' : 'info', transition)
+      }
+      this.#lastDiagnosticsHealth = health
+    } catch (error) {
+      this.#log.debug(`Diagnostics heartbeat failed: ${sanitizeError(error)}`)
+    }
+  }
+
+  #buildDiagnosticsReaders(): DiagnosticsReaders {
+    return {
+      clientStatus: () => this.client.getStatus(),
+      wsStatus: () => this.#eventStream?.getStatus() ?? null,
+      devices: () => this.#collectDeviceGauges(),
+      pollingCadenceSec: () => this.#config.pollIntervalSeconds,
+      eventStreamExpected: () => this.#config.useEventStream,
+    }
+  }
+
+  #collectDeviceGauges(): DeviceGauges {
+    const byType: Record<string, number> = {}
+
+    for (const sensor of this.#sensors.values()) {
+      byType[sensor.kind] = (byType[sensor.kind] ?? 0) + 1
+    }
+
+    return {
+      partitions: this.#partitions.size,
+      sensors: this.#sensors.size,
+      byType,
+      ignored: this.#config.ignoredDeviceIds.size,
+    }
+  }
+
+  #emitDiagnostic(level: 'info' | 'warn', report: DiagnosticsSnapshot): void {
+    const { lifecycle, ...groups } = report
+    this.#log[level](formatDiagnosticLine(report), {
+      ...groups,
+      ...lifecycle,
+    })
+  }
+
   #shutdown(): void {
     this.#isShuttingDown = true
+
+    if (this.#diagnosticsTimer) {
+      try {
+        this.#emitDiagnostic(
+          'info',
+          this.#diagnostics.snapshot('diagnostics.stop', this.#buildDiagnosticsReaders()),
+        )
+      } catch (error) {
+        this.#log.debug(`Failed to emit diagnostics stop snapshot: ${sanitizeError(error)}`)
+      }
+      clearInterval(this.#diagnosticsTimer)
+      this.#diagnosticsTimer = null
+    }
 
     for (const timer of [this.#pollTimer, this.#keepAliveTimer, this.#refreshTimer]) {
       if (timer) {
@@ -455,4 +605,41 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     this.#eventStream?.stop()
     this.#eventStream = null
   }
+}
+
+/** Human-readable label for a diagnostics channel. */
+function diagnosticLabel(msg: string): string {
+  switch (msg) {
+    case 'health':
+      return 'Health'
+    case 'diagnostics.start':
+      return 'Diagnostics start'
+    case 'diagnostics.stop':
+      return 'Diagnostics stop'
+    case 'health.degraded':
+      return 'Health degraded'
+    case 'health.recovered':
+      return 'Health recovered'
+    default:
+      return msg
+  }
+}
+
+/** Concise human-readable summary line for a diagnostics report. */
+function formatDiagnosticLine(report: DiagnosticsSnapshot): string {
+  const { lifecycle, devices, websocket, api } = report
+  const reasonText = lifecycle.reasons.length > 0 ? ` [${lifecycle.reasons.join(', ')}]` : ''
+  const typeBits = Object.entries(devices.byType)
+    .map(([kind, count]) => `${count} ${kind}`)
+    .join(', ')
+  const deviceSummary = typeBits.length > 0
+    ? `${devices.partitions}p/${devices.sensors}s (${typeBits})`
+    : `${devices.partitions}p/${devices.sensors}s`
+
+  return (
+    `${diagnosticLabel(report.msg)}: ${lifecycle.health}${reasonText} | `
+    + `devices ${deviceSummary} | `
+    + `ws ${websocket.state} | `
+    + `api p50 ${api.p50Ms}ms p95 ${api.p95Ms}ms (req ${api.requests}, err ${api.errors})`
+  )
 }

@@ -25,6 +25,15 @@ export interface EventStreamOptions {
     onDeviceEvent: (deviceResourceId: string, event: AlarmComEvent) => void;
     /** Invoked when the stream gives up, so the caller can lean on polling. */
     onUnavailable: () => void;
+    /** Invoked when the stream reconnects after a prior disconnect. */
+    onReconnect?: () => void;
+}
+/** Live status of the event stream, for diagnostics. */
+export interface EventStreamStatus {
+    isConnected: boolean;
+    isConnecting: boolean;
+    isClosed: boolean;
+    lastEventAgeSec: number | null;
 }
 /** Maintains a live connection to the Alarm.com event stream. */
 export declare class EventStream {
@@ -32,6 +41,8 @@ export declare class EventStream {
     constructor(options: EventStreamOptions);
     /** Whether a socket is currently open. */
     get isConnected(): boolean;
+    /** In-memory status for diagnostics; never touches the network. */
+    getStatus(): EventStreamStatus;
     /** Open the stream and keep it open until {@link stop} is called. */
     start(): Promise<void>;
     /** Close the stream and cancel all timers. */

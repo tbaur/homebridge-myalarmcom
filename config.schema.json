@@ -82,6 +82,14 @@
         "type": "boolean",
         "default": false,
         "description": "Emit verbose diagnostics. Credentials and cookies are redacted, but review any log before sharing it publicly."
+      },
+      "diagnosticsInterval": {
+        "title": "Diagnostics interval (seconds)",
+        "type": "integer",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 3600,
+        "description": "Seconds between health/activity heartbeats in the Homebridge log. `0` disables (default). Values 1–29 are raised to 30. Boot and shutdown snapshots are included when enabled. Credentials are never included."
       }
     }
   },
@@ -104,7 +112,7 @@
       "title": "Advanced",
       "expandable": true,
       "expanded": false,
-      "items": ["useEventStream", "pollIntervalSeconds", "authIntervalMinutes", "debug"]
+      "items": ["useEventStream", "pollIntervalSeconds", "authIntervalMinutes", "diagnosticsInterval", "debug"]
     }
   ]
 }

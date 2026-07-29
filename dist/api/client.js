@@ -49,10 +49,22 @@ class AlarmComClient {
     #log;
     #breaker;
     #limiter;
+    #metrics;
+    #onThrottle;
+    #onRetry;
     constructor(options) {
         this.#sessionManager = options.sessionManager;
         this.#log = options.log;
-        this.#breaker = options.circuitBreaker ?? new circuit_breaker_1.CircuitBreaker();
+        this.#metrics = options.metrics;
+        this.#onThrottle = options.onThrottle;
+        this.#onRetry = options.onRetry;
+        this.#breaker = options.circuitBreaker ?? new circuit_breaker_1.CircuitBreaker({
+            onStateChange: (from, to) => {
+                if (to === circuit_breaker_1.CircuitState.OPEN && from !== circuit_breaker_1.CircuitState.OPEN) {
+                    options.onCircuitOpen?.();
+                }
+            },
+        });
         this.#limiter = options.rateLimiter ?? new rate_limiter_1.RateLimiter();
     }
     /** Issue one authenticated request and parse the JSON:API response. */
@@ -94,7 +106,7 @@ class AlarmComClient {
      * keeps rejecting us is how accounts get locked.
      */
     async #request(url, options = {}) {
-        const attempt = () => this.#limiter.execute(() => this.#breaker.execute(() => this.#send(url, options)));
+        const attempt = () => this.#timedAttempt(() => this.#limiter.execute(() => this.#breaker.execute(() => this.#send(url, options))));
         return (0, retry_1.withRetry)(async () => {
             try {
                 return await attempt();
@@ -114,9 +126,35 @@ class AlarmComClient {
             }
         }, {
             onRetry: (attemptNumber, delayMs, error) => {
+                this.#onRetry?.();
                 this.#log.debug(`retrying ${(0, sanitizers_1.sanitizeUrl)(url)} (attempt ${attemptNumber}) in ${delayMs}ms after ${String(error)}`);
             },
         });
+    }
+    /**
+     * Time one attempt and feed the outcome to diagnostics.
+     *
+     * Pre-flight rejections (open breaker, pacing refusal) are recorded as
+     * non-networked so they do not skew latency percentiles.
+     */
+    async #timedAttempt(operation) {
+        const started = Date.now();
+        try {
+            const result = await operation();
+            this.#metrics?.({ durationMs: Date.now() - started, ok: true, networked: true });
+            return result;
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const isThrottle = message.includes('Request pacing would require waiting');
+            const isBreaker = error instanceof errors_1.CircuitBreakerError;
+            const networked = !isThrottle && !isBreaker;
+            if (isThrottle) {
+                this.#onThrottle?.();
+            }
+            this.#metrics?.({ durationMs: Date.now() - started, ok: false, networked });
+            throw error;
+        }
     }
     /** Resolve the system this account has selected. */
     async getSystemId() {
@@ -206,8 +244,8 @@ class AlarmComClient {
     /** Diagnostics for the resilience layers. */
     getStatus() {
         return {
-            circuitBreaker: this.#breaker.getStatus(),
-            rateLimiter: this.#limiter.getStatus(),
+            circuitBreaker: { state: this.#breaker.getStatus().state },
+            rateLimiter: { remaining: this.#limiter.getStatus().remaining },
             hasSession: this.#sessionManager.hasSession,
         };
     }

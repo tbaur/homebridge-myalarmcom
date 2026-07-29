@@ -19,6 +19,8 @@ export declare class MyAlarmComPlatform implements DynamicPlatformPlugin {
     constructor(log: Logging, config: MyAlarmComPlatformConfig, api: API);
     /** Homebridge replays cached accessories here on startup. */
     configureAccessory(accessory: PlatformAccessory): void;
+    /** Record a HomeKit-originated arming command for diagnostics. */
+    recordCommand(): void;
     /**
      * Schedule a targeted refresh of one device.
      *

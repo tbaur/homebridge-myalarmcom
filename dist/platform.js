@@ -12,6 +12,7 @@ exports.MyAlarmComPlatform = void 0;
 const client_1 = require("./api/client");
 const event_stream_1 = require("./api/event-stream");
 const session_manager_1 = require("./api/session-manager");
+const collector_1 = require("./diagnostics/collector");
 const partition_1 = require("./devices/partition");
 const sensor_1 = require("./devices/sensor");
 const errors_1 = require("./errors");
@@ -21,6 +22,9 @@ const logger_1 = require("./utils/logger");
 const mappers_1 = require("./utils/mappers");
 const sanitizers_1 = require("./utils/sanitizers");
 const validators_1 = require("./utils/validators");
+/** Installed plugin version, used for diagnostics lifecycle reporting. */
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const PLUGIN_VERSION = require('../package.json').version;
 /** Window over which event-triggered refreshes are coalesced. */
 const REFRESH_DEBOUNCE_MS = 750;
 /** Homebridge platform exposing Alarm.com partitions and sensors. */
@@ -38,11 +42,14 @@ class MyAlarmComPlatform {
     #pollTimer = null;
     #keepAliveTimer = null;
     #refreshTimer = null;
+    #diagnosticsTimer = null;
     #pendingRefreshIds = new Set();
     #systemId = null;
     #isShuttingDown = false;
     /** When the account was last re-enumerated, driving periodic rediscovery. */
     #lastDiscoveryAt = 0;
+    #diagnostics;
+    #lastDiagnosticsHealth = null;
     constructor(log, config, api) {
         this.api = api;
         this.Service = api.hap.Service;
@@ -57,6 +64,12 @@ class MyAlarmComPlatform {
         for (const warning of warnings) {
             this.#log.warn(warning);
         }
+        // Counters always accumulate; heartbeats are only emitted when
+        // diagnosticsInterval > 0.
+        this.#diagnostics = new collector_1.DiagnosticsCollector({
+            pluginVersion: PLUGIN_VERSION,
+            config: resolved,
+        });
         const sessionManager = new session_manager_1.SessionManager({
             credentials: {
                 username: resolved.username,
@@ -65,10 +78,15 @@ class MyAlarmComPlatform {
             },
             authIntervalMinutes: resolved.authIntervalMinutes,
             log: (0, logger_1.createScopedLogger)(log, 'auth', resolved.debug),
+            onSessionEstablished: () => this.#diagnostics.sessionLogin(),
         });
         this.client = new client_1.AlarmComClient({
             sessionManager,
             log: (0, logger_1.createScopedLogger)(log, 'api', resolved.debug),
+            metrics: (sample) => this.#diagnostics.apiRequest(sample.durationMs, sample.ok, sample.networked),
+            onCircuitOpen: () => this.#diagnostics.breakerTrip(),
+            onThrottle: () => this.#diagnostics.throttle(),
+            onRetry: () => this.#diagnostics.retry(),
         });
         api.on('didFinishLaunching', () => void this.#start(sessionManager));
         api.on('shutdown', () => this.#shutdown());
@@ -90,6 +108,7 @@ class MyAlarmComPlatform {
         if (this.#config.useEventStream) {
             this.#startEventStream();
         }
+        this.#startDiagnostics();
     }
     /** Enumerate the account's devices and publish them to HomeKit. */
     async #discover() {
@@ -246,6 +265,7 @@ class MyAlarmComPlatform {
             onUnavailable: () => {
                 this.#log.warn('Continuing with polling only; HomeKit updates will be slower.');
             },
+            onReconnect: () => this.#diagnostics.wsReconnect(),
         });
         void this.#eventStream.start();
     }
@@ -264,7 +284,12 @@ class MyAlarmComPlatform {
         if (hint && sensor) {
             sensor.applyImmediateState(hint.isTriggered);
         }
+        this.#diagnostics.externalChange();
         this.requestDeviceRefresh(deviceId);
+    }
+    /** Record a HomeKit-originated arming command for diagnostics. */
+    recordCommand() {
+        this.#diagnostics.command();
     }
     /**
      * Schedule a targeted refresh of one device.
@@ -313,15 +338,25 @@ class MyAlarmComPlatform {
             return;
         }
         const isRediscoveryDue = Date.now() - this.#lastDiscoveryAt >= settings_1.REDISCOVERY_INTERVAL_MS;
+        const started = Date.now();
+        let ok = 0;
+        let failed = 0;
         try {
             if (isRediscoveryDue) {
                 await this.#discover();
+                ok = this.#partitions.size + this.#sensors.size;
                 return;
             }
-            await this.#refreshDevices([...this.#partitions.keys(), ...this.#sensors.keys()]);
+            const deviceIds = [...this.#partitions.keys(), ...this.#sensors.keys()];
+            await this.#refreshDevices(deviceIds);
+            ok = deviceIds.length;
         }
         catch (error) {
+            failed = 1;
             this.#reportFailure(isRediscoveryDue ? 'Rediscovery failed' : 'Poll failed', error);
+        }
+        finally {
+            this.#diagnostics.pollCycle(ok, failed, Date.now() - started);
         }
     }
     /**
@@ -338,8 +373,89 @@ class MyAlarmComPlatform {
         }
         this.#log.error(message);
     }
+    #diagnosticsIntervalMs() {
+        const seconds = this.#config.diagnosticsInterval;
+        return seconds > 0 ? seconds * 1_000 : 0;
+    }
+    /**
+     * Starts the diagnostics subsystem: emits the boot snapshot and schedules the
+     * heartbeat. No-op unless diagnosticsInterval > 0.
+     */
+    #startDiagnostics() {
+        const interval = this.#diagnosticsIntervalMs();
+        if (interval <= 0 || this.#isShuttingDown || this.#diagnosticsTimer) {
+            return;
+        }
+        // Diagnostics must never be able to crash the host.
+        try {
+            const startReport = this.#diagnostics.snapshot('diagnostics.start', this.#buildDiagnosticsReaders());
+            this.#lastDiagnosticsHealth = startReport.lifecycle.health;
+            this.#emitDiagnostic('info', startReport);
+        }
+        catch (error) {
+            this.#log.debug(`Failed to emit diagnostics start snapshot: ${(0, sanitizers_1.sanitizeError)(error)}`);
+        }
+        this.#diagnosticsTimer = setInterval(() => this.#diagnosticsHeartbeat(), interval);
+    }
+    #diagnosticsHeartbeat() {
+        try {
+            const report = this.#diagnostics.buildHeartbeat(this.#buildDiagnosticsReaders());
+            this.#emitDiagnostic('info', report);
+            const health = report.lifecycle.health;
+            if (this.#lastDiagnosticsHealth !== null && health !== this.#lastDiagnosticsHealth) {
+                const isDegraded = health === 'degraded';
+                const transition = {
+                    ...report,
+                    msg: isDegraded ? 'health.degraded' : 'health.recovered',
+                };
+                this.#emitDiagnostic(isDegraded ? 'warn' : 'info', transition);
+            }
+            this.#lastDiagnosticsHealth = health;
+        }
+        catch (error) {
+            this.#log.debug(`Diagnostics heartbeat failed: ${(0, sanitizers_1.sanitizeError)(error)}`);
+        }
+    }
+    #buildDiagnosticsReaders() {
+        return {
+            clientStatus: () => this.client.getStatus(),
+            wsStatus: () => this.#eventStream?.getStatus() ?? null,
+            devices: () => this.#collectDeviceGauges(),
+            pollingCadenceSec: () => this.#config.pollIntervalSeconds,
+            eventStreamExpected: () => this.#config.useEventStream,
+        };
+    }
+    #collectDeviceGauges() {
+        const byType = {};
+        for (const sensor of this.#sensors.values()) {
+            byType[sensor.kind] = (byType[sensor.kind] ?? 0) + 1;
+        }
+        return {
+            partitions: this.#partitions.size,
+            sensors: this.#sensors.size,
+            byType,
+            ignored: this.#config.ignoredDeviceIds.size,
+        };
+    }
+    #emitDiagnostic(level, report) {
+        const { lifecycle, ...groups } = report;
+        this.#log[level](formatDiagnosticLine(report), {
+            ...groups,
+            ...lifecycle,
+        });
+    }
     #shutdown() {
         this.#isShuttingDown = true;
+        if (this.#diagnosticsTimer) {
+            try {
+                this.#emitDiagnostic('info', this.#diagnostics.snapshot('diagnostics.stop', this.#buildDiagnosticsReaders()));
+            }
+            catch (error) {
+                this.#log.debug(`Failed to emit diagnostics stop snapshot: ${(0, sanitizers_1.sanitizeError)(error)}`);
+            }
+            clearInterval(this.#diagnosticsTimer);
+            this.#diagnosticsTimer = null;
+        }
         for (const timer of [this.#pollTimer, this.#keepAliveTimer, this.#refreshTimer]) {
             if (timer) {
                 clearTimeout(timer);
@@ -354,4 +470,36 @@ class MyAlarmComPlatform {
     }
 }
 exports.MyAlarmComPlatform = MyAlarmComPlatform;
+/** Human-readable label for a diagnostics channel. */
+function diagnosticLabel(msg) {
+    switch (msg) {
+        case 'health':
+            return 'Health';
+        case 'diagnostics.start':
+            return 'Diagnostics start';
+        case 'diagnostics.stop':
+            return 'Diagnostics stop';
+        case 'health.degraded':
+            return 'Health degraded';
+        case 'health.recovered':
+            return 'Health recovered';
+        default:
+            return msg;
+    }
+}
+/** Concise human-readable summary line for a diagnostics report. */
+function formatDiagnosticLine(report) {
+    const { lifecycle, devices, websocket, api } = report;
+    const reasonText = lifecycle.reasons.length > 0 ? ` [${lifecycle.reasons.join(', ')}]` : '';
+    const typeBits = Object.entries(devices.byType)
+        .map(([kind, count]) => `${count} ${kind}`)
+        .join(', ');
+    const deviceSummary = typeBits.length > 0
+        ? `${devices.partitions}p/${devices.sensors}s (${typeBits})`
+        : `${devices.partitions}p/${devices.sensors}s`;
+    return (`${diagnosticLabel(report.msg)}: ${lifecycle.health}${reasonText} | `
+        + `devices ${deviceSummary} | `
+        + `ws ${websocket.state} | `
+        + `api p50 ${api.p50Ms}ms p95 ${api.p95Ms}ms (req ${api.requests}, err ${api.errors})`);
+}
 //# sourceMappingURL=platform.js.map

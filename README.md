@@ -28,11 +28,12 @@ Expose your [Alarm.com](https://www.alarm.com) security panel and sensors in App
 - **Circuit Breaker** — Fails fast during sustained outages rather than retrying into a wall
 - **Hourly Rediscovery** — Sensors added or removed at the panel show up without a Homebridge restart
 - **Fail-Closed Mapping** — Unrecognised sensor states keep the previous value and log a warning; they never resolve to "all clear"
+- **Diagnostics** *(optional)* — Opt-in health/activity heartbeats, boot/shutdown snapshots, and healthy/degraded transitions in the Homebridge log
 
 ### Quality
 
 <!-- Canonical test count lives here only; keep other docs number-free to avoid multi-place updates. -->
-- **441 Tests** — Jest suite with an 80% coverage gate across statements, branches, functions, and lines
+- **458 Tests** — Jest suite with an 80% coverage gate across statements, branches, functions, and lines
 - **Strict TypeScript** — `strict` mode with unused locals/params, no implicit returns, and more
 - **Secret Hygiene** — Passwords, session cookies, and the two-factor cookie are redacted from logs
 - **No Analytics** — Zero tracking or data collection
@@ -105,6 +106,7 @@ Lights, locks, thermostats, garage door *openers*, cameras, and doorbells are no
 | `useEventStream`            | `true`  | Subscribe to push events. Polling continues regardless.                          |
 | `includeUnmonitoredSensors` | `false` | Expose sensors Alarm.com reports as unmonitored.                                 |
 | `ignoredDeviceIds`          | `[]`    | Device IDs to leave out of HomeKit. IDs are printed during discovery.            |
+| `diagnosticsInterval`       | `0`     | Seconds between health heartbeats in the log; `0` off, else `30`–`3600`.         |
 | `debug`                     | `false` | Verbose logging. Credentials are redacted.                                       |
 
 ## Not Working?

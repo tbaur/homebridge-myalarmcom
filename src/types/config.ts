@@ -41,6 +41,14 @@ export interface MyAlarmComPlatformConfig {
 
   /** Emit verbose diagnostics. */
   debug?: unknown
+
+  /**
+   * Seconds between health/activity heartbeats in the Homebridge log.
+   *
+   * `0` disables emission (default). Values `1`–`29` are raised to `30`;
+   * values above `3600` are rejected.
+   */
+  diagnosticsInterval?: unknown
 }
 
 /** Configuration after validation, with every value present and in range. */
@@ -55,6 +63,8 @@ export interface ResolvedConfig {
   ignoredDeviceIds: ReadonlySet<string>
   includeUnmonitoredSensors: boolean
   debug: boolean
+  /** Seconds between diagnostics heartbeats; `0` means emission is off. */
+  diagnosticsInterval: number
 }
 
 /** Outcome of validating user configuration. */
