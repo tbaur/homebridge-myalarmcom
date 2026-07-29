@@ -40,6 +40,8 @@ class EventStream {
     #isConnecting = false;
     #hadConnected = false;
     #lastEventAt = null;
+    /** Completes a pending {@link #connect} handshake wait when stop interrupts it. */
+    #handshakeSettle = null;
     constructor(options) {
         this.#log = options.log;
         this.#requestToken = options.requestToken;
@@ -72,12 +74,18 @@ class EventStream {
     stop() {
         this.#isStopped = true;
         this.#clearTimers();
+        this.#settleHandshake();
         if (this.#socket) {
             // Remove listeners first so the close does not schedule a reconnect.
             this.#socket.removeAllListeners();
             this.#socket.close();
             this.#socket = null;
         }
+    }
+    #settleHandshake() {
+        const settle = this.#handshakeSettle;
+        this.#handshakeSettle = null;
+        settle?.();
     }
     #clearTimers() {
         if (this.#reconnectTimer) {
@@ -136,15 +144,43 @@ class EventStream {
             this.#log.debug(`connecting to the event stream at ${target}`);
             const socket = new ws_1.default(url);
             this.#socket = socket;
-            socket.on('open', () => this.#handleOpen());
-            socket.on('message', (data) => this.#handleMessage(data));
-            socket.on('error', (error) => this.#recordFailureReason(error.message));
-            socket.on('close', (code) => this.#handleClose(code));
-            // Emitted when the HTTP upgrade is rejected. The status code is the one
-            // piece of information that distinguishes a bad token from a blocked
-            // client, and it is not available anywhere else.
-            socket.on('unexpected-response', (_request, response) => {
-                this.#recordFailureReason(`the server refused the connection upgrade with HTTP ${response.statusCode}`);
+            // Wait for the first open or close so callers (startup) can finish their
+            // "connected" / failure log before announcing Ready. Reconnects use the
+            // same path; the await just holds the reconnect timer callback.
+            await new Promise((resolve) => {
+                let settled = false;
+                const settle = () => {
+                    if (settled) {
+                        return;
+                    }
+                    settled = true;
+                    clearTimeout(handshakeTimer);
+                    this.#handshakeSettle = null;
+                    resolve();
+                };
+                this.#handshakeSettle = settle;
+                // Do not block platform Ready forever if Alarm.com never completes the
+                // upgrade. The socket may still open later and log "connected" then.
+                const handshakeTimer = setTimeout(() => {
+                    this.#log.debug(`event stream handshake still pending after ${settings_1.WEBSOCKET_HANDSHAKE_TIMEOUT_MS}ms; continuing`);
+                    settle();
+                }, settings_1.WEBSOCKET_HANDSHAKE_TIMEOUT_MS);
+                socket.on('open', () => {
+                    this.#handleOpen();
+                    settle();
+                });
+                socket.on('message', (data) => this.#handleMessage(data));
+                socket.on('error', (error) => this.#recordFailureReason(error.message));
+                socket.on('close', (code) => {
+                    this.#handleClose(code);
+                    settle();
+                });
+                // Emitted when the HTTP upgrade is rejected. The status code is the one
+                // piece of information that distinguishes a bad token from a blocked
+                // client, and it is not available anywhere else.
+                socket.on('unexpected-response', (_request, response) => {
+                    this.#recordFailureReason(`the server refused the connection upgrade with HTTP ${response.statusCode}`);
+                });
             });
         }
         catch (error) {

@@ -81,6 +81,45 @@ describe('EventStream', () => {
     return socket
   }
 
+  /** Let `requestToken` resolve and the WebSocket constructor run. */
+  async function flushConnect(): Promise<void> {
+    await Promise.resolve()
+    await Promise.resolve()
+  }
+
+  /**
+   * Start the stream and complete the first handshake.
+   *
+   * `start()` waits for open/close so platform startup can log Ready last;
+   * tests must drive that handshake explicitly.
+   */
+  async function startOpen(): Promise<MockSocket> {
+    const pending = stream.start()
+    await flushConnect()
+    const socket = currentSocket()
+    socket.readyState = MockWebSocket.OPEN
+    socket.emit('open')
+    await pending
+    return socket
+  }
+
+  /** Start far enough to create a socket, without completing the handshake. */
+  async function startPending(): Promise<{ pending: Promise<void>, socket: MockSocket }> {
+    const pending = stream.start()
+    await flushConnect()
+    return { pending, socket: currentSocket() }
+  }
+
+  /** Advance reconnect backoff and complete the next handshake. */
+  async function openAfterReconnect(delayMs: number): Promise<MockSocket> {
+    await jest.advanceTimersByTimeAsync(delayMs)
+    await flushConnect()
+    const socket = currentSocket()
+    socket.readyState = MockWebSocket.OPEN
+    socket.emit('open')
+    return socket
+  }
+
   beforeEach(() => {
     jest.useFakeTimers()
     MockWebSocket.instances.length = 0
@@ -100,7 +139,7 @@ describe('EventStream', () => {
     it('opens the endpoint Alarm.com named, carrying the token', async () => {
       requestToken.mockResolvedValue({ token: 'stream-token', endpoint: 'wss://webskt-eu.alarm.com:8443' })
 
-      await stream.start()
+      await startOpen()
 
       expect(currentSocket().url).toBe('wss://webskt-eu.alarm.com:8443?auth=stream-token')
     })
@@ -121,7 +160,7 @@ describe('EventStream', () => {
       ])('ignores %s and uses the default instead', async (_label, endpoint) => {
         requestToken.mockResolvedValue({ token: 'stream-token', endpoint })
 
-        await stream.start()
+        await startOpen()
 
         expect(currentSocket().url).toBe(`${DEFAULT_WEBSOCKET_ENDPOINT}?auth=stream-token`)
         expect(messagesAt(log, 'warn').join('\n')).toMatch(/event stream endpoint/i)
@@ -130,14 +169,14 @@ describe('EventStream', () => {
       it('accepts the canonical host itself, not only its subdomains', async () => {
         requestToken.mockResolvedValue({ token: 'stream-token', endpoint: 'wss://alarm.com:8443' })
 
-        await stream.start()
+        await startOpen()
 
         expect(currentSocket().url).toBe('wss://alarm.com:8443?auth=stream-token')
       })
     })
 
     it('falls back to the default endpoint when none was supplied', async () => {
-      await stream.start()
+      await startOpen()
 
       expect(currentSocket().url).toBe(`${DEFAULT_WEBSOCKET_ENDPOINT}?auth=stream-token`)
     })
@@ -145,28 +184,28 @@ describe('EventStream', () => {
     it('appends the token verbatim, since it already carries its own separators', async () => {
       requestToken.mockResolvedValue({ token: 'id%3D42&sig%3Dabc' })
 
-      await stream.start()
+      await startOpen()
 
       expect(currentSocket().url).toBe(`${DEFAULT_WEBSOCKET_ENDPOINT}?auth=id%3D42&sig%3Dabc`)
     })
 
     it('reports itself connected only once the socket is open', async () => {
-      await stream.start()
+      const { pending, socket } = await startPending()
       expect(stream.isConnected).toBe(false)
 
-      currentSocket().readyState = 1
+      socket.readyState = MockWebSocket.OPEN
       expect(stream.isConnected).toBe(true)
+      socket.emit('open')
+      await pending
     })
 
     it('logs when the stream connects and when it reconnects', async () => {
-      await stream.start()
-      currentSocket().emit('open')
+      await startOpen()
 
       expect(messagesAt(log, 'info')).toContain('Alarm.com event stream connected')
 
       currentSocket().emit('close', 1006)
-      await jest.advanceTimersByTimeAsync(WEBSOCKET_RECONNECT_BASE_MS)
-      MockWebSocket.instances.at(-1)!.emit('open')
+      await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
 
       expect(messagesAt(log, 'info')).toContain('Alarm.com event stream reconnected')
     })
@@ -174,8 +213,7 @@ describe('EventStream', () => {
 
   describe('incoming frames', () => {
     beforeEach(async () => {
-      await stream.start()
-      currentSocket().emit('open')
+      await startOpen()
     })
 
     it('turns a device frame into the resource id built from the unit and device', () => {
@@ -225,13 +263,12 @@ describe('EventStream', () => {
 
   describe('losing the connection', () => {
     it('reconnects after a backoff when the socket closes', async () => {
-      await stream.start()
-      currentSocket().emit('open')
+      await startOpen()
 
       currentSocket().emit('close', 1006)
       expect(requestToken).toHaveBeenCalledTimes(1)
 
-      await jest.advanceTimersByTimeAsync(10_000)
+      await openAfterReconnect(10_000)
 
       expect(requestToken).toHaveBeenCalledTimes(2)
       expect(MockWebSocket.instances).toHaveLength(2)
@@ -250,10 +287,12 @@ describe('EventStream', () => {
     })
 
     it('explains the first failure loudly and the rest quietly', async () => {
-      await stream.start()
+      const { pending, socket } = await startPending()
 
-      currentSocket().emit('error', new Error('socket hang up'))
-      currentSocket().emit('error', new Error('socket hang up again'))
+      socket.emit('error', new Error('socket hang up'))
+      socket.emit('error', new Error('socket hang up again'))
+      socket.emit('close', 1006)
+      await pending
 
       expect(messagesAt(log, 'warn')).toEqual([
         'Alarm.com event stream could not connect: socket hang up',
@@ -262,19 +301,23 @@ describe('EventStream', () => {
     })
 
     it('reports the status code when the upgrade itself is refused', async () => {
-      await stream.start()
+      const { pending, socket } = await startPending()
 
-      currentSocket().emit('unexpected-response', {}, { statusCode: 401 })
+      socket.emit('unexpected-response', {}, { statusCode: 401 })
+      socket.emit('close', 1006)
+      await pending
 
       expect(messagesAt(log, 'warn').join('\n')).toMatch(/refused the connection upgrade with HTTP 401/)
     })
 
     it('is willing to complain again after a successful connection in between', async () => {
-      await stream.start()
-      currentSocket().emit('error', new Error('first failure'))
-      currentSocket().emit('open')
+      const { pending, socket } = await startPending()
+      socket.emit('error', new Error('first failure'))
+      socket.readyState = MockWebSocket.OPEN
+      socket.emit('open')
+      await pending
 
-      currentSocket().emit('error', new Error('later failure'))
+      socket.emit('error', new Error('later failure'))
 
       expect(messagesAt(log, 'warn')).toHaveLength(2)
     })
@@ -282,10 +325,9 @@ describe('EventStream', () => {
 
   describe('refreshing before the token expires', () => {
     it('reconnects on its own schedule even while the socket is healthy', async () => {
-      await stream.start()
-      currentSocket().emit('open')
+      await startOpen()
 
-      await jest.advanceTimersByTimeAsync(WEBSOCKET_REFRESH_INTERVAL_MS + 15_001)
+      await openAfterReconnect(WEBSOCKET_REFRESH_INTERVAL_MS + 15_001)
 
       expect(requestToken).toHaveBeenCalledTimes(2)
       expect(MockWebSocket.instances[0].closeCount).toBe(1)
@@ -294,8 +336,7 @@ describe('EventStream', () => {
 
   describe('stop', () => {
     it('closes the socket and leaves no timer behind', async () => {
-      await stream.start()
-      currentSocket().emit('open')
+      await startOpen()
       expect(jest.getTimerCount()).toBeGreaterThan(0)
 
       stream.stop()
@@ -305,8 +346,9 @@ describe('EventStream', () => {
     })
 
     it('cancels a pending reconnect', async () => {
-      await stream.start()
-      currentSocket().emit('close', 1006)
+      const { pending, socket } = await startPending()
+      socket.emit('close', 1006)
+      await pending
       expect(jest.getTimerCount()).toBe(1)
 
       stream.stop()
@@ -315,22 +357,32 @@ describe('EventStream', () => {
     })
 
     it('does not reconnect when the socket closes afterwards', async () => {
-      await stream.start()
-      const socket = currentSocket()
+      const { pending, socket } = await startPending()
 
       stream.stop()
       socket.emit('close', 1000)
+      await pending
       await jest.advanceTimersByTimeAsync(300_000)
 
       expect(requestToken).toHaveBeenCalledTimes(1)
     })
 
-    it('opens nothing if it is stopped before it starts', async () => {
+    it('does not hang when stop interrupts an in-flight handshake', async () => {
+      const { pending } = await startPending()
+
+      stream.stop()
+      await pending
+
+      expect(MockWebSocket.instances[0].closeCount).toBe(1)
+    })
+
+    it('can start again after being stopped', async () => {
       stream.stop()
 
-      await stream.start()
+      await startOpen()
 
       expect(MockWebSocket.instances).toHaveLength(1)
+      expect(messagesAt(log, 'info')).toContain('Alarm.com event stream connected')
     })
   })
 })

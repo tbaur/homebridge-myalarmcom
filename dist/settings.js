@@ -14,7 +14,7 @@
  * nothing external will tell you when it changes.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WEBSOCKET_REFRESH_JITTER_MS = exports.WEBSOCKET_REFRESH_INTERVAL_MS = exports.WEBSOCKET_MAX_FAILURES = exports.WEBSOCKET_RECONNECT_MAX_MS = exports.WEBSOCKET_RECONNECT_BASE_MS = exports.WEBSOCKET_HOST_SUFFIX = exports.DEFAULT_WEBSOCKET_ENDPOINT = exports.REDISCOVERY_INTERVAL_MS = exports.MAX_RETRY_BACKOFF_MS = exports.MAX_API_RETRY_ATTEMPTS = exports.KEEPALIVE_INTERVAL_MS = exports.DEFAULT_AUTH_INTERVAL_MIN = exports.MIN_AUTH_INTERVAL_MIN = exports.DEFAULT_POLL_INTERVAL_SEC = exports.MIN_POLL_INTERVAL_SEC = exports.DEFAULT_REQUEST_TIMEOUT_MS = exports.MAX_IDS_PER_REQUEST = exports.CSRF_HEADER_NAME = exports.CSRF_COOKIE_NAME = exports.MFA_COOKIE_NAME = exports.EVENT_FIELD_SENTINEL = exports.PASSWORD_FIELD = exports.USERNAME_FIELD = exports.LOGIN_FORM_FIELDS = exports.JSON_API_ACCEPT = exports.HOME_REFERER = exports.WEBSOCKET_TOKEN_URL = exports.SENSORS_URL = exports.PARTITIONS_URL = exports.SYSTEM_URL = exports.KEEPALIVE_URL = exports.IDENTITIES_URL = exports.LOGIN_POST_URL = exports.LOGIN_PAGE_URL = exports.BASE_URL = exports.MANUFACTURER = exports.UUID_PREFIX = exports.PLATFORM_NAME = exports.PLUGIN_NAME = void 0;
+exports.WEBSOCKET_REFRESH_JITTER_MS = exports.WEBSOCKET_REFRESH_INTERVAL_MS = exports.WEBSOCKET_MAX_FAILURES = exports.WEBSOCKET_RECONNECT_MAX_MS = exports.WEBSOCKET_RECONNECT_BASE_MS = exports.WEBSOCKET_HANDSHAKE_TIMEOUT_MS = exports.WEBSOCKET_HOST_SUFFIX = exports.DEFAULT_WEBSOCKET_ENDPOINT = exports.REDISCOVERY_INTERVAL_MS = exports.MAX_RETRY_BACKOFF_MS = exports.MAX_API_RETRY_ATTEMPTS = exports.KEEPALIVE_INTERVAL_MS = exports.DEFAULT_AUTH_INTERVAL_MIN = exports.MIN_AUTH_INTERVAL_MIN = exports.DEFAULT_POLL_INTERVAL_SEC = exports.MIN_POLL_INTERVAL_SEC = exports.DEFAULT_REQUEST_TIMEOUT_MS = exports.MAX_IDS_PER_REQUEST = exports.CSRF_HEADER_NAME = exports.CSRF_COOKIE_NAME = exports.MFA_COOKIE_NAME = exports.EVENT_FIELD_SENTINEL = exports.PASSWORD_FIELD = exports.USERNAME_FIELD = exports.LOGIN_FORM_FIELDS = exports.JSON_API_ACCEPT = exports.HOME_REFERER = exports.WEBSOCKET_TOKEN_URL = exports.SENSORS_URL = exports.PARTITIONS_URL = exports.SYSTEM_URL = exports.KEEPALIVE_URL = exports.IDENTITIES_URL = exports.LOGIN_POST_URL = exports.LOGIN_PAGE_URL = exports.BASE_URL = exports.MANUFACTURER = exports.UUID_PREFIX = exports.PLATFORM_NAME = exports.PLUGIN_NAME = void 0;
 /** Name used to register the plugin with Homebridge (must match package.json name). */
 exports.PLUGIN_NAME = 'homebridge-myalarmcom';
 /** Platform identifier referenced in the user's Homebridge config. */
@@ -156,6 +156,8 @@ exports.DEFAULT_WEBSOCKET_ENDPOINT = 'wss://webskt.alarm.com:8443';
  * so without this the response decides where a live credential goes.
  */
 exports.WEBSOCKET_HOST_SUFFIX = '.alarm.com';
+/** Upper bound on waiting for the first WebSocket open/close during connect. */
+exports.WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 15_000;
 /** Delay before the first reconnect attempt after the stream drops. */
 exports.WEBSOCKET_RECONNECT_BASE_MS = 5_000;
 /** Upper bound on the reconnect backoff. */

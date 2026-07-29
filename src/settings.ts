@@ -192,6 +192,9 @@ export const DEFAULT_WEBSOCKET_ENDPOINT = 'wss://webskt.alarm.com:8443'
  */
 export const WEBSOCKET_HOST_SUFFIX = '.alarm.com'
 
+/** Upper bound on waiting for the first WebSocket open/close during connect. */
+export const WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 15_000
+
 /** Delay before the first reconnect attempt after the stream drops. */
 export const WEBSOCKET_RECONNECT_BASE_MS = 5_000
 

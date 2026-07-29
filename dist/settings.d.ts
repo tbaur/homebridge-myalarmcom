@@ -136,6 +136,8 @@ export declare const DEFAULT_WEBSOCKET_ENDPOINT = "wss://webskt.alarm.com:8443";
  * so without this the response decides where a live credential goes.
  */
 export declare const WEBSOCKET_HOST_SUFFIX = ".alarm.com";
+/** Upper bound on waiting for the first WebSocket open/close during connect. */
+export declare const WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 15000;
 /** Delay before the first reconnect attempt after the stream drops. */
 export declare const WEBSOCKET_RECONNECT_BASE_MS = 5000;
 /** Upper bound on the reconnect backoff. */
