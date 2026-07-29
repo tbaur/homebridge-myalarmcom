@@ -331,6 +331,23 @@ describe('EventStream', () => {
 
       expect(requestToken).toHaveBeenCalledTimes(2)
       expect(MockWebSocket.instances[0].closeCount).toBe(1)
+      expect(messagesAt(log, 'debug')).toContain('Alarm.com event stream refreshed')
+      expect(messagesAt(log, 'info')).not.toContain('Alarm.com event stream reconnected')
+    })
+
+    it('cancels a pending refresh when the socket drops, so only one reconnect runs', async () => {
+      jest.spyOn(Math, 'random').mockReturnValue(0)
+
+      await startOpen()
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_REFRESH_INTERVAL_MS - 1_000)
+      currentSocket().emit('close', 1006)
+
+      // Refresh would have been due in 1s; it must not fire. Only the drop backoff.
+      await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
+
+      expect(MockWebSocket.instances).toHaveLength(2)
+      expect(messagesAt(log, 'info')).toContain('Alarm.com event stream reconnected')
+      expect(messagesAt(log, 'debug')).not.toContain('Alarm.com event stream refreshed')
     })
   })
 

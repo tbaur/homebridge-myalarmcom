@@ -72,6 +72,11 @@ export class EventStream {
   #lastEventAt: number | null = null
   /** Completes a pending {@link #connect} handshake wait when stop interrupts it. */
   #handshakeSettle: (() => void) | null = null
+  /**
+   * Why the next successful open after the first should be logged the way it is.
+   * Proactive token refresh is routine; unexpected drops are what operators care about.
+   */
+  #connectReason: 'initial' | 'refresh' | 'drop' = 'initial'
 
   constructor(options: EventStreamOptions) {
     this.#log = options.log
@@ -102,6 +107,7 @@ export class EventStream {
   /** Open the stream and keep it open until {@link stop} is called. */
   async start(): Promise<void> {
     this.#isStopped = false
+    this.#connectReason = 'initial'
     await this.#connect()
   }
 
@@ -110,13 +116,7 @@ export class EventStream {
     this.#isStopped = true
     this.#clearTimers()
     this.#settleHandshake()
-
-    if (this.#socket) {
-      // Remove listeners first so the close does not schedule a reconnect.
-      this.#socket.removeAllListeners()
-      this.#socket.close()
-      this.#socket = null
-    }
+    this.#disposeSocket()
   }
 
   #settleHandshake(): void {
@@ -176,10 +176,21 @@ export class EventStream {
       return
     }
 
+    // Never leave a prior socket (or its listeners) alive. A refresh racing a
+    // drop-reconnect used to open a second WebSocket; both then refreshed on
+    // their own timers and logged "reconnected" about twice as often.
+    this.#disposeSocket()
+    this.#settleHandshake()
+
     this.#isConnecting = true
 
     try {
       const { token, endpoint } = await this.#requestToken()
+      if (this.#isStopped) {
+        this.#isConnecting = false
+        return
+      }
+
       const target = this.#resolveEndpoint(endpoint)
 
       // The token must be appended raw. It is not an opaque value: it arrives
@@ -247,6 +258,16 @@ export class EventStream {
     }
   }
 
+  /** Close the current socket without scheduling a drop-reconnect. */
+  #disposeSocket(): void {
+    if (!this.#socket) {
+      return
+    }
+    this.#socket.removeAllListeners()
+    this.#socket.close()
+    this.#socket = null
+  }
+
   /**
    * Report why the stream failed.
    *
@@ -270,10 +291,17 @@ export class EventStream {
     this.#consecutiveFailures = 0
     this.#hasReportedFailure = false
 
-    // Count recoveries, not the first successful open.
+    const reason = this.#connectReason
+    this.#connectReason = 'drop'
+
     if (this.#hadConnected) {
-      this.#log.info('Alarm.com event stream reconnected')
-      this.#onReconnect?.()
+      if (reason === 'refresh') {
+        // Scheduled token refresh — routine, not an outage.
+        this.#log.debug('Alarm.com event stream refreshed')
+      } else {
+        this.#log.info('Alarm.com event stream reconnected')
+        this.#onReconnect?.()
+      }
     } else {
       this.#log.info('Alarm.com event stream connected')
     }
@@ -297,7 +325,7 @@ export class EventStream {
     const jitter = Math.random() * WEBSOCKET_REFRESH_JITTER_MS
     this.#refreshTimer = setTimeout(() => {
       this.#log.debug('refreshing the event stream connection')
-      this.#reconnect()
+      this.#reconnect('refresh')
     }, WEBSOCKET_REFRESH_INTERVAL_MS + jitter)
   }
 
@@ -306,15 +334,24 @@ export class EventStream {
       return
     }
     this.#log.debug(`event stream closed with code ${code}`)
+    // Drop path owns the next connect. Cancel a pending proactive refresh so
+    // it cannot race the backoff and open a second socket.
+    if (this.#refreshTimer) {
+      clearTimeout(this.#refreshTimer)
+      this.#refreshTimer = null
+    }
     this.#scheduleReconnect()
   }
 
-  #reconnect(): void {
-    if (this.#socket) {
-      this.#socket.removeAllListeners()
-      this.#socket.close()
-      this.#socket = null
+  #reconnect(reason: 'refresh' | 'drop' = 'drop'): void {
+    // Cancel a pending drop-reconnect so a refresh cannot race it into a
+    // second concurrent #connect (two live sockets, doubled refresh cadence).
+    if (this.#reconnectTimer) {
+      clearTimeout(this.#reconnectTimer)
+      this.#reconnectTimer = null
     }
+    this.#connectReason = reason
+    this.#disposeSocket()
     void this.#connect()
   }
 
@@ -341,6 +378,7 @@ export class EventStream {
 
     this.#log.debug(`reconnecting to the event stream in ${Math.round(delayMs / 1000)}s`)
 
+    this.#connectReason = 'drop'
     this.#reconnectTimer = setTimeout(() => {
       this.#reconnectTimer = null
       void this.#connect()
