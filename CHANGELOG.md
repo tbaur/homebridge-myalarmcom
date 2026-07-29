@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.6...v0.1.7) (2026-07-29)
+
+
+### Bug Fixes
+
+* harden connection, session, and discovery edge cases ([#18](https://github.com/tbaur/homebridge-myalarmcom/issues/18)) ([1ea0a8e](https://github.com/tbaur/homebridge-myalarmcom/commit/1ea0a8edc82282a381d9b544fbce700388cd0f34))
+
 ## [0.1.6](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.5...v0.1.6) (2026-07-29)
 
 
