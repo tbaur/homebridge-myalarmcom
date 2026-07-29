@@ -32,6 +32,12 @@ const TOTP_CODE_PATTERN = /^\d{6}$/
 /** Shortest plausible `twoFactorAuthenticationId`; real ones are far longer. */
 const MIN_MFA_COOKIE_LENGTH = 20
 
+/** Shortest allowed diagnostics heartbeat when the feature is enabled. */
+const MIN_DIAGNOSTICS_INTERVAL_SEC = 30
+
+/** Longest allowed diagnostics heartbeat. */
+const MAX_DIAGNOSTICS_INTERVAL_SEC = 3600
+
 function requireNonEmptyString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new ConfigurationError(`"${field}" is required in the ${PLATFORM_NAME} platform config`)
@@ -76,6 +82,45 @@ function clampToFloor(
 
 function parseBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
+}
+
+/**
+ * Parse the diagnostics heartbeat interval.
+ *
+ * `0` (or omitted) disables emission. Sub-floor positive values are raised to
+ * the minimum rather than rejected, matching the poll-interval clamp.
+ */
+function parseDiagnosticsInterval(value: unknown, warnings: string[]): number {
+  if (value === undefined || value === null) {
+    return 0
+  }
+
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new ConfigurationError('"diagnosticsInterval" must be a number of seconds')
+  }
+
+  if (value === 0) {
+    return 0
+  }
+
+  if (value < 0) {
+    throw new ConfigurationError('"diagnosticsInterval" cannot be negative')
+  }
+
+  if (value > MAX_DIAGNOSTICS_INTERVAL_SEC) {
+    throw new ConfigurationError(
+      `"diagnosticsInterval" cannot exceed ${MAX_DIAGNOSTICS_INTERVAL_SEC} seconds`,
+    )
+  }
+
+  if (value < MIN_DIAGNOSTICS_INTERVAL_SEC) {
+    warnings.push(
+      `"diagnosticsInterval" was raised from ${value} to ${MIN_DIAGNOSTICS_INTERVAL_SEC} seconds.`,
+    )
+    return MIN_DIAGNOSTICS_INTERVAL_SEC
+  }
+
+  return value
 }
 
 function parseIgnoredIds(value: unknown, warnings: string[]): ReadonlySet<string> {
@@ -161,6 +206,7 @@ export function validateConfig(raw: MyAlarmComPlatformConfig): ConfigValidationR
     ignoredDeviceIds: parseIgnoredIds(raw.ignoredDeviceIds, warnings),
     includeUnmonitoredSensors: parseBoolean(raw.includeUnmonitoredSensors, false),
     debug: parseBoolean(raw.debug, false),
+    diagnosticsInterval: parseDiagnosticsInterval(raw.diagnosticsInterval, warnings),
   }
 
   return { config, warnings }

@@ -420,7 +420,7 @@ describe('AlarmComClient', () => {
 
       expect(client.getStatus()).toMatchObject({
         circuitBreaker: { state: 'CLOSED' },
-        rateLimiter: { requestsInWindow: 0 },
+        rateLimiter: { remaining: expect.any(Number) },
         hasSession: true,
       })
     })

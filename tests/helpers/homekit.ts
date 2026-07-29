@@ -72,11 +72,13 @@ export interface PlatformTestBed {
   accessory: PlatformAccessory
   commandPartition: jest.Mock
   requestDeviceRefresh: jest.Mock
+  recordCommand: jest.Mock
 }
 
 export function createPlatformTestBed(context: Record<string, unknown>): PlatformTestBed {
   const commandPartition = jest.fn()
   const requestDeviceRefresh = jest.fn()
+  const recordCommand = jest.fn()
 
   const accessory = new FakePlatformAccessory(String(context.displayName), 'fake-uuid')
   accessory.context = context
@@ -87,6 +89,7 @@ export function createPlatformTestBed(context: Record<string, unknown>): Platfor
     api: { hap: { uuid, Perms: PERMS, HapStatusError } },
     client: { commandPartition },
     requestDeviceRefresh,
+    recordCommand,
   } as unknown as MyAlarmComPlatform
 
   return {
@@ -94,6 +97,7 @@ export function createPlatformTestBed(context: Record<string, unknown>): Platfor
     accessory: accessory as unknown as PlatformAccessory,
     commandPartition,
     requestDeviceRefresh,
+    recordCommand,
   }
 }
 

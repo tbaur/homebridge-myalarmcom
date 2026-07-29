@@ -23,6 +23,7 @@ class SessionManager {
     #credentials;
     #sessionLifetimeMs;
     #log;
+    #onSessionEstablished;
     #session = null;
     #lastLoginAttempt = 0;
     /** In-flight login, so concurrent callers share one attempt. */
@@ -31,6 +32,7 @@ class SessionManager {
         this.#credentials = options.credentials;
         this.#sessionLifetimeMs = options.authIntervalMinutes * 60_000;
         this.#log = options.log;
+        this.#onSessionEstablished = options.onSessionEstablished;
     }
     /** Whether the current session is still within its configured lifetime. */
     #isFresh(session) {
@@ -72,6 +74,7 @@ class SessionManager {
         try {
             this.#session = await (0, auth_1.authenticate)(this.#credentials, this.#log);
             this.#log.info('Alarm.com session established');
+            this.#onSessionEstablished?.();
             return this.#session;
         }
         catch (error) {

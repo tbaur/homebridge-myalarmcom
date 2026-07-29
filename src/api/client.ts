@@ -14,6 +14,7 @@
 
 import {
   ApiParseError,
+  CircuitBreakerError,
   createApiError,
   SessionExpiredError,
 } from '../errors'
@@ -38,10 +39,18 @@ import type {
 import type { Logger } from '../utils/logger'
 import { withRetry } from '../utils/retry'
 import { sanitizeUrl } from '../utils/sanitizers'
-import { CircuitBreaker } from './circuit-breaker'
+import { CircuitBreaker, CircuitState } from './circuit-breaker'
 import { httpRequest } from './http'
 import { RateLimiter } from './rate-limiter'
 import type { SessionManager } from './session-manager'
+
+/** One timed API call outcome for diagnostics. */
+export interface ApiRequestMetric {
+  durationMs: number
+  ok: boolean
+  /** False when the call never reached the network (breaker open, rate limited). */
+  networked: boolean
+}
 
 /** Arming commands Alarm.com accepts on a partition. */
 export type PartitionAction = 'armStay' | 'armAway' | 'disarm'
@@ -72,6 +81,14 @@ export interface AlarmComClientOptions {
   log: Logger
   circuitBreaker?: CircuitBreaker
   rateLimiter?: RateLimiter
+  /** Called after every request attempt, for diagnostics. */
+  metrics?: (sample: ApiRequestMetric) => void
+  /** Called when the circuit breaker opens. */
+  onCircuitOpen?: () => void
+  /** Called when pacing refuses a request because the wait would be too long. */
+  onThrottle?: () => void
+  /** Called when a transient failure is about to be retried. */
+  onRetry?: () => void
 }
 
 interface RequestOptions {
@@ -112,11 +129,23 @@ export class AlarmComClient {
   readonly #log: Logger
   readonly #breaker: CircuitBreaker
   readonly #limiter: RateLimiter
+  readonly #metrics?: (sample: ApiRequestMetric) => void
+  readonly #onThrottle?: () => void
+  readonly #onRetry?: () => void
 
   constructor(options: AlarmComClientOptions) {
     this.#sessionManager = options.sessionManager
     this.#log = options.log
-    this.#breaker = options.circuitBreaker ?? new CircuitBreaker()
+    this.#metrics = options.metrics
+    this.#onThrottle = options.onThrottle
+    this.#onRetry = options.onRetry
+    this.#breaker = options.circuitBreaker ?? new CircuitBreaker({
+      onStateChange: (from, to) => {
+        if (to === CircuitState.OPEN && from !== CircuitState.OPEN) {
+          options.onCircuitOpen?.()
+        }
+      },
+    })
     this.#limiter = options.rateLimiter ?? new RateLimiter()
   }
 
@@ -172,8 +201,8 @@ export class AlarmComClient {
    * keeps rejecting us is how accounts get locked.
    */
   async #request<T>(url: string, options: RequestOptions = {}): Promise<T> {
-    const attempt = (): Promise<T> =>
-      this.#limiter.execute(() => this.#breaker.execute(() => this.#send<T>(url, options)))
+    const attempt = (): Promise<T> => this.#timedAttempt(() =>
+      this.#limiter.execute(() => this.#breaker.execute(() => this.#send<T>(url, options))))
 
     return withRetry(
       async () => {
@@ -195,12 +224,40 @@ export class AlarmComClient {
       },
       {
         onRetry: (attemptNumber, delayMs, error) => {
+          this.#onRetry?.()
           this.#log.debug(
             `retrying ${sanitizeUrl(url)} (attempt ${attemptNumber}) in ${delayMs}ms after ${String(error)}`,
           )
         },
       },
     )
+  }
+
+  /**
+   * Time one attempt and feed the outcome to diagnostics.
+   *
+   * Pre-flight rejections (open breaker, pacing refusal) are recorded as
+   * non-networked so they do not skew latency percentiles.
+   */
+  async #timedAttempt<T>(operation: () => Promise<T>): Promise<T> {
+    const started = Date.now()
+    try {
+      const result = await operation()
+      this.#metrics?.({ durationMs: Date.now() - started, ok: true, networked: true })
+      return result
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const isThrottle = message.includes('Request pacing would require waiting')
+      const isBreaker = error instanceof CircuitBreakerError
+      const networked = !isThrottle && !isBreaker
+
+      if (isThrottle) {
+        this.#onThrottle?.()
+      }
+
+      this.#metrics?.({ durationMs: Date.now() - started, ok: false, networked })
+      throw error
+    }
   }
 
   /** Resolve the system this account has selected. */
@@ -321,10 +378,14 @@ export class AlarmComClient {
   }
 
   /** Diagnostics for the resilience layers. */
-  getStatus(): Record<string, unknown> {
+  getStatus(): {
+    circuitBreaker: { state: string }
+    rateLimiter: { remaining: number }
+    hasSession: boolean
+  } {
     return {
-      circuitBreaker: this.#breaker.getStatus(),
-      rateLimiter: this.#limiter.getStatus(),
+      circuitBreaker: { state: this.#breaker.getStatus().state },
+      rateLimiter: { remaining: this.#limiter.getStatus().remaining },
       hasSession: this.#sessionManager.hasSession,
     }
   }
