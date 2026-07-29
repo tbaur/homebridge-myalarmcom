@@ -58,14 +58,27 @@ class AlarmComClient {
         this.#metrics = options.metrics;
         this.#onThrottle = options.onThrottle;
         this.#onRetry = options.onRetry;
-        this.#breaker = options.circuitBreaker ?? new circuit_breaker_1.CircuitBreaker({
-            onStateChange: (from, to) => {
-                if (to === circuit_breaker_1.CircuitState.OPEN && from !== circuit_breaker_1.CircuitState.OPEN) {
-                    options.onCircuitOpen?.();
-                }
-            },
+        this.#breaker = options.circuitBreaker ?? new circuit_breaker_1.CircuitBreaker();
+        this.#breaker.attachOnStateChange((from, to) => {
+            this.#logCircuitTransition(from, to);
+            if (to === circuit_breaker_1.CircuitState.OPEN && from !== circuit_breaker_1.CircuitState.OPEN) {
+                options.onCircuitOpen?.();
+            }
         });
         this.#limiter = options.rateLimiter ?? new rate_limiter_1.RateLimiter();
+    }
+    /**
+     * Surface circuit-breaker transitions so operators can see when Alarm.com is
+     * being treated as unavailable and when it recovers.
+     */
+    #logCircuitTransition(from, to) {
+        const message = `Circuit breaker ${from} -> ${to}`;
+        if (to === circuit_breaker_1.CircuitState.OPEN) {
+            this.#log.warn(message);
+        }
+        else {
+            this.#log.info(message);
+        }
     }
     /** Issue one authenticated request and parse the JSON:API response. */
     async #send(url, options = {}) {

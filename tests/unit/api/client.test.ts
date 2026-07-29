@@ -10,14 +10,16 @@
  */
 
 import nock from 'nock'
+import { CircuitBreaker } from '../../../src/api/circuit-breaker'
 import { AlarmComClient, chunkIds } from '../../../src/api/client'
 import { RateLimiter } from '../../../src/api/rate-limiter'
 import type { SessionManager } from '../../../src/api/session-manager'
 import { ApiParseError, ForbiddenError } from '../../../src/errors'
 import { BASE_URL, MAX_IDS_PER_REQUEST } from '../../../src/settings'
 import type { PartitionAttributes, Resource } from '../../../src/types/alarm'
+import * as retry from '../../../src/utils/retry'
 import { captureRejection } from '../../helpers/errors'
-import { createRecordingLogger } from '../../helpers/logger'
+import { createRecordingLogger, messagesAt } from '../../helpers/logger'
 import identitiesFixture from '../../fixtures/identities.json'
 import partitionsFixture from '../../fixtures/partitions.json'
 import sensorsFixture from '../../fixtures/sensors.json'
@@ -423,6 +425,75 @@ describe('AlarmComClient', () => {
         rateLimiter: { remaining: expect.any(Number) },
         hasSession: true,
       })
+    })
+  })
+
+  describe('circuit breaker logging', () => {
+    afterEach(() => {
+      jest.restoreAllMocks()
+    })
+
+    it('warns when sustained failures open the breaker', async () => {
+      jest.spyOn(retry, 'sleep').mockResolvedValue(undefined)
+      const log = createRecordingLogger()
+      const breaker = new CircuitBreaker({
+        failureThreshold: 2,
+        resetTimeoutMs: 1_000,
+        halfOpenMax: 1,
+        failureWindowMs: 60_000,
+      })
+      const sessionManager: SessionManagerStub = {
+        getSession: jest.fn().mockResolvedValue(SESSION),
+        invalidate: jest.fn(),
+        hasSession: true,
+      }
+      const client = new AlarmComClient({
+        sessionManager: sessionManager as unknown as SessionManager,
+        log,
+        circuitBreaker: breaker,
+        rateLimiter: new RateLimiter({ minIntervalMs: 0, maxRequests: 10_000, windowMs: 1_000 }),
+      })
+
+      nock(BASE_URL).get('/web/api/identities').times(10).reply(500, 'unavailable')
+
+      await expect(client.getSystemId()).rejects.toThrow()
+
+      expect(messagesAt(log, 'warn')).toContain('Circuit breaker CLOSED -> OPEN')
+    })
+
+    it('logs recovery through HALF_OPEN back to CLOSED', async () => {
+      jest.useFakeTimers()
+      const log = createRecordingLogger()
+      const breaker = new CircuitBreaker({
+        failureThreshold: 2,
+        resetTimeoutMs: 1_000,
+        halfOpenMax: 1,
+        failureWindowMs: 60_000,
+      })
+      const sessionManager: SessionManagerStub = {
+        getSession: jest.fn().mockResolvedValue(SESSION),
+        invalidate: jest.fn(),
+        hasSession: true,
+      }
+      new AlarmComClient({
+        sessionManager: sessionManager as unknown as SessionManager,
+        log,
+        circuitBreaker: breaker,
+        rateLimiter: new RateLimiter({ minIntervalMs: 0, maxRequests: 10_000, windowMs: 1_000 }),
+      })
+
+      breaker.recordFailure()
+      breaker.recordFailure()
+      expect(messagesAt(log, 'warn')).toContain('Circuit breaker CLOSED -> OPEN')
+
+      jest.advanceTimersByTime(1_000)
+      expect(breaker.canRequest()).toBe(true)
+      expect(messagesAt(log, 'info')).toContain('Circuit breaker OPEN -> HALF_OPEN')
+
+      await expect(breaker.execute(async () => 'ok')).resolves.toBe('ok')
+      expect(messagesAt(log, 'info')).toContain('Circuit breaker HALF_OPEN -> CLOSED')
+
+      jest.useRealTimers()
     })
   })
 })

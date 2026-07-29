@@ -51,6 +51,17 @@ class CircuitBreaker {
         this.#failureWindowMs = merged.failureWindowMs;
         this.#onStateChange = merged.onStateChange;
     }
+    /**
+     * Chain an additional state-change listener (e.g. client logging) without
+     * replacing any listener already supplied at construction.
+     */
+    attachOnStateChange(handler) {
+        const previous = this.#onStateChange;
+        this.#onStateChange = (from, to) => {
+            previous?.(from, to);
+            handler(from, to);
+        };
+    }
     get state() {
         return this.#state;
     }

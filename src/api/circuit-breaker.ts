@@ -61,7 +61,7 @@ export class CircuitBreaker {
   readonly #resetTimeoutMs: number
   readonly #halfOpenMax: number
   readonly #failureWindowMs: number
-  readonly #onStateChange?: (from: CircuitState, to: CircuitState) => void
+  #onStateChange?: (from: CircuitState, to: CircuitState) => void
 
   #state: CircuitState = CircuitState.CLOSED
   #successes = 0
@@ -76,6 +76,18 @@ export class CircuitBreaker {
     this.#halfOpenMax = merged.halfOpenMax
     this.#failureWindowMs = merged.failureWindowMs
     this.#onStateChange = merged.onStateChange
+  }
+
+  /**
+   * Chain an additional state-change listener (e.g. client logging) without
+   * replacing any listener already supplied at construction.
+   */
+  attachOnStateChange(handler: (from: CircuitState, to: CircuitState) => void): void {
+    const previous = this.#onStateChange
+    this.#onStateChange = (from, to) => {
+      previous?.(from, to)
+      handler(from, to)
+    }
   }
 
   get state(): CircuitState {
