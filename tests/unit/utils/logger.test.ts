@@ -12,12 +12,12 @@ import { createScopedLogger } from '../../../src/utils/logger'
 import { createRecordingLogger } from '../../helpers/logger'
 
 describe('createScopedLogger', () => {
-  it('prefixes messages with the component scope', () => {
+  it('does not prefix messages with a component scope', () => {
     const base = createRecordingLogger()
 
     createScopedLogger(base, 'auth', false).info('Signing in to Alarm.com')
 
-    expect(base.info).toHaveBeenCalledWith('[auth] Signing in to Alarm.com')
+    expect(base.info).toHaveBeenCalledWith('Signing in to Alarm.com')
   })
 
   it('redacts secrets at every level', () => {
@@ -48,7 +48,7 @@ describe('createScopedLogger', () => {
 
     createScopedLogger(base, 'api', true).debug('verbose detail')
 
-    expect(base.debug).toHaveBeenCalledWith('[api] verbose detail')
+    expect(base.debug).toHaveBeenCalledWith('verbose detail')
   })
 
   it('forwards additional parameters, preserving detail that is not sensitive', () => {
@@ -57,7 +57,7 @@ describe('createScopedLogger', () => {
     createScopedLogger(base, 'api', true).warn('unexpected reading', { deviceId: '1234567-1' })
 
     expect(base.warn).toHaveBeenCalledWith(
-      '[api] unexpected reading',
+      'unexpected reading',
       expect.stringContaining('1234567-1'),
     )
   })
@@ -105,7 +105,7 @@ describe('createScopedLogger', () => {
 
       createScopedLogger(base, 'api', true).info('retrying', 3, true, null)
 
-      expect(base.info).toHaveBeenCalledWith('[api] retrying', 3, true, null)
+      expect(base.info).toHaveBeenCalledWith('retrying', 3, true, null)
     })
 
     it('survives a parameter that cannot be serialized', () => {
@@ -118,11 +118,11 @@ describe('createScopedLogger', () => {
     })
   })
 
-  it('nests scopes when a scoped logger is wrapped again', () => {
+  it('keeps nested wrappers from inventing component prefixes', () => {
     const base = createRecordingLogger()
 
     createScopedLogger(createScopedLogger(base, 'platform', true), 'contact', true).info('added')
 
-    expect(base.info).toHaveBeenCalledWith('[platform] [contact] added')
+    expect(base.info).toHaveBeenCalledWith('added')
   })
 })
