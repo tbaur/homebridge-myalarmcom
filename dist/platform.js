@@ -60,6 +60,8 @@ class MyAlarmComPlatform {
     #pendingRefreshIds = new Set();
     #systemId = null;
     #isShuttingDown = false;
+    /** Prevents stacked poll cycles when a refresh outlasts the poll interval. */
+    #refreshAllInFlight = false;
     /** When the account was last re-enumerated, driving periodic rediscovery. */
     #lastDiscoveryAt = 0;
     #diagnostics;
@@ -117,12 +119,22 @@ class MyAlarmComPlatform {
             this.#reportFailure('Initial discovery failed', error);
             return;
         }
+        if (this.#isShuttingDown) {
+            return;
+        }
         this.#startPolling();
         this.#startKeepAlive(sessionManager);
         if (this.#config.useEventStream) {
             // Await the first handshake so "connected" (or the failure warning) lands
             // before Ready. Later reconnects are runtime events and may log after.
             await this.#startEventStream();
+        }
+        if (this.#isShuttingDown) {
+            // Shutdown won the race with a slow stream handshake; tear down anything
+            // startEventStream may have installed after #shutdown ran.
+            this.#eventStream?.stop();
+            this.#eventStream = null;
+            return;
         }
         this.#startDiagnostics();
         this.#log.info('Ready');
@@ -257,6 +269,9 @@ class MyAlarmComPlatform {
         }
     }
     #startPolling() {
+        if (this.#isShuttingDown) {
+            return;
+        }
         const intervalMs = this.#config.pollIntervalSeconds * 1_000;
         this.#pollTimer = setInterval(() => {
             void this.#refreshAll();
@@ -270,11 +285,17 @@ class MyAlarmComPlatform {
      * keep-alive is the cheaper and safer way to stay authenticated.
      */
     #startKeepAlive(sessionManager) {
+        if (this.#isShuttingDown) {
+            return;
+        }
         this.#keepAliveTimer = setInterval(() => {
             void sessionManager.touch();
         }, settings_1.KEEPALIVE_INTERVAL_MS);
     }
     async #startEventStream() {
+        if (this.#isShuttingDown) {
+            return;
+        }
         this.#eventStream = new event_stream_1.EventStream({
             log: (0, logger_1.createScopedLogger)(this.#log, 'events', this.#config.debug),
             requestToken: () => this.client.getEventStreamToken(),
@@ -351,9 +372,10 @@ class MyAlarmComPlatform {
      * its own slower cadence rather than on every poll.
      */
     async #refreshAll() {
-        if (this.#isShuttingDown) {
+        if (this.#isShuttingDown || this.#refreshAllInFlight) {
             return;
         }
+        this.#refreshAllInFlight = true;
         const isRediscoveryDue = Date.now() - this.#lastDiscoveryAt >= settings_1.REDISCOVERY_INTERVAL_MS;
         const started = Date.now();
         let ok = 0;
@@ -373,6 +395,7 @@ class MyAlarmComPlatform {
             this.#reportFailure(isRediscoveryDue ? 'Rediscovery failed' : 'Poll failed', error);
         }
         finally {
+            this.#refreshAllInFlight = false;
             this.#diagnostics.pollCycle(ok, failed, Date.now() - started);
         }
     }

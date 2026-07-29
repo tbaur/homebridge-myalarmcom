@@ -179,13 +179,27 @@ describe('SessionManager', () => {
       expect(manager.hasSession).toBe(false)
     })
 
-    it('treats a failed keep-alive as inconclusive rather than fatal', async () => {
+    it('does not wipe a newer session that replaced the one keep-alive probed', async () => {
       const manager = createManager()
-      await manager.getSession()
-      mockedKeepAlive.mockRejectedValue(new Error('socket hang up'))
+      const first = await manager.getSession()
 
-      await expect(manager.touch()).resolves.toBe(false)
+      let finishKeepAlive!: (alive: boolean) => void
+      mockedKeepAlive.mockImplementation(() => new Promise((resolve) => {
+        finishKeepAlive = resolve
+      }))
+
+      const touchPromise = manager.touch()
+      manager.invalidate()
+      mockedAuthenticate.mockImplementation(() => Promise.resolve(sessionAt(new Date())))
+      const second = await manager.getSession()
+
+      finishKeepAlive(false)
+      await expect(touchPromise).resolves.toBe(false)
+
+      expect(second).not.toBe(first)
       expect(manager.hasSession).toBe(true)
+      await expect(manager.getSession()).resolves.toBe(second)
+      expect(mockedAuthenticate).toHaveBeenCalledTimes(2)
     })
   })
 
