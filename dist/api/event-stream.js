@@ -288,9 +288,10 @@ class EventStream {
     /**
      * Proactively reconnect before the token expires.
      *
-     * A silently dead socket is worse than a briefly interrupted one: HomeKit
-     * would keep showing stale state with nothing logged anywhere. Jitter keeps
-     * multiple Homebridge instances from reconnecting in unison.
+     * Must run *before* Alarm.com drops the socket (~5 minutes). Refreshing at or
+     * after that mark races the server close; the drop path wins and logs
+     * info-level "reconnected" every cycle. Jitter keeps multiple Homebridge
+     * instances from reconnecting in unison.
      */
     #scheduleRefresh() {
         if (this.#refreshTimer) {
