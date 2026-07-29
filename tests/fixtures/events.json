@@ -1,0 +1,35 @@
+{
+  "_comment": "Synthetic event stream frames matching the verified shape. Device resource IDs are formed as `${UnitId}-${DeviceId}`, so UnitId 1234567 with DeviceId 2 refers to sensor 1234567-2. EventType 55 is a user sign-in and carries no device state; 100 and 0 were both observed on contact sensors.",
+  "events": [
+    {
+      "EventDateUtc": "2026-07-29T02:00:56.473Z",
+      "UnitId": 1234567,
+      "DeviceId": 127,
+      "EventType": 55,
+      "EventValue": 9000001,
+      "CorrelatedId": 9000001,
+      "QstringForExtraData": "src=1&mrid=",
+      "DeviceType": -1
+    },
+    {
+      "EventDateUtc": "2026-07-29T02:01:14.606Z",
+      "UnitId": 1234567,
+      "DeviceId": 2,
+      "EventType": 100,
+      "EventValue": 0,
+      "CorrelatedId": null,
+      "QstringForExtraData": null,
+      "DeviceType": 1
+    },
+    {
+      "EventDateUtc": "2026-07-29T02:01:44.783Z",
+      "UnitId": 1234567,
+      "DeviceId": 2,
+      "EventType": 0,
+      "EventValue": 0,
+      "CorrelatedId": null,
+      "QstringForExtraData": "openClosedStatusWord=closed",
+      "DeviceType": 1
+    }
+  ]
+}

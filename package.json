@@ -1,0 +1,82 @@
+{
+  "name": "homebridge-myalarmcom",
+  "displayName": "Homebridge My Alarm.com",
+  "version": "0.1.0",
+  "description": "A Homebridge plugin for Alarm.com security panels and sensors",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "keywords": [
+    "homebridge-plugin",
+    "alarm.com",
+    "alarmdotcom",
+    "security-system",
+    "alarm",
+    "sensor",
+    "homekit"
+  ],
+  "author": {
+    "name": "tbaur",
+    "url": "https://github.com/tbaur"
+  },
+  "maintainers": [
+    {
+      "name": "tbaur",
+      "url": "https://github.com/tbaur"
+    }
+  ],
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/tbaur"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tbaur/homebridge-myalarmcom.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tbaur/homebridge-myalarmcom/issues"
+  },
+  "homepage": "https://github.com/tbaur/homebridge-myalarmcom#readme",
+  "dependencies": {
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.1.0",
+    "@types/ws": "^8.5.13",
+    "@typescript-eslint/eslint-plugin": "^8.51.0",
+    "@typescript-eslint/parser": "^8.51.0",
+    "eslint": "^10.7.0",
+    "globals": "^17.7.0",
+    "homebridge": "^2.1.0",
+    "jest": "^30.4.2",
+    "nock": "^14.0.16",
+    "ts-jest": "29.4.11",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "homebridge": "^1.6.0 || ^2.0.0",
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build",
+    "probe": "node scripts/probe.mjs",
+    "verify": "npm run build && node scripts/verify.mjs",
+    "test": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --coverage",
+    "test:watch": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --watch",
+    "test:unit": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --coverage --testPathPattern=tests/unit",
+    "test:integration": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --testPathPattern=tests/integration --collectCoverage=false",
+    "lint": "eslint . --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage",
+    "lint:fix": "eslint . --fix --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage",
+    "watch": "npm run build && node scripts/watch-arming.mjs"
+  },
+  "files": [
+    "dist/**/*",
+    "config.schema.json",
+    "LICENSE",
+    "README.md"
+  ]
+}

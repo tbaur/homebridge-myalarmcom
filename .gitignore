@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Testing
+coverage/
+.nyc_output/
+*.lcov
+.jest/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Build
+build/
+*.tsbuildinfo
+# Note: dist/ is NOT ignored - it's committed to git for git installs to work
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Probe output. Captured payloads are scrubbed before they are written, but the
+# raw directory is never committed: it is account-specific data from a live
+# security system, and a scrubber bug must not become a published leak.
+probe-output/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+.npm-cache/

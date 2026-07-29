@@ -1,0 +1,110 @@
+{
+  "pluginAlias": "MyAlarmCom",
+  "pluginType": "platform",
+  "singular": true,
+  "headerDisplay": "Exposes your Alarm.com security panel and sensors in HomeKit.\n\nIf two-factor authentication is enabled — and it should be — supply the `twoFactorAuthenticationId` browser cookie (not a six-digit authenticator code). Capture steps: [docs/AUTH.md](https://github.com/tbaur/homebridge-myalarmcom/blob/main/docs/AUTH.md).",
+  "footerDisplay": "Alarm.com may lock accounts that poll or sign in too aggressively, and a locked account also loses the Alarm.com app. The intervals below are enforced at safe minimums for that reason.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "MyAlarmCom",
+        "required": true,
+        "description": "Name shown in the Homebridge log."
+      },
+      "username": {
+        "title": "Username",
+        "type": "string",
+        "required": true,
+        "format": "email",
+        "description": "The email address you sign in to Alarm.com with."
+      },
+      "password": {
+        "title": "Password",
+        "type": "string",
+        "required": true,
+        "x-schema-form": {
+          "type": "password"
+        },
+        "description": "Your Alarm.com password. Consider creating a separate, limited Alarm.com login for this plugin rather than using your primary account."
+      },
+      "twoFactorAuthenticationId": {
+        "title": "Two-Factor Cookie",
+        "type": "string",
+        "required": false,
+        "x-schema-form": {
+          "type": "password"
+        },
+        "description": "The value of the `twoFactorAuthenticationId` browser cookie from a signed-in Alarm.com session. Treat this as a password: it bypasses two-factor authentication on its own. Leave blank only if the account has two-factor disabled."
+      },
+      "pollIntervalSeconds": {
+        "title": "Poll Interval (seconds)",
+        "type": "integer",
+        "default": 60,
+        "minimum": 60,
+        "maximum": 3600,
+        "description": "How often to re-read all device state. Values below 60 seconds are raised to 60."
+      },
+      "authIntervalMinutes": {
+        "title": "Re-authentication Interval (minutes)",
+        "type": "integer",
+        "default": 10,
+        "minimum": 10,
+        "maximum": 1440,
+        "description": "How long a session is reused before signing in again. Values below 10 minutes are raised to 10."
+      },
+      "useEventStream": {
+        "title": "Use push events",
+        "type": "boolean",
+        "default": true,
+        "description": "Subscribe to Alarm.com's event stream so sensor changes reach HomeKit within a second or two instead of waiting for the next poll. Polling continues as a fallback."
+      },
+      "includeUnmonitoredSensors": {
+        "title": "Include unmonitored sensors",
+        "type": "boolean",
+        "default": false,
+        "description": "Expose sensors that Alarm.com reports as having monitoring disabled. These are hidden by default because their readings may not be maintained."
+      },
+      "ignoredDeviceIds": {
+        "title": "Ignored Device IDs",
+        "type": "array",
+        "required": false,
+        "items": {
+          "title": "Device ID",
+          "type": "string"
+        },
+        "description": "Alarm.com device IDs to leave out of HomeKit entirely, for example `1234567-17`. Device IDs appear in the Homebridge log during discovery."
+      },
+      "debug": {
+        "title": "Debug logging",
+        "type": "boolean",
+        "default": false,
+        "description": "Emit verbose diagnostics. Credentials and cookies are redacted, but review any log before sharing it publicly."
+      }
+    }
+  },
+  "layout": [
+    {
+      "type": "fieldset",
+      "title": "Account",
+      "expandable": false,
+      "items": ["name", "username", "password", "twoFactorAuthenticationId"]
+    },
+    {
+      "type": "fieldset",
+      "title": "Devices",
+      "expandable": true,
+      "expanded": false,
+      "items": ["includeUnmonitoredSensors", "ignoredDeviceIds"]
+    },
+    {
+      "type": "fieldset",
+      "title": "Advanced",
+      "expandable": true,
+      "expanded": false,
+      "items": ["useEventStream", "pollIntervalSeconds", "authIntervalMinutes", "debug"]
+    }
+  ]
+}

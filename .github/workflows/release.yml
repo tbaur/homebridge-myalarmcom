@@ -1,0 +1,87 @@
+name: Release
+
+# Fully automated releases via release-please.
+#
+# Flow:
+#   1. Write code on a branch and open a PR. Use a Conventional Commit style
+#      PR title (e.g. "feat: add night arming", "fix: handle 409 two-factor
+#      challenge") since the squash-merge commit is what drives the next version.
+#   2. Merge the PR to main. release-please opens/updates a "Release PR" that
+#      bumps the version in package.json and writes CHANGELOG.md from commits.
+#   3. Merge that Release PR. release-please tags vX.Y.Z and creates the GitHub
+#      release, and the publish job below pushes the package to npm.
+#
+# npm auth uses Trusted Publishing (OIDC) -- no NPM_TOKEN secret. See RELEASING.md.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+# Least privilege by default; each job opts into exactly what it needs.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # create release commits, tags, and GitHub releases
+      pull-requests: write    # open/update the Release PR
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
+        with:
+          token: ${{ github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    name: Publish to npm
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write        # OIDC trusted publishing + npm provenance
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 24.x
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted Publishing (tokenless OIDC) requires a recent npm release.
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Run linter
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+        env:
+          NODE_ENV: test
+
+      - name: Verify npm package contents
+        run: npm publish --dry-run
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public

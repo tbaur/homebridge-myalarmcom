@@ -1,0 +1,17 @@
+{
+  "_comment": "Synthetic fixture for GET /web/api/identities. The plugin reads only relationships.selectedSystem to learn which system to enumerate.",
+  "data": [
+    {
+      "id": "1122334",
+      "type": "identity",
+      "attributes": {},
+      "relationships": {
+        "selectedSystem": {
+          "data": { "id": "7654321", "type": "systems/system" }
+        }
+      }
+    }
+  ],
+  "included": [],
+  "meta": {}
+}

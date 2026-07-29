@@ -1,0 +1,234 @@
+/**
+ * Copyright (c) 2026 tbaur
+ *
+ * Licensed under the Apache License, Version 2.0
+ * See LICENSE file for full license text
+ *
+ * @fileoverview Structured error hierarchy for predictable error handling.
+ */
+
+/**
+ * Base class for all plugin errors.
+ *
+ * Carries a stable machine-readable `code` and an `isRetryable` hint so callers
+ * can make retry decisions without string-matching messages — which matters
+ * here because Alarm.com's own error text is inconsistent and unversioned.
+ */
+export abstract class AlarmComError extends Error {
+  abstract readonly code: string
+  abstract readonly isRetryable: boolean
+  readonly httpStatus?: number
+  readonly timestamp: Date
+
+  constructor(message: string, options?: { cause?: Error }) {
+    super(message, options)
+    this.name = this.constructor.name
+    this.timestamp = new Date()
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor)
+    }
+  }
+
+  toJSON(): Record<string, unknown> {
+    return {
+      name: this.name,
+      code: this.code,
+      message: this.message,
+      isRetryable: this.isRetryable,
+      httpStatus: this.httpStatus,
+      timestamp: this.timestamp.toISOString(),
+    }
+  }
+}
+
+/** Configuration is missing or invalid; not recoverable without user action. */
+export class ConfigurationError extends AlarmComError {
+  readonly code = 'CONFIG_ERROR'
+  readonly isRetryable = false
+}
+
+/** Credentials were rejected. Retrying with the same credentials cannot help. */
+export class AuthenticationError extends AlarmComError {
+  readonly code: string = 'AUTH_ERROR'
+  readonly isRetryable = false
+
+  constructor(message = 'Authentication failed', options?: { cause?: Error }) {
+    super(message, options)
+  }
+}
+
+/**
+ * Alarm.com demanded two-factor verification for this session.
+ *
+ * Surfaces as `409` with a `TwoFactorAuthenticationRequired` body. The user's
+ * `twoFactorAuthenticationId` cookie is missing, expired, or was issued to a
+ * different account. Never retried: repeated login attempts against a 2FA
+ * challenge are exactly what gets an Alarm.com account locked.
+ */
+export class TwoFactorRequiredError extends AuthenticationError {
+  override readonly code: string = 'TWO_FACTOR_REQUIRED'
+
+  constructor(
+    message = 'Alarm.com requires two-factor verification; the configured twoFactorAuthenticationId cookie is missing or no longer valid',
+    options?: { cause?: Error },
+  ) {
+    super(message, options)
+  }
+}
+
+/**
+ * The login page did not yield the hidden WebForms fields needed to post.
+ *
+ * Alarm.com has no API contract, so a redesign of its login page breaks
+ * authentication here first. Distinguished from a credential rejection because
+ * the remedy is a plugin update, not a password change.
+ */
+export class LoginFormError extends AlarmComError {
+  readonly code = 'LOGIN_FORM_ERROR'
+  readonly isRetryable = false
+
+  constructor(
+    message = 'Could not parse the Alarm.com login form; the site layout may have changed',
+    options?: { cause?: Error },
+  ) {
+    super(message, options)
+  }
+}
+
+/**
+ * The session cookies are no longer accepted and a fresh login is needed.
+ *
+ * Retryable, but only through the session manager, which enforces the
+ * re-authentication floor rather than logging in on demand.
+ */
+export class SessionExpiredError extends AlarmComError {
+  readonly code = 'SESSION_EXPIRED'
+  readonly isRetryable = true
+}
+
+/** Authenticated but not permitted (403). Re-authenticating cannot fix it. */
+export class ForbiddenError extends AlarmComError {
+  readonly code = 'FORBIDDEN_ERROR'
+  readonly isRetryable = false
+  override readonly httpStatus = 403
+}
+
+/**
+ * The account may read the panel but not change its arming state.
+ *
+ * Alarm.com exposes this as `hasPermissionToChangeState: false`, so it is
+ * detectable before a command is sent rather than only after it fails.
+ */
+export class ReadOnlyPartitionError extends AlarmComError {
+  readonly code = 'READ_ONLY_PARTITION'
+  readonly isRetryable = false
+
+  constructor(partitionName: string, options?: { cause?: Error }) {
+    super(
+      `The Alarm.com account does not have permission to change the arming state of "${partitionName}"`,
+      options,
+    )
+  }
+}
+
+/** Network-level failure (DNS, connection reset, etc.). Safe to retry. */
+export class NetworkError extends AlarmComError {
+  readonly code = 'NETWORK_ERROR'
+  readonly isRetryable = true
+}
+
+/** Request exceeded the configured timeout. Safe to retry. */
+export class TimeoutError extends AlarmComError {
+  readonly code = 'TIMEOUT_ERROR'
+  readonly isRetryable = true
+}
+
+/** Rate limited by Alarm.com (429). Retryable with backoff. */
+export class RateLimitError extends AlarmComError {
+  readonly code = 'RATE_LIMIT_ERROR'
+  readonly isRetryable = true
+  override readonly httpStatus = 429
+  /** Server-suggested wait from `Retry-After`, when present. */
+  readonly retryAfterMs?: number
+
+  constructor(message: string, options?: { cause?: Error; retryAfterMs?: number }) {
+    super(message, options?.cause ? { cause: options.cause } : undefined)
+    this.retryAfterMs = options?.retryAfterMs
+  }
+}
+
+/** Non-2xx response that isn't auth or rate limiting. Retryable only for 5xx. */
+export class ApiResponseError extends AlarmComError {
+  readonly code = 'API_RESPONSE_ERROR'
+  readonly isRetryable: boolean
+  override readonly httpStatus: number
+
+  constructor(status: number, message: string, options?: { cause?: Error }) {
+    super(message, options)
+    this.httpStatus = status
+    this.isRetryable = status >= 500
+  }
+}
+
+/**
+ * Response body could not be parsed as expected.
+ *
+ * Usually an HTML login page or interstitial served where JSON was expected,
+ * which is Alarm.com's habit when a session has gone stale. Retryable, because
+ * a single bad payload should not permanently stop polling.
+ */
+export class ApiParseError extends AlarmComError {
+  readonly code = 'API_PARSE_ERROR'
+  readonly isRetryable = true
+}
+
+/**
+ * Circuit breaker is open; Alarm.com is being treated as unavailable.
+ * Callers should fail fast until {@link CircuitBreakerError.retryAfterMs} elapses.
+ */
+export class CircuitBreakerError extends AlarmComError {
+  readonly code = 'CIRCUIT_OPEN'
+  readonly isRetryable = true
+  readonly resetTime: Date
+
+  constructor(resetTimeMs: number, options?: { cause?: Error }) {
+    const resetTime = new Date(Date.now() + resetTimeMs)
+    super(`Circuit breaker is open. Service unavailable until ${resetTime.toISOString()}`, options)
+    this.resetTime = resetTime
+  }
+
+  get retryAfterMs(): number {
+    return Math.max(0, this.resetTime.getTime() - Date.now())
+  }
+}
+
+/** Marker Alarm.com returns in a 409 body when it wants two-factor verification. */
+const TWO_FACTOR_MARKER = 'twofactorauthenticationrequired'
+
+/**
+ * Map an HTTP status and body to the appropriate error type.
+ *
+ * The body is inspected only for the 409 case, where the status alone does not
+ * distinguish a two-factor challenge from an ordinary conflict.
+ */
+export function createApiError(
+  status: number,
+  message: string,
+  options?: { body?: string; cause?: Error },
+): AlarmComError {
+  const cause = options?.cause ? { cause: options.cause } : undefined
+
+  if (status === 401) {
+    return new SessionExpiredError(message, cause)
+  }
+  if (status === 409 && options?.body?.toLowerCase().includes(TWO_FACTOR_MARKER)) {
+    return new TwoFactorRequiredError(message, cause)
+  }
+  if (status === 403) {
+    return new ForbiddenError(message, cause)
+  }
+  if (status === 429) {
+    return new RateLimitError(message, cause)
+  }
+  return new ApiResponseError(status, message, cause)
+}

@@ -1,0 +1,27 @@
+{
+  "_comment": "Synthetic fixture for GET /web/api/systems/systems/{id}. The real payload carries roughly thirty relationship keys; only the two this plugin reads are kept, plus one it must ignore.",
+  "data": {
+    "id": "7654321",
+    "type": "systems/system",
+    "attributes": {
+      "description": "Home"
+    },
+    "relationships": {
+      "partitions": {
+        "data": [{ "id": "1234567-127", "type": "devices/partition" }]
+      },
+      "sensors": {
+        "data": [
+          { "id": "1234567-1", "type": "devices/sensor" },
+          { "id": "1234567-2", "type": "devices/sensor" },
+          { "id": "1234567-15", "type": "devices/sensor" },
+          { "id": "1234567-16", "type": "devices/sensor" },
+          { "id": "1234567-20", "type": "devices/sensor" }
+        ]
+      },
+      "thermostats": {
+        "data": []
+      }
+    }
+  }
+}

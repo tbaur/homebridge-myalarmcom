@@ -1,0 +1,117 @@
+{
+  "_comment": "Synthetic fixtures using the field names, types, and state combinations verified against a live Alarm.com account. Identifiers are invented. Every (deviceType, state, openClosedStatus, displayStateText) tuple below was observed in reality; the surrounding attributes are trimmed to what this plugin reads.",
+  "data": [
+    {
+      "id": "1234567-1",
+      "type": "devices/sensor",
+      "attributes": {
+        "description": "Front Door",
+        "deviceType": 1,
+        "state": 1,
+        "openClosedStatus": 2,
+        "displayStateText": "Closed",
+        "isMonitoringEnabled": true,
+        "isMalfunctioning": false,
+        "isBypassed": false,
+        "supportsBypass": true,
+        "batteryLevelNull": null,
+        "batteryLevelClassification": null,
+        "macAddress": "00:00:00:00:00:00",
+        "manufacturer": null
+      }
+    },
+    {
+      "id": "1234567-2",
+      "type": "devices/sensor",
+      "attributes": {
+        "description": "Kitchen Window",
+        "deviceType": 1,
+        "state": 2,
+        "openClosedStatus": 3,
+        "displayStateText": "Open",
+        "isMonitoringEnabled": true,
+        "isMalfunctioning": false,
+        "isBypassed": false,
+        "supportsBypass": true,
+        "batteryLevelNull": null,
+        "batteryLevelClassification": null,
+        "macAddress": "00:00:00:00:00:00",
+        "manufacturer": null
+      }
+    },
+    {
+      "id": "1234567-15",
+      "type": "devices/sensor",
+      "attributes": {
+        "description": "Hallway Motion",
+        "deviceType": 2,
+        "state": 4,
+        "openClosedStatus": 3,
+        "displayStateText": "Activated",
+        "isMonitoringEnabled": true,
+        "isMalfunctioning": false,
+        "isBypassed": false,
+        "supportsBypass": true,
+        "batteryLevelNull": null,
+        "batteryLevelClassification": null,
+        "macAddress": "00:00:00:00:00:00",
+        "manufacturer": null
+      }
+    },
+    {
+      "id": "1234567-16",
+      "type": "devices/sensor",
+      "attributes": {
+        "description": "Basement Motion",
+        "deviceType": 2,
+        "state": 3,
+        "openClosedStatus": 2,
+        "displayStateText": "Idle",
+        "isMonitoringEnabled": true,
+        "isMalfunctioning": false,
+        "isBypassed": false,
+        "supportsBypass": true,
+        "batteryLevelNull": null,
+        "batteryLevelClassification": null,
+        "macAddress": "00:00:00:00:00:00",
+        "manufacturer": null
+      }
+    },
+    {
+      "id": "1234567-20",
+      "type": "devices/sensor",
+      "attributes": {
+        "description": "Upstairs Smoke",
+        "deviceType": 5,
+        "state": 1,
+        "openClosedStatus": 2,
+        "displayStateText": "Not Reset",
+        "isMonitoringEnabled": false,
+        "isMalfunctioning": false,
+        "isBypassed": false,
+        "supportsBypass": false,
+        "batteryLevelNull": null,
+        "batteryLevelClassification": null,
+        "macAddress": "00:00:00:00:00:00",
+        "manufacturer": null
+      }
+    },
+    {
+      "id": "1234567-99",
+      "type": "devices/sensor",
+      "attributes": {
+        "_comment": "Not observed live. An unsupported device type, to exercise the skip path.",
+        "description": "Glass Break",
+        "deviceType": 6,
+        "state": 1,
+        "openClosedStatus": 2,
+        "displayStateText": "Closed",
+        "isMonitoringEnabled": true,
+        "isMalfunctioning": false,
+        "batteryLevelNull": null,
+        "batteryLevelClassification": null,
+        "manufacturer": null
+      }
+    }
+  ]
+}

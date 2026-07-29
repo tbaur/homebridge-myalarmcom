@@ -1,0 +1,225 @@
+/**
+ * Copyright (c) 2026 tbaur
+ *
+ * Licensed under the Apache License, Version 2.0
+ * See LICENSE file for full license text
+ *
+ * @fileoverview Translation between Alarm.com state and HomeKit characteristics.
+ *
+ * These functions are deliberately free of any HAP import so they can be tested
+ * against captured fixtures without constructing a Homebridge environment. The
+ * numeric constants below mirror HAP's own values; a unit test asserts they
+ * still match at runtime, so the decoupling cannot silently drift.
+ */
+
+import {
+  PartitionState,
+  readSensorState,
+  SensorDeviceType,
+  type ArmingModeName,
+  type PartitionAttributes,
+  type SensorAttributes,
+} from '../types/alarm'
+
+/** Mirrors `Characteristic.SecuritySystemCurrentState`. */
+export enum HomeKitSecurityState {
+  STAY_ARM = 0,
+  AWAY_ARM = 1,
+  NIGHT_ARM = 2,
+  DISARMED = 3,
+  ALARM_TRIGGERED = 4,
+}
+
+/** Mirrors `Characteristic.SecuritySystemTargetState`. */
+export enum HomeKitSecurityTarget {
+  STAY_ARM = 0,
+  AWAY_ARM = 1,
+  NIGHT_ARM = 2,
+  DISARM = 3,
+}
+
+/** Mirrors `Characteristic.ContactSensorState`. */
+export enum HomeKitContactState {
+  CONTACT_DETECTED = 0,
+  CONTACT_NOT_DETECTED = 1,
+}
+
+/** Mirrors `Characteristic.SmokeDetected`. */
+export enum HomeKitSmokeState {
+  SMOKE_NOT_DETECTED = 0,
+  SMOKE_DETECTED = 1,
+}
+
+const PARTITION_TO_HOMEKIT: Record<number, HomeKitSecurityState> = {
+  [PartitionState.DISARMED]: HomeKitSecurityState.DISARMED,
+  [PartitionState.ARMED_STAY]: HomeKitSecurityState.STAY_ARM,
+  [PartitionState.ARMED_AWAY]: HomeKitSecurityState.AWAY_ARM,
+  [PartitionState.ARMED_NIGHT]: HomeKitSecurityState.NIGHT_ARM,
+}
+
+const HOMEKIT_TARGET_TO_PARTITION: Record<number, PartitionState> = {
+  [HomeKitSecurityTarget.STAY_ARM]: PartitionState.ARMED_STAY,
+  [HomeKitSecurityTarget.AWAY_ARM]: PartitionState.ARMED_AWAY,
+  [HomeKitSecurityTarget.NIGHT_ARM]: PartitionState.ARMED_NIGHT,
+  [HomeKitSecurityTarget.DISARM]: PartitionState.DISARMED,
+}
+
+/**
+ * Map an Alarm.com partition state to a HomeKit security state.
+ *
+ * Returns `undefined` for states this plugin does not recognise, so callers can
+ * leave the existing HomeKit value alone. Defaulting an unknown panel state to
+ * "disarmed" would be actively dangerous: it would show a green, safe-looking
+ * tile for a system whose real state we do not know.
+ */
+export function toHomeKitSecurityState(
+  partitionState: number,
+): HomeKitSecurityState | undefined {
+  return PARTITION_TO_HOMEKIT[partitionState]
+}
+
+/** Map a HomeKit target state to the Alarm.com state it requests. */
+export function toPartitionState(target: number): PartitionState | undefined {
+  return HOMEKIT_TARGET_TO_PARTITION[target]
+}
+
+/** Map a HomeKit target state to the Alarm.com command verb. */
+export function toPartitionAction(
+  target: number,
+): 'armStay' | 'armAway' | 'disarm' | undefined {
+  switch (target) {
+    case HomeKitSecurityTarget.STAY_ARM:
+      return 'armStay'
+    case HomeKitSecurityTarget.AWAY_ARM:
+      return 'armAway'
+    // Night arming is a Stay command carrying the nightArming modifier rather
+    // than a verb of its own.
+    case HomeKitSecurityTarget.NIGHT_ARM:
+      return 'armStay'
+    case HomeKitSecurityTarget.DISARM:
+      return 'disarm'
+    default:
+      return undefined
+  }
+}
+
+/**
+ * Resolve which arming mode's capabilities govern a requested target state.
+ *
+ * Night arming is sent as a Stay command with a modifier, but the panel
+ * advertises what it supports under a separate `ArmedNight` key, so the mode
+ * asked about is not always the verb sent.
+ */
+export function armingModeFor(target: number): ArmingModeName {
+  switch (target) {
+    case HomeKitSecurityTarget.AWAY_ARM:
+      return 'ArmedAway'
+    case HomeKitSecurityTarget.NIGHT_ARM:
+      return 'ArmedNight'
+    case HomeKitSecurityTarget.DISARM:
+      return 'Disarmed'
+    default:
+      return 'ArmedStay'
+  }
+}
+
+/**
+ * Resolve the HomeKit state to display for a partition.
+ *
+ * An active alarm outranks the arming mode. Alarm.com keeps reporting `state`
+ * as "armed away" while the siren is going, so a client that maps `state` alone
+ * shows a calm armed tile during a break-in. `hasActiveAlarm` is the flag that
+ * distinguishes them.
+ */
+export function toDisplayedSecurityState(
+  attributes: PartitionAttributes,
+): HomeKitSecurityState | undefined {
+  if (attributes.hasActiveAlarm === true) {
+    return HomeKitSecurityState.ALARM_TRIGGERED
+  }
+  return toHomeKitSecurityState(attributes.state)
+}
+
+/** A sensor mapped onto the HomeKit service that should represent it. */
+export type SensorServiceKind = 'contact' | 'motion' | 'smoke'
+
+const DEVICE_TYPE_TO_SERVICE: Record<number, SensorServiceKind> = {
+  [SensorDeviceType.CONTACT]: 'contact',
+  [SensorDeviceType.MOTION]: 'motion',
+  [SensorDeviceType.SMOKE]: 'smoke',
+}
+
+/**
+ * Choose the HomeKit service for a sensor.
+ *
+ * Returns `undefined` for device types this plugin does not handle, which the
+ * platform reports and skips rather than guessing at.
+ */
+export function toSensorServiceKind(deviceType: number): SensorServiceKind | undefined {
+  return DEVICE_TYPE_TO_SERVICE[deviceType]
+}
+
+/** A sensor's reading expressed for HomeKit. */
+export interface MappedSensorState {
+  kind: SensorServiceKind
+  /** Value for the service's primary characteristic. */
+  value: HomeKitContactState | HomeKitSmokeState | boolean
+  /** Alarm.com's own wording, for logs. */
+  label: string
+  /** Set when the underlying reading was not conclusive. */
+  isAmbiguous: boolean
+}
+
+/** The characteristic value representing a triggered or resting sensor. */
+export type SensorCharacteristicValue = HomeKitContactState | HomeKitSmokeState | boolean
+
+/**
+ * Express a triggered/at-rest reading as the value its service expects.
+ *
+ * Note the inversion on contact sensors: HomeKit's `CONTACT_DETECTED` means the
+ * magnet is present, so a *triggered* (open) sensor maps to `CONTACT_NOT_DETECTED`.
+ */
+export function toCharacteristicValue(
+  kind: SensorServiceKind,
+  isTriggered: boolean,
+): SensorCharacteristicValue {
+  switch (kind) {
+    case 'contact':
+      return isTriggered
+        ? HomeKitContactState.CONTACT_NOT_DETECTED
+        : HomeKitContactState.CONTACT_DETECTED
+    case 'smoke':
+      return isTriggered
+        ? HomeKitSmokeState.SMOKE_DETECTED
+        : HomeKitSmokeState.SMOKE_NOT_DETECTED
+    case 'motion':
+      return isTriggered
+  }
+}
+
+/**
+ * Map a sensor resource to its HomeKit characteristic value.
+ *
+ * Returns `undefined` for unsupported device types.
+ */
+export function toHomeKitSensorState(
+  attributes: SensorAttributes,
+): MappedSensorState | undefined {
+  const kind = toSensorServiceKind(attributes.deviceType)
+  if (!kind) {
+    return undefined
+  }
+
+  const reading = readSensorState(
+    attributes.deviceType,
+    attributes.state,
+    attributes.openClosedStatus,
+  )
+
+  return {
+    kind,
+    value: toCharacteristicValue(kind, reading.isTriggered),
+    label: reading.label,
+    isAmbiguous: reading.isAmbiguous,
+  }
+}

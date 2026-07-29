@@ -1,0 +1,38 @@
+# Dependabot keeps dependencies current. The Homebridge runtime path pulls in a
+# single third-party runtime dependency, `ws`, used for the Alarm.com event
+# stream; everything else goes through Node's native `https`. Updates are
+# grouped to reduce PR noise.
+# See: https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+    groups:
+      # Batch only low-risk patch/minor dev updates so they stay auto-mergeable.
+      # Major bumps (e.g. eslint, jest, typescript, homebridge types) are left
+      # out of the group so each arrives as its own PR and gets evaluated and
+      # migrated deliberately rather than bundled into a routine update.
+      dev-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
