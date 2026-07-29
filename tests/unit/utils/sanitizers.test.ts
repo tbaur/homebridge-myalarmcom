@@ -268,7 +268,7 @@ describe('previewSecret', () => {
   it('describes a secret without disclosing any of it', () => {
     const preview = previewSecret(TRUST_TOKEN)
 
-    expect(preview).toMatch(new RegExp(`^\\(${TRUST_TOKEN.length} chars, sha256:[0-9a-f]{8}\\)$`))
+    expect(preview).toMatch(new RegExp(`^\\(${TRUST_TOKEN.length} chars, scrypt:[0-9a-f]{8}\\)$`))
     expect(preview).not.toContain(TRUST_TOKEN)
     // Not even a fragment. A log is no place to spend a credential's entropy.
     expect(preview).not.toContain(TRUST_TOKEN.slice(-4))

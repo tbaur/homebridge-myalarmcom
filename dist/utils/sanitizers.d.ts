@@ -39,9 +39,9 @@ export declare function sanitizeLogParameter(value: unknown): unknown;
  * Render a secret as a short, non-reversible fingerprint for diagnostics.
  *
  * Enough to tell "the token changed" or "the token is empty" apart in a log.
- * The fingerprint is a hash rather than a slice of the value itself: disclosing
- * even four characters of a credential buys no diagnostic power that a hash
- * does not, and a log is not a place to spend any of a secret's entropy.
+ * Never a slice of the secret itself: disclosing even four characters of a
+ * credential buys no diagnostic power that a fingerprint does not, and a log
+ * is not a place to spend any of a secret's entropy.
  */
 export declare function previewSecret(secret: string | undefined | null): string;
 /**

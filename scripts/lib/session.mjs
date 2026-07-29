@@ -16,7 +16,15 @@
  * protocol when the shipping client is the thing that broke.
  */
 
-import { createHash } from 'node:crypto'
+import { scryptSync } from 'node:crypto'
+
+/**
+ * Fixed salt for {@link previewSecret} fingerprints.
+ *
+ * Not a credential. scrypt satisfies CodeQL's password-hash query for
+ * MFA/session values used only as log fingerprints (see plugin sanitizers).
+ */
+const SECRET_PREVIEW_SALT = 'homebridge-myalarmcom:secret-preview'
 
 /** Root of the Alarm.com web application. */
 export const BASE_URL = 'https://www.alarm.com'
@@ -117,15 +125,15 @@ export async function request(url, init = {}) {
  * confirm "yes, we got a token" without putting the token on screen or into a
  * scrollback buffer.
  *
- * A hash, not a prefix. The previous four-character slice bought no diagnostic
- * power a fingerprint does not, and these previews are written to `summary.json`
- * and to a terminal, both of which end up pasted into issue trackers. The
- * secret being described is the two-factor bypass token.
+ * A fingerprint, not a prefix. The previous four-character slice bought no
+ * diagnostic power a fingerprint does not, and these previews are written to
+ * `summary.json` and to a terminal, both of which end up pasted into issue
+ * trackers. The secret being described is the two-factor bypass token.
  */
 export function previewSecret(value) {
   if (!value) {return '(absent)'}
-  const fingerprint = createHash('sha256').update(value).digest('hex').slice(0, 8)
-  return `sha256:${fingerprint} (${value.length} chars)`
+  const fingerprint = scryptSync(value, SECRET_PREVIEW_SALT, 4).toString('hex')
+  return `scrypt:${fingerprint} (${value.length} chars)`
 }
 
 /** Accumulates `Set-Cookie` values across a login exchange. */

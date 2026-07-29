@@ -31,6 +31,16 @@ exports.previewSecret = previewSecret;
 exports.sanitizeUrl = sanitizeUrl;
 const node_crypto_1 = require("node:crypto");
 /**
+ * Fixed salt for {@link previewSecret} fingerprints.
+ *
+ * Not a credential. These previews are for log correlation only — never stored
+ * or checked like a password. CodeQL's password-hash query only accepts
+ * memory-hard KDFs (scrypt/bcrypt/PBKDF2/Argon2) for password-tainted values,
+ * so scrypt is used even though a keyed HMAC would otherwise be enough here.
+ * Call sites are rare (login diagnostics), so the cost is acceptable.
+ */
+const SECRET_PREVIEW_SALT = 'homebridge-myalarmcom:secret-preview';
+/**
  * Every value that must never reach a log, declared once.
  *
  * Adding a secret here covers it in all supported shapes automatically.
@@ -176,16 +186,16 @@ function sanitizeLogParameter(value) {
  * Render a secret as a short, non-reversible fingerprint for diagnostics.
  *
  * Enough to tell "the token changed" or "the token is empty" apart in a log.
- * The fingerprint is a hash rather than a slice of the value itself: disclosing
- * even four characters of a credential buys no diagnostic power that a hash
- * does not, and a log is not a place to spend any of a secret's entropy.
+ * Never a slice of the secret itself: disclosing even four characters of a
+ * credential buys no diagnostic power that a fingerprint does not, and a log
+ * is not a place to spend any of a secret's entropy.
  */
 function previewSecret(secret) {
     if (!secret) {
         return '(none)';
     }
-    const fingerprint = (0, node_crypto_1.createHash)('sha256').update(secret).digest('hex').slice(0, 8);
-    return `(${secret.length} chars, sha256:${fingerprint})`;
+    const fingerprint = (0, node_crypto_1.scryptSync)(secret, SECRET_PREVIEW_SALT, 4).toString('hex');
+    return `(${secret.length} chars, scrypt:${fingerprint})`;
 }
 /**
  * Strip the query string from a URL for logging.
