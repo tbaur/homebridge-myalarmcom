@@ -1,7 +1,7 @@
 {
   "name": "homebridge-myalarmcom",
   "displayName": "Homebridge My Alarm.com",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "A Homebridge plugin for Alarm.com security panels and sensors",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
