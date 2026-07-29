@@ -31,7 +31,9 @@ describe('initialDiscoveryRetryDelayMs', () => {
     const error = new CircuitBreakerError(12_000)
     const delayMs = initialDiscoveryRetryDelayMs(error, 1)
 
-    expect(delayMs).toBeGreaterThanOrEqual(12_000)
+    // retryAfterMs is Date-based, so allow 1ms of clock skew.
+    expect(delayMs).toBeGreaterThanOrEqual(11_999)
+    expect(delayMs).toBeLessThanOrEqual(12_000)
   })
 
   it('floors a nearly-elapsed breaker reset at the discovery base delay', () => {
