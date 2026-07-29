@@ -47,6 +47,11 @@ export interface CircuitBreakerStatus {
 export declare class CircuitBreaker {
     #private;
     constructor(config?: Partial<CircuitBreakerConfig>);
+    /**
+     * Chain an additional state-change listener (e.g. client logging) without
+     * replacing any listener already supplied at construction.
+     */
+    attachOnStateChange(handler: (from: CircuitState, to: CircuitState) => void): void;
     get state(): CircuitState;
     get isOpen(): boolean;
     /** Whether a request may proceed right now. */

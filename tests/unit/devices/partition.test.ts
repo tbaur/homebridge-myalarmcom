@@ -107,6 +107,14 @@ describe('PartitionAccessory', () => {
       expect(messagesAt(log, 'warn').join('\n')).toMatch(/active alarm on "Home"/)
     })
 
+    it('logs arming changes at info after the first reading', () => {
+      accessory.update(withAttributes({ state: 1 }))
+      expect(messagesAt(log, 'debug')).toContain('Home: Disarmed')
+
+      accessory.update(withAttributes({ state: 3 }))
+      expect(messagesAt(log, 'info')).toContain('Home: Armed Away')
+    })
+
     it('leaves the tile disarmed rather than guessing at an unknown panel state', () => {
       accessory.update(withAttributes({ state: 99 }))
 
@@ -197,12 +205,16 @@ describe('PartitionAccessory', () => {
 
       expect(bed.commandPartition).toHaveBeenCalledWith('1234567-127', 'armAway', expect.any(Object))
       expect(bed.recordCommand).toHaveBeenCalledTimes(1)
+      expect(messagesAt(log, 'info').some((message) => /^Home: Armed Away \(Latency: \d+ms\)$/.test(message)))
+        .toBe(true)
     })
 
     it('disarms', async () => {
       await requestTarget(HomeKitSecurityTarget.DISARM)
 
       expect(bed.commandPartition).toHaveBeenCalledWith('1234567-127', 'disarm', expect.any(Object))
+      expect(messagesAt(log, 'info').some((message) => /^Home: Disarmed \(Latency: \d+ms\)$/.test(message)))
+        .toBe(true)
     })
 
     it('sends night arming as a stay command carrying the modifier', async () => {

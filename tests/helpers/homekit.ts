@@ -156,17 +156,28 @@ export function createHomebridgeLogging(): RecordingLogging {
 
   const log = (() => undefined) as unknown as RecordingLogging
 
-  log.debug = (message: string) => {
-    debugMessages.push(message)
+  /** Mirror Homebridge: extra args are appended (objects as JSON). */
+  const append = (message: string, parameters: unknown[]): string => {
+    if (parameters.length === 0) {
+      return message
+    }
+    const suffix = parameters
+      .map((parameter) => (typeof parameter === 'string' ? parameter : JSON.stringify(parameter)))
+      .join(' ')
+    return `${message} ${suffix}`
   }
-  log.info = (message: string) => {
-    infoMessages.push(message)
+
+  log.debug = (message: string, ...parameters: unknown[]) => {
+    debugMessages.push(append(message, parameters))
   }
-  log.warn = (message: string) => {
-    warnings.push(message)
+  log.info = (message: string, ...parameters: unknown[]) => {
+    infoMessages.push(append(message, parameters))
   }
-  log.error = (message: string) => {
-    errors.push(message)
+  log.warn = (message: string, ...parameters: unknown[]) => {
+    warnings.push(append(message, parameters))
+  }
+  log.error = (message: string, ...parameters: unknown[]) => {
+    errors.push(append(message, parameters))
   }
   log.log = () => undefined
   log.success = () => undefined

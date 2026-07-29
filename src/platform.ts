@@ -159,6 +159,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     }
 
     this.#startDiagnostics()
+    this.#log.info('Ready')
   }
 
   /** Enumerate the account's devices and publish them to HomeKit. */
@@ -350,7 +351,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     this.#pollTimer = setInterval(() => {
       void this.#refreshAll()
     }, intervalMs)
-    this.#log.info(`Polling Alarm.com every ${this.#config.pollIntervalSeconds}s`)
+    this.#log.debug(`Polling Alarm.com every ${this.#config.pollIntervalSeconds}s`)
   }
 
   /**
@@ -568,9 +569,20 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     }
   }
 
+  /**
+   * Emit a diagnostics report as a human-readable line only.
+   *
+   * Homebridge's logger stringifies any extra arguments onto the same line, so
+   * passing the structured snapshot as a second arg produced the giant JSON
+   * blob users saw after every Health / Diagnostics start line. Keep the full
+   * payload on a separate debug entry when debug logging is enabled.
+   */
   #emitDiagnostic(level: 'info' | 'warn', report: DiagnosticsSnapshot): void {
-    const { lifecycle, ...groups } = report
-    this.#log[level](formatDiagnosticLine(report), {
+    this.#log[level](formatDiagnosticLine(report))
+
+    const { lifecycle, msg, ...groups } = report
+    this.#log.debug('Diagnostics snapshot', {
+      msg,
       ...groups,
       ...lifecycle,
     })
@@ -629,16 +641,10 @@ function diagnosticLabel(msg: string): string {
 function formatDiagnosticLine(report: DiagnosticsSnapshot): string {
   const { lifecycle, devices, websocket, api } = report
   const reasonText = lifecycle.reasons.length > 0 ? ` [${lifecycle.reasons.join(', ')}]` : ''
-  const typeBits = Object.entries(devices.byType)
-    .map(([kind, count]) => `${count} ${kind}`)
-    .join(', ')
-  const deviceSummary = typeBits.length > 0
-    ? `${devices.partitions}p/${devices.sensors}s (${typeBits})`
-    : `${devices.partitions}p/${devices.sensors}s`
 
   return (
     `${diagnosticLabel(report.msg)}: ${lifecycle.health}${reasonText} | `
-    + `devices ${deviceSummary} | `
+    + `devices ${devices.partitions}p/${devices.sensors}s | `
     + `ws ${websocket.state} | `
     + `api p50 ${api.p50Ms}ms p95 ${api.p95Ms}ms (req ${api.requests}, err ${api.errors})`
   )

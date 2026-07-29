@@ -140,6 +140,41 @@ export function toDisplayedSecurityState(
   return toHomeKitSecurityState(attributes.state)
 }
 
+/** Human-readable arming state for logs. */
+export function toSecurityStateLabel(state: HomeKitSecurityState): string {
+  switch (state) {
+    case HomeKitSecurityState.STAY_ARM:
+      return 'Armed Stay'
+    case HomeKitSecurityState.AWAY_ARM:
+      return 'Armed Away'
+    case HomeKitSecurityState.NIGHT_ARM:
+      return 'Armed Night'
+    case HomeKitSecurityState.DISARMED:
+      return 'Disarmed'
+    case HomeKitSecurityState.ALARM_TRIGGERED:
+      return 'Alarm'
+    default:
+      return `State ${String(state)}`
+  }
+}
+
+/**
+ * Label for an event-hinted sensor reading (before the confirming API read).
+ *
+ * Matches the Alarm.com wording used by {@link readSensorState} for the same
+ * resting/triggered outcomes, so push and poll logs stay consistent.
+ */
+export function toImmediateSensorLabel(kind: SensorServiceKind, isTriggered: boolean): string {
+  switch (kind) {
+    case 'contact':
+      return isTriggered ? 'Open' : 'Closed'
+    case 'motion':
+      return isTriggered ? 'Activated' : 'Idle'
+    case 'smoke':
+      return isTriggered ? 'Activated' : 'Not Reset'
+  }
+}
+
 /** A sensor mapped onto the HomeKit service that should represent it. */
 export type SensorServiceKind = 'contact' | 'motion' | 'smoke'
 

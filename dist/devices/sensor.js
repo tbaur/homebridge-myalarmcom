@@ -21,6 +21,8 @@ class SensorAccessory {
     #log;
     #kind;
     #service;
+    /** Last logged state label; used to emit info only when the reading changes. */
+    #lastLabel = null;
     constructor(platform, accessory, kind, log) {
         this.#platform = platform;
         this.#accessory = accessory;
@@ -69,7 +71,8 @@ class SensorAccessory {
      */
     applyImmediateState(isTriggered) {
         this.#service.updateCharacteristic(this.#primaryCharacteristic(), (0, mappers_1.toCharacteristicValue)(this.#kind, isTriggered));
-        this.#log.debug(`${this.deviceId} pushed to ${isTriggered ? 'triggered' : 'at rest'} by an event`);
+        const label = (0, mappers_1.toImmediateSensorLabel)(this.#kind, isTriggered);
+        this.#logStateChange(this.#accessory.context.displayName, label);
     }
     /**
      * Push a fresh Alarm.com reading into HomeKit.
@@ -96,7 +99,21 @@ class SensorAccessory {
         this.#service.updateCharacteristic(Characteristic.StatusFault, attributes.isMalfunctioning === true
             ? Characteristic.StatusFault.GENERAL_FAULT
             : Characteristic.StatusFault.NO_FAULT);
-        this.#log.debug(`${attributes.description} is ${mapped.label}`);
+        this.#logStateChange(attributes.description ?? this.deviceId, mapped.label);
+    }
+    /** Info on change; debug on the first reading and unchanged repeats. */
+    #logStateChange(name, label) {
+        if (this.#lastLabel === label) {
+            this.#log.debug(`${name}: ${label}`);
+            return;
+        }
+        if (this.#lastLabel !== null) {
+            this.#log.info(`${name}: ${label}`);
+        }
+        else {
+            this.#log.debug(`${name}: ${label}`);
+        }
+        this.#lastLabel = label;
     }
 }
 exports.SensorAccessory = SensorAccessory;

@@ -22,6 +22,8 @@ class PartitionAccessory {
     #attributes = null;
     /** What HomeKit last asked for, held until Alarm.com confirms the change. */
     #targetState = null;
+    /** Last logged displayed state; info logs only fire when this changes. */
+    #lastLoggedState = null;
     constructor(platform, accessory, log) {
         this.#platform = platform;
         this.#accessory = accessory;
@@ -119,6 +121,14 @@ class PartitionAccessory {
         if (attributes.hasActiveAlarm === true) {
             this.#log.warn(`Alarm.com reports an active alarm on "${attributes.description ?? this.deviceId}"`);
         }
+        const name = attributes.description ?? this.deviceId;
+        if (this.#lastLoggedState !== null && this.#lastLoggedState !== currentState) {
+            this.#log.info(`${name}: ${(0, mappers_1.toSecurityStateLabel)(currentState)}`);
+        }
+        else {
+            this.#log.debug(`${name}: ${(0, mappers_1.toSecurityStateLabel)(currentState)}`);
+        }
+        this.#lastLoggedState = currentState;
     }
     /**
      * Send an arming change requested from HomeKit.
@@ -156,7 +166,14 @@ class PartitionAccessory {
                 && attributes.hasOpenBypassableSensors === true,
         };
         try {
+            const startedAt = Date.now();
             await this.#platform.client.commandPartition(this.deviceId, action, options);
+            const latencyMs = Date.now() - startedAt;
+            const name = attributes.description ?? this.deviceId;
+            this.#log.info(`${name}: ${(0, mappers_1.toSecurityStateLabel)(target)} (Latency: ${latencyMs}ms)`);
+            // Prefer the commanded state for change detection so the confirming poll
+            // does not emit a second identical info line without latency.
+            this.#lastLoggedState = target;
             this.#platform.recordCommand();
             // Arming takes 20-30 seconds to settle at the panel, so the confirming
             // read is left to the next poll or event rather than done inline.

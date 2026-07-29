@@ -17,6 +17,7 @@ import type { Logger } from '../utils/logger'
 import {
   toCharacteristicValue,
   toHomeKitSensorState,
+  toImmediateSensorLabel,
   type SensorServiceKind,
 } from '../utils/mappers'
 import type { MyAlarmComPlatform } from '../platform'
@@ -35,6 +36,8 @@ export class SensorAccessory {
   readonly #log: Logger
   readonly #kind: SensorServiceKind
   readonly #service: Service
+  /** Last logged state label; used to emit info only when the reading changes. */
+  #lastLabel: string | null = null
 
   constructor(
     platform: MyAlarmComPlatform,
@@ -103,7 +106,12 @@ export class SensorAccessory {
       this.#primaryCharacteristic(),
       toCharacteristicValue(this.#kind, isTriggered),
     )
-    this.#log.debug(`${this.deviceId} pushed to ${isTriggered ? 'triggered' : 'at rest'} by an event`)
+
+    const label = toImmediateSensorLabel(this.#kind, isTriggered)
+    this.#logStateChange(
+      (this.#accessory.context as SensorAccessoryContext).displayName,
+      label,
+    )
   }
 
   /**
@@ -148,6 +156,21 @@ export class SensorAccessory {
         : Characteristic.StatusFault.NO_FAULT,
     )
 
-    this.#log.debug(`${attributes.description} is ${mapped.label}`)
+    this.#logStateChange(attributes.description ?? this.deviceId, mapped.label)
+  }
+
+  /** Info on change; debug on the first reading and unchanged repeats. */
+  #logStateChange(name: string, label: string): void {
+    if (this.#lastLabel === label) {
+      this.#log.debug(`${name}: ${label}`)
+      return
+    }
+
+    if (this.#lastLabel !== null) {
+      this.#log.info(`${name}: ${label}`)
+    } else {
+      this.#log.debug(`${name}: ${label}`)
+    }
+    this.#lastLabel = label
   }
 }

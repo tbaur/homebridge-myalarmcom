@@ -93,12 +93,12 @@ describe('discovering an Alarm.com account', () => {
 
   /**
    * Homebridge starts discovery from a fire-and-forget lifecycle handler, so
-   * the only signal a test has is the platform's own: polling starts once
-   * discovery has succeeded, and a failure is reported instead.
+   * the only signal a test has is the platform's own: "Ready" once discovery
+   * has succeeded, and a failure is reported instead.
    */
   async function waitForDiscovery(): Promise<void> {
     await waitFor(
-      () => log.infoMessages.some((message) => message.includes('Polling Alarm.com every'))
+      () => log.infoMessages.some((message) => message.includes('Ready'))
         || log.errors.length > 0,
       { description: 'discovery to finish' },
     )

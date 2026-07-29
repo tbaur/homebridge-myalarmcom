@@ -23,6 +23,7 @@ import {
   armingModeFor,
   toDisplayedSecurityState,
   toPartitionAction,
+  toSecurityStateLabel,
 } from '../utils/mappers'
 import type { MyAlarmComPlatform } from '../platform'
 
@@ -44,6 +45,8 @@ export class PartitionAccessory {
   #attributes: PartitionAttributes | null = null
   /** What HomeKit last asked for, held until Alarm.com confirms the change. */
   #targetState: number | null = null
+  /** Last logged displayed state; info logs only fire when this changes. */
+  #lastLoggedState: number | null = null
 
   constructor(
     platform: MyAlarmComPlatform,
@@ -184,6 +187,14 @@ export class PartitionAccessory {
     if (attributes.hasActiveAlarm === true) {
       this.#log.warn(`Alarm.com reports an active alarm on "${attributes.description ?? this.deviceId}"`)
     }
+
+    const name = attributes.description ?? this.deviceId
+    if (this.#lastLoggedState !== null && this.#lastLoggedState !== currentState) {
+      this.#log.info(`${name}: ${toSecurityStateLabel(currentState)}`)
+    } else {
+      this.#log.debug(`${name}: ${toSecurityStateLabel(currentState)}`)
+    }
+    this.#lastLoggedState = currentState
   }
 
   /**
@@ -228,7 +239,16 @@ export class PartitionAccessory {
     }
 
     try {
+      const startedAt = Date.now()
       await this.#platform.client.commandPartition(this.deviceId, action, options)
+      const latencyMs = Date.now() - startedAt
+      const name = attributes.description ?? this.deviceId
+      this.#log.info(
+        `${name}: ${toSecurityStateLabel(target as HomeKitSecurityState)} (Latency: ${latencyMs}ms)`,
+      )
+      // Prefer the commanded state for change detection so the confirming poll
+      // does not emit a second identical info line without latency.
+      this.#lastLoggedState = target
       this.#platform.recordCommand()
       // Arming takes 20-30 seconds to settle at the panel, so the confirming
       // read is left to the next poll or event rather than done inline.
