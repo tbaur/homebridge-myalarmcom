@@ -451,9 +451,19 @@ class MyAlarmComPlatform {
             ignored: this.#config.ignoredDeviceIds.size,
         };
     }
+    /**
+     * Emit a diagnostics report as a human-readable line only.
+     *
+     * Homebridge's logger stringifies any extra arguments onto the same line, so
+     * passing the structured snapshot as a second arg produced the giant JSON
+     * blob users saw after every Health / Diagnostics start line. Keep the full
+     * payload on a separate debug entry when debug logging is enabled.
+     */
     #emitDiagnostic(level, report) {
-        const { lifecycle, ...groups } = report;
-        this.#log[level](formatDiagnosticLine(report), {
+        this.#log[level](formatDiagnosticLine(report));
+        const { lifecycle, msg, ...groups } = report;
+        this.#log.debug('Diagnostics snapshot', {
+            msg,
             ...groups,
             ...lifecycle,
         });
