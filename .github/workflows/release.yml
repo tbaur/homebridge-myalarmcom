@@ -11,10 +11,15 @@ name: Release
 #   3. Merge that Release PR. release-please tags vX.Y.Z and creates the GitHub
 #      release, and the publish job below pushes the package to npm.
 #
+# The publish job also runs on `release` events so a manually-created GitHub
+# release (recovery) still publishes to npm via Trusted Publishing.
+#
 # npm auth uses Trusted Publishing (OIDC) -- no NPM_TOKEN secret. See RELEASING.md.
 
 on:
   workflow_dispatch:
+  release:
+    types: [published]
   push:
     branches: [ main ]
 
@@ -22,12 +27,15 @@ on:
 permissions: {}
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.workflow }}-${{ github.event.release.tag_name || github.ref }}
   cancel-in-progress: false
 
 jobs:
   release-please:
     name: Prepare release
+    # Only manage Release PRs / tags from pushes (and manual dispatch). A
+    # `release` event means the tag already exists and we only need publish.
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write        # create release commits, tags, and GitHub releases
@@ -47,7 +55,13 @@ jobs:
   publish:
     name: Publish to npm
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: |
+      always()
+      && !cancelled()
+      && (
+        needs.release-please.outputs.release_created == 'true'
+        || github.event_name == 'release'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -55,6 +69,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
