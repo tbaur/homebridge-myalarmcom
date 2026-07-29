@@ -205,12 +205,16 @@ describe('PartitionAccessory', () => {
 
       expect(bed.commandPartition).toHaveBeenCalledWith('1234567-127', 'armAway', expect.any(Object))
       expect(bed.recordCommand).toHaveBeenCalledTimes(1)
+      expect(messagesAt(log, 'info').some((message) => /^Home: Armed Away \(Latency: \d+ms\)$/.test(message)))
+        .toBe(true)
     })
 
     it('disarms', async () => {
       await requestTarget(HomeKitSecurityTarget.DISARM)
 
       expect(bed.commandPartition).toHaveBeenCalledWith('1234567-127', 'disarm', expect.any(Object))
+      expect(messagesAt(log, 'info').some((message) => /^Home: Disarmed \(Latency: \d+ms\)$/.test(message)))
+        .toBe(true)
     })
 
     it('sends night arming as a stay command carrying the modifier', async () => {

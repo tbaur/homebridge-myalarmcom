@@ -220,7 +220,7 @@ class AlarmComClient {
                 body.forceBypass = true;
             }
         }
-        this.#log.info(`Sending "${action}" to partition ${partitionId}`);
+        this.#log.debug(`Sending "${action}" to partition ${partitionId}`);
         const response = await this.#limiter.execute(() => this.#breaker.execute(() => this.#send(url, { method: 'POST', body })));
         return response.data;
     }

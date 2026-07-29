@@ -239,7 +239,16 @@ export class PartitionAccessory {
     }
 
     try {
+      const startedAt = Date.now()
       await this.#platform.client.commandPartition(this.deviceId, action, options)
+      const latencyMs = Date.now() - startedAt
+      const name = attributes.description ?? this.deviceId
+      this.#log.info(
+        `${name}: ${toSecurityStateLabel(target as HomeKitSecurityState)} (Latency: ${latencyMs}ms)`,
+      )
+      // Prefer the commanded state for change detection so the confirming poll
+      // does not emit a second identical info line without latency.
+      this.#lastLoggedState = target
       this.#platform.recordCommand()
       // Arming takes 20-30 seconds to settle at the panel, so the confirming
       // read is left to the next poll or event rather than done inline.

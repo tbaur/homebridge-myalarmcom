@@ -342,7 +342,7 @@ export class AlarmComClient {
       }
     }
 
-    this.#log.info(`Sending "${action}" to partition ${partitionId}`)
+    this.#log.debug(`Sending "${action}" to partition ${partitionId}`)
 
     const response = await this.#limiter.execute(() =>
       this.#breaker.execute(() =>
