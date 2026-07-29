@@ -120,7 +120,7 @@ describe('re-enumerating the account while running', () => {
     new MyAlarmComPlatform(log, CONFIG, api.asApi())
     api.emit('didFinishLaunching')
     await waitFor(
-      () => log.infoMessages.some((message) => message.includes('Polling Alarm.com every')),
+      () => log.infoMessages.some((message) => message.includes('Ready')),
       { description: 'discovery to finish' },
     )
   }

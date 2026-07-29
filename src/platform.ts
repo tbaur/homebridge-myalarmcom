@@ -159,6 +159,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     }
 
     this.#startDiagnostics()
+    this.#log.info('Ready')
   }
 
   /** Enumerate the account's devices and publish them to HomeKit. */
@@ -350,7 +351,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     this.#pollTimer = setInterval(() => {
       void this.#refreshAll()
     }, intervalMs)
-    this.#log.info(`Polling Alarm.com every ${this.#config.pollIntervalSeconds}s`)
+    this.#log.debug(`Polling Alarm.com every ${this.#config.pollIntervalSeconds}s`)
   }
 
   /**

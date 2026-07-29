@@ -80,7 +80,7 @@ describe('platform diagnostics', () => {
 
   async function waitForDiscovery(): Promise<void> {
     await waitFor(
-      () => log.infoMessages.some((message) => message.includes('Polling Alarm.com every'))
+      () => log.infoMessages.some((message) => message.includes('Ready'))
         || log.errors.length > 0,
       { description: 'discovery to finish' },
     )

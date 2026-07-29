@@ -16,6 +16,7 @@ import { EventStream, type AlarmComEvent } from '../../../src/api/event-stream'
 import {
   DEFAULT_WEBSOCKET_ENDPOINT,
   WEBSOCKET_MAX_FAILURES,
+  WEBSOCKET_RECONNECT_BASE_MS,
   WEBSOCKET_REFRESH_INTERVAL_MS,
 } from '../../../src/settings'
 import { createRecordingLogger, messagesAt, type RecordingLogger } from '../../helpers/logger'
@@ -155,6 +156,19 @@ describe('EventStream', () => {
 
       currentSocket().readyState = 1
       expect(stream.isConnected).toBe(true)
+    })
+
+    it('logs when the stream connects and when it reconnects', async () => {
+      await stream.start()
+      currentSocket().emit('open')
+
+      expect(messagesAt(log, 'info')).toContain('Alarm.com event stream connected')
+
+      currentSocket().emit('close', 1006)
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_RECONNECT_BASE_MS)
+      MockWebSocket.instances.at(-1)!.emit('open')
+
+      expect(messagesAt(log, 'info')).toContain('Alarm.com event stream reconnected')
     })
   })
 

@@ -33,7 +33,7 @@ Expose your [Alarm.com](https://www.alarm.com) security panel and sensors in App
 ### Quality
 
 <!-- Canonical test count lives here only; keep other docs number-free to avoid multi-place updates. -->
-- **458 Tests** — Jest suite with an 80% coverage gate across statements, branches, functions, and lines
+- **459 Tests** — Jest suite with an 80% coverage gate across statements, branches, functions, and lines
 - **Strict TypeScript** — `strict` mode with unused locals/params, no implicit returns, and more
 - **Secret Hygiene** — Passwords, session cookies, and the two-factor cookie are redacted from logs
 - **No Analytics** — Zero tracking or data collection

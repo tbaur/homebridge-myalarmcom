@@ -123,6 +123,7 @@ class MyAlarmComPlatform {
             this.#startEventStream();
         }
         this.#startDiagnostics();
+        this.#log.info('Ready');
     }
     /** Enumerate the account's devices and publish them to HomeKit. */
     async #discover() {
@@ -258,7 +259,7 @@ class MyAlarmComPlatform {
         this.#pollTimer = setInterval(() => {
             void this.#refreshAll();
         }, intervalMs);
-        this.#log.info(`Polling Alarm.com every ${this.#config.pollIntervalSeconds}s`);
+        this.#log.debug(`Polling Alarm.com every ${this.#config.pollIntervalSeconds}s`);
     }
     /**
      * Keep the session warm rather than letting it lapse into a fresh login.

@@ -87,11 +87,11 @@ export class SessionManager {
     }
 
     this.#lastLoginAttempt = Date.now()
-    this.#log.info('Signing in to Alarm.com')
+    this.#log.debug('Signing in to Alarm.com')
 
     try {
       this.#session = await authenticate(this.#credentials, this.#log)
-      this.#log.info('Alarm.com session established')
+      this.#log.debug('Alarm.com session established')
       this.#onSessionEstablished?.()
       return this.#session
     } catch (error) {

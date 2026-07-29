@@ -227,11 +227,13 @@ export class EventStream {
     this.#isConnecting = false
     this.#consecutiveFailures = 0
     this.#hasReportedFailure = false
-    this.#log.debug('event stream connected')
 
     // Count recoveries, not the first successful open.
     if (this.#hadConnected) {
+      this.#log.info('Alarm.com event stream reconnected')
       this.#onReconnect?.()
+    } else {
+      this.#log.info('Alarm.com event stream connected')
     }
     this.#hadConnected = true
 
