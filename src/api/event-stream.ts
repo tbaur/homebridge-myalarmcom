@@ -17,6 +17,7 @@
 import WebSocket from 'ws'
 import {
   DEFAULT_WEBSOCKET_ENDPOINT,
+  WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
   WEBSOCKET_HOST_SUFFIX,
   WEBSOCKET_MAX_FAILURES,
   WEBSOCKET_RECONNECT_BASE_MS,
@@ -69,6 +70,8 @@ export class EventStream {
   #isConnecting = false
   #hadConnected = false
   #lastEventAt: number | null = null
+  /** Completes a pending {@link #connect} handshake wait when stop interrupts it. */
+  #handshakeSettle: (() => void) | null = null
 
   constructor(options: EventStreamOptions) {
     this.#log = options.log
@@ -106,6 +109,7 @@ export class EventStream {
   stop(): void {
     this.#isStopped = true
     this.#clearTimers()
+    this.#settleHandshake()
 
     if (this.#socket) {
       // Remove listeners first so the close does not schedule a reconnect.
@@ -113,6 +117,12 @@ export class EventStream {
       this.#socket.close()
       this.#socket = null
     }
+  }
+
+  #settleHandshake(): void {
+    const settle = this.#handshakeSettle
+    this.#handshakeSettle = null
+    settle?.()
   }
 
   #clearTimers(): void {
@@ -185,18 +195,50 @@ export class EventStream {
       const socket = new WebSocket(url)
       this.#socket = socket
 
-      socket.on('open', () => this.#handleOpen())
-      socket.on('message', (data) => this.#handleMessage(data))
-      socket.on('error', (error) => this.#recordFailureReason(error.message))
-      socket.on('close', (code) => this.#handleClose(code))
+      // Wait for the first open or close so callers (startup) can finish their
+      // "connected" / failure log before announcing Ready. Reconnects use the
+      // same path; the await just holds the reconnect timer callback.
+      await new Promise<void>((resolve) => {
+        let settled = false
+        const settle = (): void => {
+          if (settled) {
+            return
+          }
+          settled = true
+          clearTimeout(handshakeTimer)
+          this.#handshakeSettle = null
+          resolve()
+        }
+        this.#handshakeSettle = settle
 
-      // Emitted when the HTTP upgrade is rejected. The status code is the one
-      // piece of information that distinguishes a bad token from a blocked
-      // client, and it is not available anywhere else.
-      socket.on('unexpected-response', (_request, response) => {
-        this.#recordFailureReason(
-          `the server refused the connection upgrade with HTTP ${response.statusCode}`,
-        )
+        // Do not block platform Ready forever if Alarm.com never completes the
+        // upgrade. The socket may still open later and log "connected" then.
+        const handshakeTimer = setTimeout(() => {
+          this.#log.debug(
+            `event stream handshake still pending after ${WEBSOCKET_HANDSHAKE_TIMEOUT_MS}ms; continuing`,
+          )
+          settle()
+        }, WEBSOCKET_HANDSHAKE_TIMEOUT_MS)
+
+        socket.on('open', () => {
+          this.#handleOpen()
+          settle()
+        })
+        socket.on('message', (data) => this.#handleMessage(data))
+        socket.on('error', (error) => this.#recordFailureReason(error.message))
+        socket.on('close', (code) => {
+          this.#handleClose(code)
+          settle()
+        })
+
+        // Emitted when the HTTP upgrade is rejected. The status code is the one
+        // piece of information that distinguishes a bad token from a blocked
+        // client, and it is not available anywhere else.
+        socket.on('unexpected-response', (_request, response) => {
+          this.#recordFailureReason(
+            `the server refused the connection upgrade with HTTP ${response.statusCode}`,
+          )
+        })
       })
     } catch (error) {
       this.#isConnecting = false

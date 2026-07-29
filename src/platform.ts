@@ -155,7 +155,9 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     this.#startKeepAlive(sessionManager)
 
     if (this.#config.useEventStream) {
-      this.#startEventStream()
+      // Await the first handshake so "connected" (or the failure warning) lands
+      // before Ready. Later reconnects are runtime events and may log after.
+      await this.#startEventStream()
     }
 
     this.#startDiagnostics()
@@ -366,7 +368,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     }, KEEPALIVE_INTERVAL_MS)
   }
 
-  #startEventStream(): void {
+  async #startEventStream(): Promise<void> {
     this.#eventStream = new EventStream({
       log: createScopedLogger(this.#log, 'events', this.#config.debug),
       requestToken: () => this.client.getEventStreamToken(),
@@ -377,7 +379,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       onReconnect: () => this.#diagnostics.wsReconnect(),
     })
 
-    void this.#eventStream.start()
+    await this.#eventStream.start()
   }
 
   /**

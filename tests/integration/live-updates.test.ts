@@ -147,6 +147,8 @@ describe('staying up to date after discovery', () => {
   async function launch(): Promise<void> {
     new MyAlarmComPlatform(log, CONFIG, api.asApi())
     api.emit('didFinishLaunching')
+    await waitFor(() => MockWebSocket.instances.length > 0, { description: 'the event stream socket' })
+    MockWebSocket.instances[MockWebSocket.instances.length - 1].emit('open')
     await waitFor(
       () => log.infoMessages.some((message) => message.includes('Ready')),
       { description: 'discovery to finish' },

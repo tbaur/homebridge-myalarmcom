@@ -71,11 +71,12 @@
         "title": "Ignored Device IDs",
         "type": "array",
         "required": false,
+        "description": "Alarm.com device IDs to leave out of HomeKit entirely. Device IDs appear in the Homebridge log during discovery.",
         "items": {
+          "type": "string",
           "title": "Device ID",
-          "type": "string"
-        },
-        "description": "Alarm.com device IDs to leave out of HomeKit entirely, for example `1234567-17`. Device IDs appear in the Homebridge log during discovery."
+          "placeholder": "e.g., 1234567-17"
+        }
       },
       "debug": {
         "title": "Debug logging",
@@ -105,7 +106,17 @@
       "title": "Devices",
       "expandable": true,
       "expanded": false,
-      "items": ["includeUnmonitoredSensors", "ignoredDeviceIds"]
+      "items": [
+        "includeUnmonitoredSensors",
+        {
+          "key": "ignoredDeviceIds",
+          "type": "array",
+          "buttonText": "Add Device ID to Ignore",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
     },
     {
       "type": "fieldset",

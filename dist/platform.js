@@ -120,7 +120,9 @@ class MyAlarmComPlatform {
         this.#startPolling();
         this.#startKeepAlive(sessionManager);
         if (this.#config.useEventStream) {
-            this.#startEventStream();
+            // Await the first handshake so "connected" (or the failure warning) lands
+            // before Ready. Later reconnects are runtime events and may log after.
+            await this.#startEventStream();
         }
         this.#startDiagnostics();
         this.#log.info('Ready');
@@ -272,7 +274,7 @@ class MyAlarmComPlatform {
             void sessionManager.touch();
         }, settings_1.KEEPALIVE_INTERVAL_MS);
     }
-    #startEventStream() {
+    async #startEventStream() {
         this.#eventStream = new event_stream_1.EventStream({
             log: (0, logger_1.createScopedLogger)(this.#log, 'events', this.#config.debug),
             requestToken: () => this.client.getEventStreamToken(),
@@ -282,7 +284,7 @@ class MyAlarmComPlatform {
             },
             onReconnect: () => this.#diagnostics.wsReconnect(),
         });
-        void this.#eventStream.start();
+        await this.#eventStream.start();
     }
     /**
      * Act on a pushed event.
