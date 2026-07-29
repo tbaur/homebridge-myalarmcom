@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.2...v0.1.3) (2026-07-29)
+
+
+### Bug Fixes
+
+* fingerprint secrets with scrypt for log previews ([#10](https://github.com/tbaur/homebridge-myalarmcom/issues/10)) ([ccec1ae](https://github.com/tbaur/homebridge-myalarmcom/commit/ccec1aeea22289a23f5257776c73c791b725ba0b))
+
 ## [0.1.2](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.1...v0.1.2) (2026-07-29)
 
 
