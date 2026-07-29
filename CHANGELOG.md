@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.4...v0.1.5) (2026-07-29)
+
+
+### Bug Fixes
+
+* quiet stream refreshes and harden Alarm.com connection races ([#14](https://github.com/tbaur/homebridge-myalarmcom/issues/14)) ([5087798](https://github.com/tbaur/homebridge-myalarmcom/commit/50877980f7e1750294faa172e6a454e3b9b87a47))
+
 ## [0.1.4](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.3...v0.1.4) (2026-07-29)
 
 
