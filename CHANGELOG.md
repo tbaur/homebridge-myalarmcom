@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.5...v0.1.6) (2026-07-29)
+
+
+### Bug Fixes
+
+* refresh event stream before Alarm.com token expiry ([#16](https://github.com/tbaur/homebridge-myalarmcom/issues/16)) ([25544ff](https://github.com/tbaur/homebridge-myalarmcom/commit/25544ff911e876d57278951f2c6d83b921906668))
+
 ## [0.1.5](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.4...v0.1.5) (2026-07-29)
 
 
