@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.3...v0.1.4) (2026-07-29)
+
+
+### Bug Fixes
+
+* ignored-device UI and Ready-last startup logs ([#12](https://github.com/tbaur/homebridge-myalarmcom/issues/12)) ([d5016ed](https://github.com/tbaur/homebridge-myalarmcom/commit/d5016ed0ee45d2d99aeb89f90bbcdaf38b29a896))
+
 ## [0.1.3](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.2...v0.1.3) (2026-07-29)
 
 
