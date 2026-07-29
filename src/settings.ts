@@ -211,11 +211,15 @@ export const WEBSOCKET_MAX_FAILURES = 5
 /**
  * Proactively re-establish the event stream on this interval.
  *
- * The stream token is short-lived, and a silently dead socket is worse than a
- * briefly interrupted one: HomeKit would show stale state indefinitely with no
- * error anywhere.
+ * Alarm.com's stream token dies around five minutes; refreshing at five minutes
+ * (plus jitter) races the server close and loses — the drop path then logs a
+ * noisy info-level "reconnected". Refresh before expiry so the routine path
+ * (`refreshed` at debug) wins instead.
  */
-export const WEBSOCKET_REFRESH_INTERVAL_MS = 5 * 60_000
+export const WEBSOCKET_REFRESH_INTERVAL_MS = 4 * 60_000
 
-/** Random spread added to the stream refresh so reconnects do not synchronize. */
+/**
+ * Random spread added to the stream refresh so reconnects do not synchronize.
+ * Kept well below the gap between this interval and the ~5-minute token lifetime.
+ */
 export const WEBSOCKET_REFRESH_JITTER_MS = 15_000
