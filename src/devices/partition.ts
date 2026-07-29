@@ -23,6 +23,7 @@ import {
   armingModeFor,
   toDisplayedSecurityState,
   toPartitionAction,
+  toSecurityStateLabel,
 } from '../utils/mappers'
 import type { MyAlarmComPlatform } from '../platform'
 
@@ -44,6 +45,8 @@ export class PartitionAccessory {
   #attributes: PartitionAttributes | null = null
   /** What HomeKit last asked for, held until Alarm.com confirms the change. */
   #targetState: number | null = null
+  /** Last logged displayed state; info logs only fire when this changes. */
+  #lastLoggedState: number | null = null
 
   constructor(
     platform: MyAlarmComPlatform,
@@ -184,6 +187,14 @@ export class PartitionAccessory {
     if (attributes.hasActiveAlarm === true) {
       this.#log.warn(`Alarm.com reports an active alarm on "${attributes.description ?? this.deviceId}"`)
     }
+
+    const name = attributes.description ?? this.deviceId
+    if (this.#lastLoggedState !== null && this.#lastLoggedState !== currentState) {
+      this.#log.info(`${name}: ${toSecurityStateLabel(currentState)}`)
+    } else {
+      this.#log.debug(`${name}: ${toSecurityStateLabel(currentState)}`)
+    }
+    this.#lastLoggedState = currentState
   }
 
   /**

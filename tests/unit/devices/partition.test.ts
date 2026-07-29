@@ -107,6 +107,14 @@ describe('PartitionAccessory', () => {
       expect(messagesAt(log, 'warn').join('\n')).toMatch(/active alarm on "Home"/)
     })
 
+    it('logs arming changes at info after the first reading', () => {
+      accessory.update(withAttributes({ state: 1 }))
+      expect(messagesAt(log, 'debug')).toContain('Home: Disarmed')
+
+      accessory.update(withAttributes({ state: 3 }))
+      expect(messagesAt(log, 'info')).toContain('Home: Armed Away')
+    })
+
     it('leaves the tile disarmed rather than guessing at an unknown panel state', () => {
       accessory.update(withAttributes({ state: 99 }))
 

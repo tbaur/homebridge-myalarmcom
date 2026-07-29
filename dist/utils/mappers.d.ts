@@ -67,6 +67,15 @@ export declare function armingModeFor(target: number): ArmingModeName;
  * distinguishes them.
  */
 export declare function toDisplayedSecurityState(attributes: PartitionAttributes): HomeKitSecurityState | undefined;
+/** Human-readable arming state for logs. */
+export declare function toSecurityStateLabel(state: HomeKitSecurityState): string;
+/**
+ * Label for an event-hinted sensor reading (before the confirming API read).
+ *
+ * Matches the Alarm.com wording used by {@link readSensorState} for the same
+ * resting/triggered outcomes, so push and poll logs stay consistent.
+ */
+export declare function toImmediateSensorLabel(kind: SensorServiceKind, isTriggered: boolean): string;
 /** A sensor mapped onto the HomeKit service that should represent it. */
 export type SensorServiceKind = 'contact' | 'motion' | 'smoke';
 /**

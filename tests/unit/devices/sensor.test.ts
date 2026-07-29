@@ -218,12 +218,42 @@ describe('SensorAccessory', () => {
       expect(log.warn).not.toHaveBeenCalled()
     })
 
-    it('logs the label Alarm.com itself would display', () => {
-      const accessory = mount(sensorNamed('Kitchen Window'), 'contact')
+    it('logs the first reading at debug and later changes at info', () => {
+      const closed = withAttributes(sensorNamed('Front Door'), { state: 1, openClosedStatus: 2 })
+      const open = withAttributes(sensorNamed('Front Door'), { state: 2, openClosedStatus: 3 })
+      const accessory = mount(closed, 'contact')
 
-      accessory.update(sensorNamed('Kitchen Window'))
+      accessory.update(closed)
+      expect(messagesAt(log, 'debug')).toContain('Front Door: Closed')
+      expect(messagesAt(log, 'info')).not.toContain('Front Door: Closed')
 
-      expect(messagesAt(log, 'debug')).toContain('Kitchen Window is Open')
+      accessory.update(open)
+      expect(messagesAt(log, 'info')).toContain('Front Door: Open')
+
+      accessory.update(open)
+      expect(messagesAt(log, 'info').filter((message) => message === 'Front Door: Open')).toHaveLength(1)
+    })
+
+    it('logs motion Activated/Idle and smoke Activated/Not Reset on change', () => {
+      const motion = mount(sensorNamed('Basement Motion'), 'motion')
+      motion.update(sensorNamed('Basement Motion'))
+      motion.update(withAttributes(sensorNamed('Basement Motion'), { state: 4, openClosedStatus: 3 }))
+      expect(messagesAt(log, 'info')).toContain('Basement Motion: Activated')
+
+      log.info.mockClear()
+      const smoke = mount(sensorNamed('Upstairs Smoke'), 'smoke')
+      smoke.update(sensorNamed('Upstairs Smoke'))
+      smoke.update(withAttributes(sensorNamed('Upstairs Smoke'), { state: 4, openClosedStatus: 3 }))
+      expect(messagesAt(log, 'info')).toContain('Upstairs Smoke: Activated')
+    })
+
+    it('logs event-hinted contact changes at info after the first reading', () => {
+      const accessory = mount(sensorNamed('Front Door'), 'contact')
+      accessory.update(withAttributes(sensorNamed('Front Door'), { state: 1, openClosedStatus: 2 }))
+
+      accessory.applyImmediateState(true)
+
+      expect(messagesAt(log, 'info')).toContain('Front Door: Open')
     })
   })
 

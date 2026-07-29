@@ -20,8 +20,10 @@ import {
   toDisplayedSecurityState,
   toHomeKitSecurityState,
   toHomeKitSensorState,
+  toImmediateSensorLabel,
   toPartitionAction,
   toPartitionState,
+  toSecurityStateLabel,
   toSensorServiceKind,
 } from '../../../src/utils/mappers'
 import {
@@ -226,5 +228,26 @@ describe('toHomeKitSensorState', () => {
       expect(toHomeKitSensorState(sensor.attributes)?.label).toBe(sensor.attributes.displayStateText)
     }
     expect(supported).toHaveLength(5)
+  })
+})
+
+describe('toSecurityStateLabel', () => {
+  it('names each HomeKit security state for logs', () => {
+    expect(toSecurityStateLabel(HomeKitSecurityState.DISARMED)).toBe('Disarmed')
+    expect(toSecurityStateLabel(HomeKitSecurityState.STAY_ARM)).toBe('Armed Stay')
+    expect(toSecurityStateLabel(HomeKitSecurityState.AWAY_ARM)).toBe('Armed Away')
+    expect(toSecurityStateLabel(HomeKitSecurityState.NIGHT_ARM)).toBe('Armed Night')
+    expect(toSecurityStateLabel(HomeKitSecurityState.ALARM_TRIGGERED)).toBe('Alarm')
+  })
+})
+
+describe('toImmediateSensorLabel', () => {
+  it('matches Alarm.com wording for each supported kind', () => {
+    expect(toImmediateSensorLabel('contact', true)).toBe('Open')
+    expect(toImmediateSensorLabel('contact', false)).toBe('Closed')
+    expect(toImmediateSensorLabel('motion', true)).toBe('Activated')
+    expect(toImmediateSensorLabel('motion', false)).toBe('Idle')
+    expect(toImmediateSensorLabel('smoke', true)).toBe('Activated')
+    expect(toImmediateSensorLabel('smoke', false)).toBe('Not Reset')
   })
 })
