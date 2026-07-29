@@ -22,9 +22,23 @@ const logger_1 = require("./utils/logger");
 const mappers_1 = require("./utils/mappers");
 const sanitizers_1 = require("./utils/sanitizers");
 const validators_1 = require("./utils/validators");
-/** Installed plugin version, used for diagnostics lifecycle reporting. */
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const PLUGIN_VERSION = require('../package.json').version;
+/**
+ * Installed plugin version, used for diagnostics lifecycle reporting.
+ *
+ * Resolved once via `require` rather than a static `import`: `package.json`
+ * lives outside the TypeScript `rootDir` (`src/`), so importing it would alter
+ * the emitted `dist/` layout. The require resolves correctly from both the
+ * compiled `dist/` output and ts-jest.
+ */
+function readPluginVersion() {
+    try {
+        return require('../package.json').version || 'unknown';
+    }
+    catch {
+        return 'unknown';
+    }
+}
+const PLUGIN_VERSION = readPluginVersion();
 /** Window over which event-triggered refreshes are coalesced. */
 const REFRESH_DEBOUNCE_MS = 750;
 /** Homebridge platform exposing Alarm.com partitions and sensors. */
