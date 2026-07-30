@@ -132,6 +132,7 @@ describe('discovering an Alarm.com account', () => {
       'Hallway Motion',
       'Basement Motion',
     ])
+    expect(log.infoMessages.some((message) => message.startsWith('Discovered '))).toBe(true)
   })
 
   it('skips a device type it does not support yet', async () => {

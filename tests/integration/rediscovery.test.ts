@@ -125,7 +125,7 @@ describe('re-enumerating the account while running', () => {
       })
   }
 
-  async function launch(): Promise<void> {
+  async function launch(overrides: Partial<MyAlarmComPlatformConfig> = {}): Promise<void> {
     // Installed before the platform starts, so the poll interval it schedules
     // is the faked one. Everything else, the clock included, stays real.
     jest.useFakeTimers({
@@ -135,7 +135,7 @@ describe('re-enumerating the account while running', () => {
       ],
     })
 
-    new MyAlarmComPlatform(log, CONFIG, api.asApi())
+    new MyAlarmComPlatform(log, { ...CONFIG, ...overrides }, api.asApi())
     api.emit('didFinishLaunching')
     await waitFor(
       () => log.infoMessages.some((message) => message.includes('Ready')),
@@ -215,6 +215,30 @@ describe('re-enumerating the account while running', () => {
 
     expect(api.unregistered).toEqual([])
     expect(api.registeredNames).toContain('Front Door')
+  })
+
+  it('logs periodic rediscovery at debug, not info', async () => {
+    // Scoped debug is dropped unless config.debug is on.
+    await launch({ debug: true })
+    expect(log.infoMessages.some((message) => message.startsWith('Discovered '))).toBe(true)
+
+    const infoBefore = log.infoMessages.length
+    nock(BASE_URL).get(SYSTEM_PATH).reply(200, systemFixture)
+    await waitOutRediscoveryInterval()
+    poll()
+    await waitFor(
+      () => log.debugMessages.some((message) => message.includes('Rediscovering devices')),
+      { description: 'the rediscovery debug line' },
+    )
+
+    expect(
+      log.debugMessages.some((message) =>
+        message.includes('Rediscovering devices to detect panel add/remove changes'),
+      ),
+    ).toBe(true)
+    expect(
+      log.infoMessages.slice(infoBefore).some((message) => message.startsWith('Discovered ')),
+    ).toBe(false)
   })
 
   it('unregisters a sensor that becomes unmonitored on rediscovery', async () => {
