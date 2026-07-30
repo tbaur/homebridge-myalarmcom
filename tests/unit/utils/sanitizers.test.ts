@@ -124,6 +124,7 @@ describe('sanitizeString', () => {
       'deviceType=1',
       'Polling Alarm.com every 60s',
       'Discovered 1 partition(s) and 19 sensor(s)',
+      'Rediscovering devices to detect panel add/remove changes: 1 partition(s) and 19 sensor(s)',
     ])('leaves ordinary diagnostic text alone: %s', (message) => {
       expect(sanitizeString(message)).toBe(message)
     })

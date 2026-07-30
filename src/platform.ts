@@ -194,7 +194,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       }
 
       try {
-        await this.#discover()
+        await this.#discover({ reason: 'startup' })
         return true
       } catch (error) {
         const detail = sanitizeError(error)
@@ -240,8 +240,14 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     })
   }
 
-  /** Enumerate the account's devices and publish them to HomeKit. */
-  async #discover(): Promise<void> {
+  /**
+   * Enumerate the account's devices and publish them to HomeKit.
+   *
+   * @param options.reason - `startup` logs the inventory at info; `periodic`
+   *   is the hourly re-check for panel add/remove and stays at debug unless a
+   *   later sync step itself logs an add/remove.
+   */
+  async #discover(options: { reason: 'startup' | 'periodic' }): Promise<void> {
     // Stamped before the work, not after. Recording only successful runs meant
     // a failing rediscovery was still due on the very next poll, so an account
     // that could not be enumerated was re-enumerated every interval instead of
@@ -252,9 +258,17 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     this.#systemId ??= await this.client.getSystemId()
     const devices = await this.client.getSystemDevices(this.#systemId)
 
-    this.#log.info(
-      `Discovered ${devices.partitionIds.length} partition(s) and ${devices.sensorIds.length} sensor(s)`,
-    )
+    const inventory =
+      `${devices.partitionIds.length} partition(s) and ${devices.sensorIds.length} sensor(s)`
+    if (options.reason === 'startup') {
+      this.#log.info(`Discovered ${inventory}`)
+    } else {
+      // Routine hourly re-enumeration; real add/remove still logs at info via
+      // Adding… / Removing… below.
+      this.#log.debug(
+        `Rediscovering devices to detect panel add/remove changes: ${inventory}`,
+      )
+    }
 
     // Pruned as soon as the authoritative list is in hand, before the detail
     // reads that can still fail. Leaving it to the end meant a failure part
@@ -570,7 +584,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
 
     try {
       if (isRediscoveryDue) {
-        await this.#discover()
+        await this.#discover({ reason: 'periodic' })
         ok = this.#partitions.size + this.#sensors.size
         return
       }
