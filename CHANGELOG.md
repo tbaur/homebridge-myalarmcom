@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.7...v0.1.8) (2026-07-30)
+
+
+### Bug Fixes
+
+* demote routine rediscovery inventory log to debug ([#21](https://github.com/tbaur/homebridge-myalarmcom/issues/21)) ([b4954c8](https://github.com/tbaur/homebridge-myalarmcom/commit/b4954c8d79c12e7e90732d9e8f9353e568a85cdf))
+
 ## [0.1.7](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.6...v0.1.7) (2026-07-29)
 
 
