@@ -29,12 +29,13 @@ function requireNonEmptyString(value, field) {
     return value.trim();
 }
 /**
- * Clamp a numeric setting to its floor, recording a warning if it was raised.
+ * Clamp a numeric setting into [floor, ceiling], recording a warning if adjusted.
  *
  * Silently correcting would leave the user believing their configured interval
  * is in effect; refusing to start over a too-eager poll interval would be worse.
+ * Config.json edits that skip the UI still need the same bounds.
  */
-function clampToFloor(value, { field, fallback, floor, unit, warnings }) {
+function clampToRange(value, { field, fallback, floor, ceiling, unit, warnings }) {
     if (value === undefined || value === null) {
         return fallback;
     }
@@ -45,6 +46,10 @@ function clampToFloor(value, { field, fallback, floor, unit, warnings }) {
     if (value < floor) {
         warnings.push(`"${field}" was raised from ${value} to ${floor} ${unit}. Alarm.com may lock accounts that poll or re-authenticate more aggressively than this.`);
         return floor;
+    }
+    if (value > ceiling) {
+        warnings.push(`"${field}" was lowered from ${value} to ${ceiling} ${unit}.`);
+        return ceiling;
     }
     return value;
 }
@@ -130,17 +135,19 @@ function validateConfig(raw) {
         username: requireNonEmptyString(raw.username, 'username'),
         password: requireNonEmptyString(raw.password, 'password'),
         twoFactorAuthenticationId: parseMfaCookie(raw.twoFactorAuthenticationId, warnings),
-        pollIntervalSeconds: clampToFloor(raw.pollIntervalSeconds, {
+        pollIntervalSeconds: clampToRange(raw.pollIntervalSeconds, {
             field: 'pollIntervalSeconds',
             fallback: settings_1.DEFAULT_POLL_INTERVAL_SEC,
             floor: settings_1.MIN_POLL_INTERVAL_SEC,
+            ceiling: settings_1.MAX_POLL_INTERVAL_SEC,
             unit: 'seconds',
             warnings,
         }),
-        authIntervalMinutes: clampToFloor(raw.authIntervalMinutes, {
+        authIntervalMinutes: clampToRange(raw.authIntervalMinutes, {
             field: 'authIntervalMinutes',
             fallback: settings_1.DEFAULT_AUTH_INTERVAL_MIN,
             floor: settings_1.MIN_AUTH_INTERVAL_MIN,
+            ceiling: settings_1.MAX_AUTH_INTERVAL_MIN,
             unit: 'minutes',
             warnings,
         }),

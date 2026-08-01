@@ -148,6 +148,9 @@ export const MIN_POLL_INTERVAL_SEC = 60
 /** Default polling interval when the user does not choose one. */
 export const DEFAULT_POLL_INTERVAL_SEC = 60
 
+/** Cap on the polling interval, in seconds (one day). */
+export const MAX_POLL_INTERVAL_SEC = 86_400
+
 /**
  * Floor on how often a full re-authentication may occur, in minutes.
  *
@@ -158,6 +161,9 @@ export const MIN_AUTH_INTERVAL_MIN = 10
 
 /** Default session lifetime before re-authenticating, in minutes. */
 export const DEFAULT_AUTH_INTERVAL_MIN = 10
+
+/** Cap on the re-authentication interval, in minutes (one day). */
+export const MAX_AUTH_INTERVAL_MIN = 1_440
 
 /**
  * Cap on the diagnostics heartbeat interval, in seconds (one day).

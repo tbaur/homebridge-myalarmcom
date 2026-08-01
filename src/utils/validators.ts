@@ -16,7 +16,9 @@ import { ConfigurationError } from '../errors'
 import {
   DEFAULT_AUTH_INTERVAL_MIN,
   DEFAULT_POLL_INTERVAL_SEC,
+  MAX_AUTH_INTERVAL_MIN,
   MAX_DIAGNOSTICS_INTERVAL_SEC,
+  MAX_POLL_INTERVAL_SEC,
   MIN_AUTH_INTERVAL_MIN,
   MIN_POLL_INTERVAL_SEC,
   PLATFORM_NAME,
@@ -44,17 +46,19 @@ function requireNonEmptyString(value: unknown, field: string): string {
 }
 
 /**
- * Clamp a numeric setting to its floor, recording a warning if it was raised.
+ * Clamp a numeric setting into [floor, ceiling], recording a warning if adjusted.
  *
  * Silently correcting would leave the user believing their configured interval
  * is in effect; refusing to start over a too-eager poll interval would be worse.
+ * Config.json edits that skip the UI still need the same bounds.
  */
-function clampToFloor(
+function clampToRange(
   value: unknown,
-  { field, fallback, floor, unit, warnings }: {
+  { field, fallback, floor, ceiling, unit, warnings }: {
     field: string
     fallback: number
     floor: number
+    ceiling: number
     unit: string
     warnings: string[]
   },
@@ -73,6 +77,13 @@ function clampToFloor(
       `"${field}" was raised from ${value} to ${floor} ${unit}. Alarm.com may lock accounts that poll or re-authenticate more aggressively than this.`,
     )
     return floor
+  }
+
+  if (value > ceiling) {
+    warnings.push(
+      `"${field}" was lowered from ${value} to ${ceiling} ${unit}.`,
+    )
+    return ceiling
   }
 
   return value
@@ -188,17 +199,19 @@ export function validateConfig(raw: MyAlarmComPlatformConfig): ConfigValidationR
     username: requireNonEmptyString(raw.username, 'username'),
     password: requireNonEmptyString(raw.password, 'password'),
     twoFactorAuthenticationId: parseMfaCookie(raw.twoFactorAuthenticationId, warnings),
-    pollIntervalSeconds: clampToFloor(raw.pollIntervalSeconds, {
+    pollIntervalSeconds: clampToRange(raw.pollIntervalSeconds, {
       field: 'pollIntervalSeconds',
       fallback: DEFAULT_POLL_INTERVAL_SEC,
       floor: MIN_POLL_INTERVAL_SEC,
+      ceiling: MAX_POLL_INTERVAL_SEC,
       unit: 'seconds',
       warnings,
     }),
-    authIntervalMinutes: clampToFloor(raw.authIntervalMinutes, {
+    authIntervalMinutes: clampToRange(raw.authIntervalMinutes, {
       field: 'authIntervalMinutes',
       fallback: DEFAULT_AUTH_INTERVAL_MIN,
       floor: MIN_AUTH_INTERVAL_MIN,
+      ceiling: MAX_AUTH_INTERVAL_MIN,
       unit: 'minutes',
       warnings,
     }),
