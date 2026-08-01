@@ -37,7 +37,7 @@ export interface MyAlarmComPlatformConfig {
      * Seconds between health/activity heartbeats in the Homebridge log.
      *
      * `0` disables emission (default). Values `1`–`29` are raised to `30`;
-     * values above `3600` are rejected.
+     * values above one day (`86400`) are lowered to that ceiling.
      */
     diagnosticsInterval?: unknown;
 }

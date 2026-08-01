@@ -159,6 +159,14 @@ export const MIN_AUTH_INTERVAL_MIN = 10
 /** Default session lifetime before re-authenticating, in minutes. */
 export const DEFAULT_AUTH_INTERVAL_MIN = 10
 
+/**
+ * Cap on the diagnostics heartbeat interval, in seconds (one day).
+ *
+ * Heartbeats denser than this are fine; rarer ones are clamped down so a typo
+ * cannot silently disable useful logging for weeks.
+ */
+export const MAX_DIAGNOSTICS_INTERVAL_SEC = 86_400
+
 /** How often to touch {@link KEEPALIVE_URL} to hold the session open. */
 export const KEEPALIVE_INTERVAL_MS = 4 * 60_000
 

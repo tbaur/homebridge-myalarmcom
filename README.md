@@ -106,7 +106,7 @@ Lights, locks, thermostats, garage door *openers*, cameras, and doorbells are no
 | `useEventStream`            | `true`  | Subscribe to push events. Polling continues regardless.                          |
 | `includeUnmonitoredSensors` | `false` | Expose sensors Alarm.com reports as unmonitored.                                 |
 | `ignoredDeviceIds`          | `[]`    | Device IDs to leave out of HomeKit. IDs are printed during discovery.            |
-| `diagnosticsInterval`       | `0`     | Seconds between health heartbeats in the log; `0` off, else `30`–`3600`.         |
+| `diagnosticsInterval`       | `0`     | Seconds between health heartbeats in the log; `0` off, else `30`–`86400` (24h).  |
 | `debug`                     | `false` | Verbose logging. Credentials are redacted.                                       |
 
 ## Not Working?

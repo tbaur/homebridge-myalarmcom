@@ -22,8 +22,6 @@ const TOTP_CODE_PATTERN = /^\d{6}$/;
 const MIN_MFA_COOKIE_LENGTH = 20;
 /** Shortest allowed diagnostics heartbeat when the feature is enabled. */
 const MIN_DIAGNOSTICS_INTERVAL_SEC = 30;
-/** Longest allowed diagnostics heartbeat. */
-const MAX_DIAGNOSTICS_INTERVAL_SEC = 3600;
 function requireNonEmptyString(value, field) {
     if (typeof value !== 'string' || value.trim().length === 0) {
         throw new errors_1.ConfigurationError(`"${field}" is required in the ${settings_1.PLATFORM_NAME} platform config`);
@@ -56,8 +54,9 @@ function parseBoolean(value, fallback) {
 /**
  * Parse the diagnostics heartbeat interval.
  *
- * `0` (or omitted) disables emission. Sub-floor positive values are raised to
- * the minimum rather than rejected, matching the poll-interval clamp.
+ * `0` (or omitted) disables emission. Out-of-range positive values are clamped
+ * (floor 30s, ceiling one day) with a warning rather than rejecting startup —
+ * a mistyped interval must not take the child bridge down.
  */
 function parseDiagnosticsInterval(value, warnings) {
     if (value === undefined || value === null) {
@@ -72,8 +71,9 @@ function parseDiagnosticsInterval(value, warnings) {
     if (value < 0) {
         throw new errors_1.ConfigurationError('"diagnosticsInterval" cannot be negative');
     }
-    if (value > MAX_DIAGNOSTICS_INTERVAL_SEC) {
-        throw new errors_1.ConfigurationError(`"diagnosticsInterval" cannot exceed ${MAX_DIAGNOSTICS_INTERVAL_SEC} seconds`);
+    if (value > settings_1.MAX_DIAGNOSTICS_INTERVAL_SEC) {
+        warnings.push(`"diagnosticsInterval" was lowered from ${value} to ${settings_1.MAX_DIAGNOSTICS_INTERVAL_SEC} seconds (24h maximum).`);
+        return settings_1.MAX_DIAGNOSTICS_INTERVAL_SEC;
     }
     if (value < MIN_DIAGNOSTICS_INTERVAL_SEC) {
         warnings.push(`"diagnosticsInterval" was raised from ${value} to ${MIN_DIAGNOSTICS_INTERVAL_SEC} seconds.`);

@@ -220,8 +220,18 @@ describe('diagnosticsInterval', () => {
     expect(warnings[0]).toMatch(/diagnosticsInterval/)
   })
 
-  it('rejects values above the ceiling', () => {
-    expect(() => validateConfig(configWith({ diagnosticsInterval: 3601 }))).toThrow(ConfigurationError)
+  it('accepts multi-hour intervals within the one-day ceiling', () => {
+    const { config, warnings } = validateConfig(configWith({ diagnosticsInterval: 10_800 }))
+
+    expect(config.diagnosticsInterval).toBe(10_800)
+    expect(warnings).toEqual([])
+  })
+
+  it('lowers values above the one-day ceiling with a warning', () => {
+    const { config, warnings } = validateConfig(configWith({ diagnosticsInterval: 100_000 }))
+
+    expect(config.diagnosticsInterval).toBe(86_400)
+    expect(warnings[0]).toMatch(/lowered from 100000 to 86400/)
   })
 
   it('rejects non-numbers', () => {

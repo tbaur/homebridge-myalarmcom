@@ -16,6 +16,7 @@ import { ConfigurationError } from '../errors'
 import {
   DEFAULT_AUTH_INTERVAL_MIN,
   DEFAULT_POLL_INTERVAL_SEC,
+  MAX_DIAGNOSTICS_INTERVAL_SEC,
   MIN_AUTH_INTERVAL_MIN,
   MIN_POLL_INTERVAL_SEC,
   PLATFORM_NAME,
@@ -34,9 +35,6 @@ const MIN_MFA_COOKIE_LENGTH = 20
 
 /** Shortest allowed diagnostics heartbeat when the feature is enabled. */
 const MIN_DIAGNOSTICS_INTERVAL_SEC = 30
-
-/** Longest allowed diagnostics heartbeat. */
-const MAX_DIAGNOSTICS_INTERVAL_SEC = 3600
 
 function requireNonEmptyString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -87,8 +85,9 @@ function parseBoolean(value: unknown, fallback: boolean): boolean {
 /**
  * Parse the diagnostics heartbeat interval.
  *
- * `0` (or omitted) disables emission. Sub-floor positive values are raised to
- * the minimum rather than rejected, matching the poll-interval clamp.
+ * `0` (or omitted) disables emission. Out-of-range positive values are clamped
+ * (floor 30s, ceiling one day) with a warning rather than rejecting startup —
+ * a mistyped interval must not take the child bridge down.
  */
 function parseDiagnosticsInterval(value: unknown, warnings: string[]): number {
   if (value === undefined || value === null) {
@@ -108,9 +107,10 @@ function parseDiagnosticsInterval(value: unknown, warnings: string[]): number {
   }
 
   if (value > MAX_DIAGNOSTICS_INTERVAL_SEC) {
-    throw new ConfigurationError(
-      `"diagnosticsInterval" cannot exceed ${MAX_DIAGNOSTICS_INTERVAL_SEC} seconds`,
+    warnings.push(
+      `"diagnosticsInterval" was lowered from ${value} to ${MAX_DIAGNOSTICS_INTERVAL_SEC} seconds (24h maximum).`,
     )
+    return MAX_DIAGNOSTICS_INTERVAL_SEC
   }
 
   if (value < MIN_DIAGNOSTICS_INTERVAL_SEC) {

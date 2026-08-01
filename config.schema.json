@@ -87,7 +87,7 @@
         "type": "integer",
         "default": 0,
         "minimum": 0,
-        "description": "Seconds between health/activity heartbeats in the Homebridge log. `0` disables (default). Values 1–29 are raised to 30; values above 3600 are rejected. Boot and shutdown snapshots are included when enabled. Credentials are never included."
+        "description": "Seconds between health/activity heartbeats in the Homebridge log. `0` disables (default). Values 1–29 are raised to 30; values above 86400 (24h) are lowered to 86400. Boot and shutdown snapshots are included when enabled. Credentials are never included."
       }
     }
   },
