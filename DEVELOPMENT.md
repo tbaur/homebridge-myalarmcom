@@ -87,7 +87,7 @@ The rest of the resilience story:
 - **Circuit breaker.** After a threshold of service-health failures the breaker opens and requests fail fast until a cooldown elapses, then half-open probes (default `halfOpenMax` 3 consecutive successes) decide whether to close.
 - **Bounded timeouts** on every request (`DEFAULT_REQUEST_TIMEOUT_MS`, 30s) so a stalled connection cannot wedge the poll loop.
 - **Batched reads are capped** at `MAX_IDS_PER_REQUEST` (50). Alarm.com answers an over-long query string with a `404` rather than a useful error, so an oversized batch fails as "no such endpoint".
-- **Permission is checked before acting.** A partition the account may not control is refused locally, before a command is sent, rather than after it fails: HomeKit gets `INSUFFICIENT_PRIVILEGES` and the log gets the `ReadOnlyPartitionError` text naming the partition. The check is fail-closed, so anything other than a literal `hasPermissionToChangeState: true` counts as "may not control".
+- **Permission is checked before acting.** A partition the account may not control is refused locally, before a command is sent, rather than after it fails: HomeKit gets `INSUFFICIENT_PRIVILEGES` and the log reports that the Alarm.com account used cannot change the arming state of that partition. The check is fail-closed, so anything other than a literal `hasPermissionToChangeState: true` counts as "may not control".
 
 ## Capturing fixtures with the probe
 

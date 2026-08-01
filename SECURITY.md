@@ -68,7 +68,7 @@ This is an availability risk rather than a confidentiality one, but it is the fa
 
 1. Treat the `twoFactorAuthenticationId` cookie and your Alarm.com password as equivalent secrets
 2. Restrict filesystem permissions on the Homebridge `config.json` and on any backups of it
-3. If you only want HomeKit to observe system state, use an Alarm.com login that lacks permission to change arming state; the plugin detects that and reports it rather than attempting the command
+3. If you only want HomeKit to observe system state, use an Alarm.com login that lacks permission to change arming state; the plugin warns that the account used cannot change arming state and exposes the panel as read-only rather than attempting the command
 4. Keep Homebridge and this plugin updated
 5. Run Homebridge with minimal system privileges
 6. Use Homebridge's secure remote access features rather than exposing it directly to the internet

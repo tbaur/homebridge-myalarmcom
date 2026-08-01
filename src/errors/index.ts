@@ -125,7 +125,7 @@ export class ReadOnlyPartitionError extends AlarmComError {
 
   constructor(partitionName: string, options?: { cause?: Error }) {
     super(
-      `The Alarm.com account does not have permission to change the arming state of "${partitionName}"`,
+      `The Alarm.com account used cannot change the arming state of "${partitionName}"`,
       options,
     )
   }

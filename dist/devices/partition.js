@@ -104,7 +104,7 @@ class PartitionAccessory {
         if (isFirstUpdate) {
             this.#applyValidTargetStates(attributes);
             if (!this.#canChangeState(attributes)) {
-                this.#log.warn(`The Alarm.com account cannot change the arming state of "${attributes.description ?? this.deviceId}". It is exposed to HomeKit as read-only.`);
+                this.#log.warn(`The Alarm.com account used cannot change the arming state of "${attributes.description ?? this.deviceId}".`);
             }
         }
         const { Characteristic } = this.#platform;
