@@ -27,10 +27,12 @@ jest.mock('ws', () => {
   const { EventEmitter: NodeEventEmitter } = jest.requireActual<typeof import('node:events')>('node:events')
 
   class MockWebSocket extends NodeEventEmitter {
+    static readonly CONNECTING = 0
     static readonly OPEN = 1
+    static readonly CLOSED = 3
     static readonly instances: MockWebSocket[] = []
 
-    readyState = 0
+    readyState = MockWebSocket.CONNECTING
     closeCount = 0
 
     constructor(readonly url: string) {
@@ -40,7 +42,17 @@ jest.mock('ws', () => {
 
     close(): void {
       this.closeCount++
-      this.readyState = 3
+      // Mirror ws abortHandshake: closing while CONNECTING emits
+      // 'WebSocket was closed before the connection was established'.
+      // Real ws does this on nextTick; emit here synchronously so tests catch
+      // a missing error sink without flushing the event loop.
+      if (this.readyState === MockWebSocket.CONNECTING) {
+        this.emit(
+          'error',
+          new Error('WebSocket was closed before the connection was established'),
+        )
+      }
+      this.readyState = MockWebSocket.CLOSED
     }
   }
 
@@ -53,7 +65,12 @@ interface MockSocket extends EventEmitter {
   closeCount: number
 }
 
-const MockWebSocket = WebSocket as unknown as { OPEN: number, instances: MockSocket[] }
+const MockWebSocket = WebSocket as unknown as {
+  CONNECTING: number
+  OPEN: number
+  CLOSED: number
+  instances: MockSocket[]
+}
 
 const [signInEvent, deviceEvent] = eventsFixture.events as AlarmComEvent[]
 
@@ -225,16 +242,45 @@ describe('EventStream', () => {
     })
 
     it('abandons a hung handshake and schedules a reconnect', async () => {
-      const { pending } = await startPending()
+      const { pending, socket } = await startPending()
+      expect(socket.readyState).toBe(MockWebSocket.CONNECTING)
 
-      await jest.advanceTimersByTimeAsync(WEBSOCKET_HANDSHAKE_TIMEOUT_MS)
+      // ws emits 'error' synchronously when close() aborts a CONNECTING
+      // handshake. Disposing without an error sink used to crash the process.
+      await expect(
+        jest.advanceTimersByTimeAsync(WEBSOCKET_HANDSHAKE_TIMEOUT_MS),
+      ).resolves.toBeUndefined()
       await pending
 
       expect(messagesAt(log, 'warn').join('\n')).toMatch(/handshake timed out/)
-      expect(MockWebSocket.instances[0].closeCount).toBe(1)
+      expect(socket.closeCount).toBe(1)
+      expect(socket.readyState).toBe(MockWebSocket.CLOSED)
+      expect(stream.isConnected).toBe(false)
 
       await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
       expect(messagesAt(log, 'info')).toContain('Alarm.com event stream connected')
+    })
+
+    it('can replace a still-connecting socket without crashing', async () => {
+      const { pending: firstHandshake, socket: firstSocket } = await startPending()
+      expect(firstSocket.readyState).toBe(MockWebSocket.CONNECTING)
+
+      // A second start() disposes the in-flight CONNECTING socket before opening
+      // another — the same abortHandshake error path as a handshake timeout.
+      const secondStart = stream.start()
+      await flushConnect()
+
+      expect(firstSocket.closeCount).toBe(1)
+      expect(firstSocket.readyState).toBe(MockWebSocket.CLOSED)
+
+      const secondSocket = currentSocket()
+      expect(secondSocket).not.toBe(firstSocket)
+      secondSocket.readyState = MockWebSocket.OPEN
+      secondSocket.emit('open')
+      await secondStart
+      await firstHandshake
+
+      expect(stream.isConnected).toBe(true)
     })
   })
 
@@ -655,22 +701,30 @@ describe('EventStream', () => {
       expect(requestToken).toHaveBeenCalledTimes(1)
     })
 
-    it('does not hang when stop interrupts an in-flight handshake', async () => {
-      const { pending } = await startPending()
+    it('does not hang or crash when stop interrupts an in-flight handshake', async () => {
+      const { pending, socket } = await startPending()
+      expect(socket.readyState).toBe(MockWebSocket.CONNECTING)
 
-      stream.stop()
+      expect(() => stream.stop()).not.toThrow()
       await pending
 
-      expect(MockWebSocket.instances[0].closeCount).toBe(1)
+      expect(socket.closeCount).toBe(1)
+      expect(socket.readyState).toBe(MockWebSocket.CLOSED)
+      expect(stream.isConnected).toBe(false)
     })
 
-    it('can start again after being stopped', async () => {
-      stream.stop()
+    it('can start again after being stopped mid-handshake', async () => {
+      const { pending, socket } = await startPending()
+
+      expect(() => stream.stop()).not.toThrow()
+      await pending
+      expect(socket.readyState).toBe(MockWebSocket.CLOSED)
 
       await startOpen()
 
-      expect(MockWebSocket.instances).toHaveLength(1)
+      expect(MockWebSocket.instances).toHaveLength(2)
       expect(messagesAt(log, 'info')).toContain('Alarm.com event stream connected')
+      expect(stream.isConnected).toBe(true)
     })
   })
 })

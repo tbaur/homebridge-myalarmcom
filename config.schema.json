@@ -44,16 +44,14 @@
         "type": "integer",
         "default": 60,
         "minimum": 60,
-        "maximum": 3600,
-        "description": "How often to re-read all device state. Values below 60 seconds are raised to 60."
+        "description": "How often to re-read all device state. Values below 60 seconds are raised to 60. Typical values are 60–3600."
       },
       "authIntervalMinutes": {
         "title": "Re-authentication Interval (minutes)",
         "type": "integer",
         "default": 10,
         "minimum": 10,
-        "maximum": 1440,
-        "description": "How long a session is reused before signing in again. Values below 10 minutes are raised to 10."
+        "description": "How long a session is reused before signing in again. Values below 10 minutes are raised to 10. Typical values are 10–1440."
       },
       "useEventStream": {
         "title": "Use push events",
@@ -89,8 +87,7 @@
         "type": "integer",
         "default": 0,
         "minimum": 0,
-        "maximum": 3600,
-        "description": "Seconds between health/activity heartbeats in the Homebridge log. `0` disables (default). Values 1–29 are raised to 30. Boot and shutdown snapshots are included when enabled. Credentials are never included."
+        "description": "Seconds between health/activity heartbeats in the Homebridge log. `0` disables (default). Values 1–29 are raised to 30; values above 3600 are rejected. Boot and shutdown snapshots are included when enabled. Credentials are never included."
       }
     }
   },
