@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.11](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.10...v0.1.11) (2026-08-01)
+
+
+### Bug Fixes
+
+* clarify read-only account arming log message ([#27](https://github.com/tbaur/homebridge-myalarmcom/issues/27)) ([bd35ed5](https://github.com/tbaur/homebridge-myalarmcom/commit/bd35ed52c718918d43b6f8efa2293cf8b41ce38a))
+
 ## [0.1.10](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.9...v0.1.10) (2026-08-01)
 
 
