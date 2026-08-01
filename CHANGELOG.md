@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.9...v0.1.10) (2026-08-01)
+
+
+### Bug Fixes
+
+* allow diagnostics intervals up to 24 hours ([#25](https://github.com/tbaur/homebridge-myalarmcom/issues/25)) ([666f250](https://github.com/tbaur/homebridge-myalarmcom/commit/666f2507d46e97b6dc87a103e46b2e268516df9b))
+
 ## [0.1.9](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.8...v0.1.9) (2026-08-01)
 
 
