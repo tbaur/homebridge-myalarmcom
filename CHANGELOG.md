@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.8...v0.1.9) (2026-08-01)
+
+
+### Bug Fixes
+
+* prevent event stream crash and improve config UX ([#23](https://github.com/tbaur/homebridge-myalarmcom/issues/23)) ([20a307e](https://github.com/tbaur/homebridge-myalarmcom/commit/20a307e2935966d8f6f78105d0461ecc8d79e459))
+
 ## [0.1.8](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.7...v0.1.8) (2026-07-30)
 
 
