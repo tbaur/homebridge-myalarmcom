@@ -148,7 +148,7 @@ describe('RateLimitError', () => {
 describe('ReadOnlyPartitionError', () => {
   it('names the partition the account may not control', () => {
     expect(new ReadOnlyPartitionError('Home').message)
-      .toBe('The Alarm.com account does not have permission to change the arming state of "Home"')
+      .toBe('The Alarm.com account used cannot change the arming state of "Home"')
   })
 })
 

@@ -186,7 +186,7 @@ describe('discovering an Alarm.com account', () => {
   it('warns that the read-only account cannot arm the panel', async () => {
     await launch()
 
-    expect(log.warnings.join('\n')).toMatch(/cannot change the arming state of "Home"/)
+    expect(log.warnings.join('\n')).toMatch(/account used cannot change the arming state of "Home"/)
   })
 
   it('adopts an accessory Homebridge restored from its cache instead of adding it again', async () => {

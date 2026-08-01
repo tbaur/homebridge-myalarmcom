@@ -114,7 +114,7 @@ class ReadOnlyPartitionError extends AlarmComError {
     code = 'READ_ONLY_PARTITION';
     isRetryable = false;
     constructor(partitionName, options) {
-        super(`The Alarm.com account does not have permission to change the arming state of "${partitionName}"`, options);
+        super(`The Alarm.com account used cannot change the arming state of "${partitionName}"`, options);
     }
 }
 exports.ReadOnlyPartitionError = ReadOnlyPartitionError;

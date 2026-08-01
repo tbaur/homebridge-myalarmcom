@@ -18,7 +18,7 @@ Expose your [Alarm.com](https://www.alarm.com) security panel and sensors in App
 - **Motion Sensors** — Motion detected / clear
 - **Smoke Sensors** — Smoke detector state
 - **Mode-Aware Arming** — Only offers Stay / Away / Night when the panel advertises them
-- **Read-Only Accounts** — HomeKit controls stay greyed out unless the login is explicitly allowed to change arming state
+- **Read-Only Accounts** — Warns when the Alarm.com account used cannot change arming state, and exposes the panel as read-only in HomeKit
 
 ### Reliability
 
@@ -33,7 +33,7 @@ Expose your [Alarm.com](https://www.alarm.com) security panel and sensors in App
 ### Quality
 
 <!-- Canonical test count lives here only; keep other docs number-free to avoid multi-place updates. -->
-- **464 Tests** — Jest suite with an 80% coverage gate across statements, branches, functions, and lines
+- **507 Tests** — Jest suite with an 80% coverage gate across statements, branches, functions, and lines
 - **Strict TypeScript** — `strict` mode with unused locals/params, no implicit returns, and more
 - **Secret Hygiene** — Passwords, session cookies, and the two-factor cookie are redacted from logs
 - **No Analytics** — Zero tracking or data collection
@@ -115,6 +115,7 @@ Lights, locks, thermostats, garage door *openers*, cameras, and doorbells are no
 2. **Rejected username or password** — Fix credentials before restarting repeatedly; Alarm.com locks accounts after failed sign-ins.
 3. **Login form parse error** — Alarm.com changed its sign-in page; please open an issue.
 4. **Sensor missing** — Check discovery logs: unsupported type, monitoring disabled (unless `includeUnmonitoredSensors`), or listed in `ignoredDeviceIds`.
+5. **Panel is read-only / cannot arm** — The Alarm.com account used lacks permission to change arming state. Use a login that can arm/disarm, or keep it read-only for monitoring.
 
 ## Security
 

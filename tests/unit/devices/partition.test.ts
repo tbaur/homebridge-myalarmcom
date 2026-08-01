@@ -153,7 +153,7 @@ describe('PartitionAccessory', () => {
 
       expect(targetCharacteristic().props.perms).toEqual(['pr', 'ev'])
       expect(messagesAt(log, 'warn')).toEqual([
-        'The Alarm.com account cannot change the arming state of "Home". It is exposed to HomeKit as read-only.',
+        'The Alarm.com account used cannot change the arming state of "Home".',
       ])
     })
 
@@ -354,7 +354,7 @@ describe('PartitionAccessory', () => {
       await expect(requestTarget(HomeKitSecurityTarget.AWAY_ARM))
         .rejects.toBe(HAPStatus.INSUFFICIENT_PRIVILEGES)
       expect(bed.commandPartition).not.toHaveBeenCalled()
-      expect(messagesAt(log, 'error').join('\n')).toMatch(/does not have permission/)
+      expect(messagesAt(log, 'error').join('\n')).toMatch(/account used cannot change the arming state/)
     })
 
     it('rejects a target state that maps to no command', async () => {
