@@ -363,14 +363,25 @@ export class EventStream {
     }
   }
 
-  /** Close the current socket without scheduling a drop-reconnect. */
+  /**
+   * Close the current socket without scheduling a drop-reconnect.
+   *
+   * Must tolerate every readyState. Aborting a CONNECTING handshake makes `ws`
+   * emit `'error'` (via `abortHandshake` / `nextTick`); after
+   * `removeAllListeners()` that becomes an uncaught exception and kills the
+   * child bridge. Keep a no-op listener through `close()`.
+   */
   #disposeSocket(): void {
     if (!this.#socket) {
       return
     }
-    this.#socket.removeAllListeners()
-    this.#socket.close()
+    const socket = this.#socket
     this.#socket = null
+    socket.removeAllListeners()
+    socket.on('error', () => {})
+    if (socket.readyState !== WebSocket.CLOSED) {
+      socket.close()
+    }
   }
 
   /**

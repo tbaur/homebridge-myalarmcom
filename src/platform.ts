@@ -176,7 +176,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     }
 
     this.#startDiagnostics()
-    this.#log.info('Ready')
+    this.#log.info('Platform Ready')
   }
 
   /**

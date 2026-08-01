@@ -137,7 +137,7 @@ class MyAlarmComPlatform {
             return;
         }
         this.#startDiagnostics();
-        this.#log.info('Ready');
+        this.#log.info('Platform Ready');
     }
     /**
      * Discover devices, retrying transient failures until success or shutdown.
