@@ -101,12 +101,12 @@ Lights, locks, thermostats, garage door *openers*, cameras, and doorbells are no
 | `username`                  | —       | Required. Alarm.com email address.                                               |
 | `password`                  | —       | Required. Alarm.com password.                                                    |
 | `twoFactorAuthenticationId` | —       | Browser cookie from [docs/AUTH.md](docs/AUTH.md). Required when 2FA is enabled. |
-| `pollIntervalSeconds`       | `60`    | Full state refresh interval. Values below 60 are raised to 60.                   |
-| `authIntervalMinutes`       | `10`    | Session reuse before signing in again. Values below 10 are raised to 10.         |
+| `pollIntervalSeconds`       | `60`    | Full state refresh interval. Clamped to `60`–`86400` (24h).                      |
+| `authIntervalMinutes`       | `10`    | Session reuse before signing in again. Clamped to `10`–`1440` (24h).             |
 | `useEventStream`            | `true`  | Subscribe to push events. Polling continues regardless.                          |
 | `includeUnmonitoredSensors` | `false` | Expose sensors Alarm.com reports as unmonitored.                                 |
 | `ignoredDeviceIds`          | `[]`    | Device IDs to leave out of HomeKit. IDs are printed during discovery.            |
-| `diagnosticsInterval`       | `0`     | Seconds between health heartbeats in the log; `0` off, else `30`–`3600`.         |
+| `diagnosticsInterval`       | `0`     | Seconds between health heartbeats in the log; `0` off, else `30`–`86400` (24h).  |
 | `debug`                     | `false` | Verbose logging. Credentials are redacted.                                       |
 
 ## Not Working?

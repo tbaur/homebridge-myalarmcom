@@ -44,14 +44,22 @@
         "type": "integer",
         "default": 60,
         "minimum": 60,
-        "description": "How often to re-read all device state. Values below 60 seconds are raised to 60. Typical values are 60–3600."
+        "maximum": 86400,
+        "x-schema-form": {
+          "type": "number"
+        },
+        "description": "How often to re-read all device state. Allowed range 60–86400 (24h). Values outside that range are clamped."
       },
       "authIntervalMinutes": {
         "title": "Re-authentication Interval (minutes)",
         "type": "integer",
         "default": 10,
         "minimum": 10,
-        "description": "How long a session is reused before signing in again. Values below 10 minutes are raised to 10. Typical values are 10–1440."
+        "maximum": 1440,
+        "x-schema-form": {
+          "type": "number"
+        },
+        "description": "How long a session is reused before signing in again. Allowed range 10–1440 (24h). Values outside that range are clamped."
       },
       "useEventStream": {
         "title": "Use push events",
@@ -87,7 +95,11 @@
         "type": "integer",
         "default": 0,
         "minimum": 0,
-        "description": "Seconds between health/activity heartbeats in the Homebridge log. `0` disables (default). Values 1–29 are raised to 30; values above 3600 are rejected. Boot and shutdown snapshots are included when enabled. Credentials are never included."
+        "maximum": 86400,
+        "x-schema-form": {
+          "type": "number"
+        },
+        "description": "Seconds between health/activity heartbeats in the Homebridge log. `0` disables (default). Allowed range 0–86400 (24h); values 1–29 are raised to 30. Boot and shutdown snapshots are included when enabled. Credentials are never included."
       }
     }
   },
@@ -120,7 +132,22 @@
       "title": "Advanced",
       "expandable": true,
       "expanded": false,
-      "items": ["useEventStream", "pollIntervalSeconds", "authIntervalMinutes", "diagnosticsInterval", "debug"]
+      "items": [
+        "useEventStream",
+        {
+          "key": "pollIntervalSeconds",
+          "type": "number"
+        },
+        {
+          "key": "authIntervalMinutes",
+          "type": "number"
+        },
+        {
+          "key": "diagnosticsInterval",
+          "type": "number"
+        },
+        "debug"
+      ]
     }
   ]
 }

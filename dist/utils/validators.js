@@ -22,8 +22,6 @@ const TOTP_CODE_PATTERN = /^\d{6}$/;
 const MIN_MFA_COOKIE_LENGTH = 20;
 /** Shortest allowed diagnostics heartbeat when the feature is enabled. */
 const MIN_DIAGNOSTICS_INTERVAL_SEC = 30;
-/** Longest allowed diagnostics heartbeat. */
-const MAX_DIAGNOSTICS_INTERVAL_SEC = 3600;
 function requireNonEmptyString(value, field) {
     if (typeof value !== 'string' || value.trim().length === 0) {
         throw new errors_1.ConfigurationError(`"${field}" is required in the ${settings_1.PLATFORM_NAME} platform config`);
@@ -31,12 +29,13 @@ function requireNonEmptyString(value, field) {
     return value.trim();
 }
 /**
- * Clamp a numeric setting to its floor, recording a warning if it was raised.
+ * Clamp a numeric setting into [floor, ceiling], recording a warning if adjusted.
  *
  * Silently correcting would leave the user believing their configured interval
  * is in effect; refusing to start over a too-eager poll interval would be worse.
+ * Config.json edits that skip the UI still need the same bounds.
  */
-function clampToFloor(value, { field, fallback, floor, unit, warnings }) {
+function clampToRange(value, { field, fallback, floor, ceiling, unit, warnings }) {
     if (value === undefined || value === null) {
         return fallback;
     }
@@ -48,6 +47,10 @@ function clampToFloor(value, { field, fallback, floor, unit, warnings }) {
         warnings.push(`"${field}" was raised from ${value} to ${floor} ${unit}. Alarm.com may lock accounts that poll or re-authenticate more aggressively than this.`);
         return floor;
     }
+    if (value > ceiling) {
+        warnings.push(`"${field}" was lowered from ${value} to ${ceiling} ${unit}.`);
+        return ceiling;
+    }
     return value;
 }
 function parseBoolean(value, fallback) {
@@ -56,8 +59,9 @@ function parseBoolean(value, fallback) {
 /**
  * Parse the diagnostics heartbeat interval.
  *
- * `0` (or omitted) disables emission. Sub-floor positive values are raised to
- * the minimum rather than rejected, matching the poll-interval clamp.
+ * `0` (or omitted) disables emission. Out-of-range positive values are clamped
+ * (floor 30s, ceiling one day) with a warning rather than rejecting startup —
+ * a mistyped interval must not take the child bridge down.
  */
 function parseDiagnosticsInterval(value, warnings) {
     if (value === undefined || value === null) {
@@ -72,8 +76,9 @@ function parseDiagnosticsInterval(value, warnings) {
     if (value < 0) {
         throw new errors_1.ConfigurationError('"diagnosticsInterval" cannot be negative');
     }
-    if (value > MAX_DIAGNOSTICS_INTERVAL_SEC) {
-        throw new errors_1.ConfigurationError(`"diagnosticsInterval" cannot exceed ${MAX_DIAGNOSTICS_INTERVAL_SEC} seconds`);
+    if (value > settings_1.MAX_DIAGNOSTICS_INTERVAL_SEC) {
+        warnings.push(`"diagnosticsInterval" was lowered from ${value} to ${settings_1.MAX_DIAGNOSTICS_INTERVAL_SEC} seconds (24h maximum).`);
+        return settings_1.MAX_DIAGNOSTICS_INTERVAL_SEC;
     }
     if (value < MIN_DIAGNOSTICS_INTERVAL_SEC) {
         warnings.push(`"diagnosticsInterval" was raised from ${value} to ${MIN_DIAGNOSTICS_INTERVAL_SEC} seconds.`);
@@ -130,17 +135,19 @@ function validateConfig(raw) {
         username: requireNonEmptyString(raw.username, 'username'),
         password: requireNonEmptyString(raw.password, 'password'),
         twoFactorAuthenticationId: parseMfaCookie(raw.twoFactorAuthenticationId, warnings),
-        pollIntervalSeconds: clampToFloor(raw.pollIntervalSeconds, {
+        pollIntervalSeconds: clampToRange(raw.pollIntervalSeconds, {
             field: 'pollIntervalSeconds',
             fallback: settings_1.DEFAULT_POLL_INTERVAL_SEC,
             floor: settings_1.MIN_POLL_INTERVAL_SEC,
+            ceiling: settings_1.MAX_POLL_INTERVAL_SEC,
             unit: 'seconds',
             warnings,
         }),
-        authIntervalMinutes: clampToFloor(raw.authIntervalMinutes, {
+        authIntervalMinutes: clampToRange(raw.authIntervalMinutes, {
             field: 'authIntervalMinutes',
             fallback: settings_1.DEFAULT_AUTH_INTERVAL_MIN,
             floor: settings_1.MIN_AUTH_INTERVAL_MIN,
+            ceiling: settings_1.MAX_AUTH_INTERVAL_MIN,
             unit: 'minutes',
             warnings,
         }),

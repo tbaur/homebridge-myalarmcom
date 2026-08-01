@@ -16,6 +16,9 @@ import { ConfigurationError } from '../errors'
 import {
   DEFAULT_AUTH_INTERVAL_MIN,
   DEFAULT_POLL_INTERVAL_SEC,
+  MAX_AUTH_INTERVAL_MIN,
+  MAX_DIAGNOSTICS_INTERVAL_SEC,
+  MAX_POLL_INTERVAL_SEC,
   MIN_AUTH_INTERVAL_MIN,
   MIN_POLL_INTERVAL_SEC,
   PLATFORM_NAME,
@@ -35,9 +38,6 @@ const MIN_MFA_COOKIE_LENGTH = 20
 /** Shortest allowed diagnostics heartbeat when the feature is enabled. */
 const MIN_DIAGNOSTICS_INTERVAL_SEC = 30
 
-/** Longest allowed diagnostics heartbeat. */
-const MAX_DIAGNOSTICS_INTERVAL_SEC = 3600
-
 function requireNonEmptyString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
     throw new ConfigurationError(`"${field}" is required in the ${PLATFORM_NAME} platform config`)
@@ -46,17 +46,19 @@ function requireNonEmptyString(value: unknown, field: string): string {
 }
 
 /**
- * Clamp a numeric setting to its floor, recording a warning if it was raised.
+ * Clamp a numeric setting into [floor, ceiling], recording a warning if adjusted.
  *
  * Silently correcting would leave the user believing their configured interval
  * is in effect; refusing to start over a too-eager poll interval would be worse.
+ * Config.json edits that skip the UI still need the same bounds.
  */
-function clampToFloor(
+function clampToRange(
   value: unknown,
-  { field, fallback, floor, unit, warnings }: {
+  { field, fallback, floor, ceiling, unit, warnings }: {
     field: string
     fallback: number
     floor: number
+    ceiling: number
     unit: string
     warnings: string[]
   },
@@ -77,6 +79,13 @@ function clampToFloor(
     return floor
   }
 
+  if (value > ceiling) {
+    warnings.push(
+      `"${field}" was lowered from ${value} to ${ceiling} ${unit}.`,
+    )
+    return ceiling
+  }
+
   return value
 }
 
@@ -87,8 +96,9 @@ function parseBoolean(value: unknown, fallback: boolean): boolean {
 /**
  * Parse the diagnostics heartbeat interval.
  *
- * `0` (or omitted) disables emission. Sub-floor positive values are raised to
- * the minimum rather than rejected, matching the poll-interval clamp.
+ * `0` (or omitted) disables emission. Out-of-range positive values are clamped
+ * (floor 30s, ceiling one day) with a warning rather than rejecting startup —
+ * a mistyped interval must not take the child bridge down.
  */
 function parseDiagnosticsInterval(value: unknown, warnings: string[]): number {
   if (value === undefined || value === null) {
@@ -108,9 +118,10 @@ function parseDiagnosticsInterval(value: unknown, warnings: string[]): number {
   }
 
   if (value > MAX_DIAGNOSTICS_INTERVAL_SEC) {
-    throw new ConfigurationError(
-      `"diagnosticsInterval" cannot exceed ${MAX_DIAGNOSTICS_INTERVAL_SEC} seconds`,
+    warnings.push(
+      `"diagnosticsInterval" was lowered from ${value} to ${MAX_DIAGNOSTICS_INTERVAL_SEC} seconds (24h maximum).`,
     )
+    return MAX_DIAGNOSTICS_INTERVAL_SEC
   }
 
   if (value < MIN_DIAGNOSTICS_INTERVAL_SEC) {
@@ -188,17 +199,19 @@ export function validateConfig(raw: MyAlarmComPlatformConfig): ConfigValidationR
     username: requireNonEmptyString(raw.username, 'username'),
     password: requireNonEmptyString(raw.password, 'password'),
     twoFactorAuthenticationId: parseMfaCookie(raw.twoFactorAuthenticationId, warnings),
-    pollIntervalSeconds: clampToFloor(raw.pollIntervalSeconds, {
+    pollIntervalSeconds: clampToRange(raw.pollIntervalSeconds, {
       field: 'pollIntervalSeconds',
       fallback: DEFAULT_POLL_INTERVAL_SEC,
       floor: MIN_POLL_INTERVAL_SEC,
+      ceiling: MAX_POLL_INTERVAL_SEC,
       unit: 'seconds',
       warnings,
     }),
-    authIntervalMinutes: clampToFloor(raw.authIntervalMinutes, {
+    authIntervalMinutes: clampToRange(raw.authIntervalMinutes, {
       field: 'authIntervalMinutes',
       fallback: DEFAULT_AUTH_INTERVAL_MIN,
       floor: MIN_AUTH_INTERVAL_MIN,
+      ceiling: MAX_AUTH_INTERVAL_MIN,
       unit: 'minutes',
       warnings,
     }),

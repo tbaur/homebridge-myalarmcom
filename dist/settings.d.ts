@@ -104,6 +104,8 @@ export declare const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 export declare const MIN_POLL_INTERVAL_SEC = 60;
 /** Default polling interval when the user does not choose one. */
 export declare const DEFAULT_POLL_INTERVAL_SEC = 60;
+/** Cap on the polling interval, in seconds (one day). */
+export declare const MAX_POLL_INTERVAL_SEC = 86400;
 /**
  * Floor on how often a full re-authentication may occur, in minutes.
  *
@@ -113,6 +115,15 @@ export declare const DEFAULT_POLL_INTERVAL_SEC = 60;
 export declare const MIN_AUTH_INTERVAL_MIN = 10;
 /** Default session lifetime before re-authenticating, in minutes. */
 export declare const DEFAULT_AUTH_INTERVAL_MIN = 10;
+/** Cap on the re-authentication interval, in minutes (one day). */
+export declare const MAX_AUTH_INTERVAL_MIN = 1440;
+/**
+ * Cap on the diagnostics heartbeat interval, in seconds (one day).
+ *
+ * Heartbeats denser than this are fine; rarer ones are clamped down so a typo
+ * cannot silently disable useful logging for weeks.
+ */
+export declare const MAX_DIAGNOSTICS_INTERVAL_SEC = 86400;
 /** How often to touch {@link KEEPALIVE_URL} to hold the session open. */
 export declare const KEEPALIVE_INTERVAL_MS: number;
 /**

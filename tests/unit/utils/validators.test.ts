@@ -103,6 +103,13 @@ describe('the poll interval', () => {
     expect(warnings).toEqual([])
   })
 
+  it('lowers values above the one-day ceiling with a warning', () => {
+    const { config, warnings } = validateConfig(configWith({ pollIntervalSeconds: 100_000 }))
+
+    expect(config.pollIntervalSeconds).toBe(86_400)
+    expect(warnings.join('\n')).toMatch(/"pollIntervalSeconds" was lowered from 100000 to 86400 seconds/)
+  })
+
   it('falls back to the default when the value is not a number', () => {
     const { config, warnings } = validateConfig(configWith({ pollIntervalSeconds: 'often' }))
 
@@ -129,6 +136,13 @@ describe('the re-authentication interval', () => {
     const { config } = validateConfig(configWith({ authIntervalMinutes: 45 }))
 
     expect(config.authIntervalMinutes).toBe(45)
+  })
+
+  it('lowers values above the one-day ceiling with a warning', () => {
+    const { config, warnings } = validateConfig(configWith({ authIntervalMinutes: 10_000 }))
+
+    expect(config.authIntervalMinutes).toBe(1_440)
+    expect(warnings.join('\n')).toMatch(/"authIntervalMinutes" was lowered from 10000 to 1440 minutes/)
   })
 })
 
@@ -220,8 +234,18 @@ describe('diagnosticsInterval', () => {
     expect(warnings[0]).toMatch(/diagnosticsInterval/)
   })
 
-  it('rejects values above the ceiling', () => {
-    expect(() => validateConfig(configWith({ diagnosticsInterval: 3601 }))).toThrow(ConfigurationError)
+  it('accepts multi-hour intervals within the one-day ceiling', () => {
+    const { config, warnings } = validateConfig(configWith({ diagnosticsInterval: 10_800 }))
+
+    expect(config.diagnosticsInterval).toBe(10_800)
+    expect(warnings).toEqual([])
+  })
+
+  it('lowers values above the one-day ceiling with a warning', () => {
+    const { config, warnings } = validateConfig(configWith({ diagnosticsInterval: 100_000 }))
+
+    expect(config.diagnosticsInterval).toBe(86_400)
+    expect(warnings[0]).toMatch(/lowered from 100000 to 86400/)
   })
 
   it('rejects non-numbers', () => {
