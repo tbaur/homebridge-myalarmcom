@@ -209,7 +209,10 @@ describe('discovering an Alarm.com account', () => {
     platform.configureAccessory(stale as never)
 
     api.emit('didFinishLaunching')
-    await waitFor(() => api.unregistered.length > 0, { description: 'the stale accessory to be removed' })
+    // Wait for Ready, not only unregister: stale removal runs mid-discovery, and
+    // returning early left getPartitions/getSensors in flight to steal the next
+    // test's nock interceptors (flake: next test timed out on discovery).
+    await waitForDiscovery()
 
     expect(api.unregistered).toContain(stale)
   })

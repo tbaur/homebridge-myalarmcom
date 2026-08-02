@@ -571,19 +571,25 @@ class MyAlarmComPlatform {
         });
     }
     #shutdown() {
+        if (this.#isShuttingDown) {
+            return;
+        }
         this.#isShuttingDown = true;
         const resolveStartupRetry = this.#startupRetryResolve;
         this.#startupRetryResolve = null;
         resolveStartupRetry?.();
-        if (this.#diagnosticsTimer) {
+        // Clear the heartbeat before emitting stop so a re-entrant shutdown cannot
+        // print Diagnostics stop twice from the same instance.
+        const diagnosticsTimer = this.#diagnosticsTimer;
+        this.#diagnosticsTimer = null;
+        if (diagnosticsTimer) {
+            clearInterval(diagnosticsTimer);
             try {
                 this.#emitDiagnostic('info', this.#diagnostics.snapshot('diagnostics.stop', this.#buildDiagnosticsReaders()));
             }
             catch (error) {
                 this.#log.debug(`Failed to emit diagnostics stop snapshot: ${(0, sanitizers_1.sanitizeError)(error)}`);
             }
-            clearInterval(this.#diagnosticsTimer);
-            this.#diagnosticsTimer = null;
         }
         for (const timer of [this.#pollTimer, this.#keepAliveTimer, this.#refreshTimer]) {
             if (timer) {
