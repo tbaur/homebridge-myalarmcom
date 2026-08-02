@@ -263,16 +263,18 @@ describe('re-enumerating the account while running', () => {
    * it displaced the ordinary refresh too, so HomeKit went stale as well.
    */
   it('does not re-enumerate on every poll after a rediscovery fails', async () => {
-    await launch()
+    // 403 rediscovery failures log at debug; enable it so the signal is visible.
+    await launch({ debug: true })
 
     // One refusal, and nothing offered after it: a second enumeration would
     // find no interceptor and be reported as a second failure.
     nock(BASE_URL).get(SYSTEM_PATH).reply(403, '{"errors":["Forbidden"]}')
     await waitOutRediscoveryInterval()
     poll()
-    await waitFor(() => log.errors.some((error) => error.includes('Rediscovery failed')), {
-      description: 'the failed rediscovery to be reported',
-    })
+    await waitFor(
+      () => log.debugMessages.some((message) => message.includes('Rediscovery failed')),
+      { description: 'the failed rediscovery to be reported' },
+    )
 
     // The next poll comes before the interval is up, so it is an ordinary
     // refresh rather than another enumeration.
@@ -280,7 +282,8 @@ describe('re-enumerating the account while running', () => {
     poll()
     await waitFor(() => sensorReads.length > 0, { description: 'the ordinary poll to run' })
 
-    expect(log.errors.filter((error) => error.includes('Rediscovery failed'))).toHaveLength(1)
+    expect(log.debugMessages.filter((message) => message.includes('Rediscovery failed'))).toHaveLength(1)
+    expect(log.errors.filter((error) => error.includes('Rediscovery failed'))).toHaveLength(0)
     expect(sensorReads[0]).toContain(FRONT_DOOR)
   })
 })

@@ -9,6 +9,7 @@ import {
   AuthenticationError,
   CircuitBreakerError,
   ConfigurationError,
+  ForbiddenError,
   NetworkError,
 } from '../../../src/errors'
 import { failureLogLevel } from '../../../src/utils/failure-log-level'
@@ -16,6 +17,12 @@ import { failureLogLevel } from '../../../src/utils/failure-log-level'
 describe('failureLogLevel', () => {
   it('keeps open-circuit failures at debug so polls do not ERROR-spam', () => {
     expect(failureLogLevel(new CircuitBreakerError(30_000))).toBe('debug')
+  })
+
+  it('keeps 403s at debug; the circuit breaker surfaces sustained denials', () => {
+    expect(
+      failureLogLevel(new ForbiddenError('Alarm.com returned 403 for https://www.alarm.com/web/api/devices/partitions')),
+    ).toBe('debug')
   })
 
   it('keeps ordinary retryable failures at debug', () => {
