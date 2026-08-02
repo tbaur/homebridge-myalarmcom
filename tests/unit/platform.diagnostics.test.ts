@@ -154,6 +154,16 @@ describe('platform diagnostics', () => {
     expect(log.infoMessages.some((message) => message.includes('Diagnostics stop'))).toBe(true)
   })
 
+  it('emits Diagnostics stop only once when shutdown is signaled twice', async () => {
+    await launch({ diagnosticsInterval: 60 })
+    log.infoMessages.length = 0
+
+    api.emit('shutdown')
+    api.emit('shutdown')
+
+    expect(log.infoMessages.filter((message) => message.includes('Diagnostics stop'))).toHaveLength(1)
+  })
+
   it('logs a degraded transition when the circuit breaker opens', async () => {
     await launch({ diagnosticsInterval: 60 })
     expect(diagnosticsHeartbeat).not.toBeNull()

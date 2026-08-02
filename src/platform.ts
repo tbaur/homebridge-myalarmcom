@@ -705,13 +705,21 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   }
 
   #shutdown(): void {
+    if (this.#isShuttingDown) {
+      return
+    }
     this.#isShuttingDown = true
 
     const resolveStartupRetry = this.#startupRetryResolve
     this.#startupRetryResolve = null
     resolveStartupRetry?.()
 
-    if (this.#diagnosticsTimer) {
+    // Clear the heartbeat before emitting stop so a re-entrant shutdown cannot
+    // print Diagnostics stop twice from the same instance.
+    const diagnosticsTimer = this.#diagnosticsTimer
+    this.#diagnosticsTimer = null
+    if (diagnosticsTimer) {
+      clearInterval(diagnosticsTimer)
       try {
         this.#emitDiagnostic(
           'info',
@@ -720,8 +728,6 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       } catch (error) {
         this.#log.debug(`Failed to emit diagnostics stop snapshot: ${sanitizeError(error)}`)
       }
-      clearInterval(this.#diagnosticsTimer)
-      this.#diagnosticsTimer = null
     }
 
     for (const timer of [this.#pollTimer, this.#keepAliveTimer, this.#refreshTimer]) {
