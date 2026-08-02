@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.13](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.12...v0.1.13) (2026-08-02)
+
+
+### Bug Fixes
+
+* idempotent shutdown and discovery test race ([#31](https://github.com/tbaur/homebridge-myalarmcom/issues/31)) ([8be6dc7](https://github.com/tbaur/homebridge-myalarmcom/commit/8be6dc7b649111e4b0c7672d5f6f74c0db2e21ad))
+
 ## [0.1.12](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.11...v0.1.12) (2026-08-02)
 
 
