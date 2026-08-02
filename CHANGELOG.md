@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.12](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.11...v0.1.12) (2026-08-02)
+
+
+### Bug Fixes
+
+* demote Alarm.com 403 poll failures to debug ([#29](https://github.com/tbaur/homebridge-myalarmcom/issues/29)) ([f3464df](https://github.com/tbaur/homebridge-myalarmcom/commit/f3464df3dc839c4c30d5258f21249ab4d8379ba9))
+
 ## [0.1.11](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.10...v0.1.11) (2026-08-01)
 
 
