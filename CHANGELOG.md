@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.0...v1.0.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* make-before-break event stream refresh cutover ([#38](https://github.com/tbaur/homebridge-myalarmcom/issues/38)) ([e677c84](https://github.com/tbaur/homebridge-myalarmcom/commit/e677c846f07180cc7b75f15354681e3fa8971f9a))
+
 ## [1.0.0](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.14...v1.0.0) (2026-08-05)
 
 
