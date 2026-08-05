@@ -143,7 +143,7 @@ Review the log first. Credentials and cookies are redacted, but device names and
 ### Reading a `Health:` line
 
 ```
-Health: healthy | v0.1.13 up 3600s | devices 1p/19s | ws connected | api p50 120ms p95 410ms (req 42, err 0 this interval)
+Health: healthy | v1.0.0 up 3600s | devices 1p/19s | ws connected | api p50 120ms p95 410ms (req 42, err 0 this interval)
 ```
 
 | Field | Meaning |

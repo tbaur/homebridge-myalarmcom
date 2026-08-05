@@ -7,14 +7,14 @@ Releases are fully automated with [release-please](https://github.com/googleapis
 1. A branch is created and changes are committed.
 2. A PR is opened with a **Conventional Commit title**. The title determines the next version when the PR is squash-merged into `main`:
 
-   | PR title prefix                                   | Example                                | Version bump (pre-1.0) |
-   | ------------------------------------------------- | -------------------------------------- | ---------------------- |
-   | `fix:`, `perf:`                                   | `fix: handle 409 two-factor challenge` | patch (0.1.0 → 0.1.1)  |
-   | `feat:`                                           | `feat: add night arming support`       | patch (0.1.0 → 0.1.1)  |
-   | `feat!:` / `fix!:` or a `BREAKING CHANGE:` footer | `feat!: drop Node 20`                  | minor (0.1.0 → 0.2.0)  |
-   | `chore:`, `docs:`, `refactor:`, `test:`, `ci:`    | `docs: fix typo`                       | no release             |
+   | PR title prefix                                   | Example                                | Version bump |
+   | ------------------------------------------------- | -------------------------------------- | ------------ |
+   | `fix:`, `perf:`                                   | `fix: handle 409 two-factor challenge` | patch (1.0.0 → 1.0.1) |
+   | `feat:`                                           | `feat: add night arming support`       | minor (1.0.0 → 1.1.0) |
+   | `feat!:` / `fix!:` or a `BREAKING CHANGE:` footer | `feat!: drop Node 20`                  | major (1.0.0 → 2.0.0) |
+   | `chore:`, `docs:`, `refactor:`, `test:`, `ci:`    | `docs: fix typo`                       | no release |
 
-   The bumps above are damped while the version is below `1.0.0`, because `release-please-config.json` sets `bump-minor-pre-major` and `bump-patch-for-minor-pre-major`. A `0.x` release therefore never implies API stability that does not exist yet. Once `1.0.0` ships, the same prefixes resume their normal meaning: `feat:` becomes a minor bump and a breaking change becomes a major one.
+   From `1.0.0` onward these are normal SemVer meanings: a `feat:` is a minor bump and a breaking change is a major bump. The repo still sets `bump-minor-pre-major` / `bump-patch-for-minor-pre-major` in `release-please-config.json`, but those only damp bumps while the version is below `1.0.0`.
 
 3. The **Tests** workflow runs on the PR (matrix: Node 20, 22, 24, plus a security audit). The PR is squash-merged to `main`.
 4. **release-please** opens or updates a **Release PR** titled `chore(main): release X.Y.Z`. It carries the version bump in `package.json` and the generated `CHANGELOG.md` entries. Multiple code PRs merged before a release are batched into one Release PR.
@@ -53,6 +53,26 @@ Publishing uses **npm Trusted Publishing (OIDC)** — there is no `NPM_TOKEN` se
 - GitHub Actions publisher: organization/user `tbaur`, repository `homebridge-myalarmcom`, workflow `release.yml`, no environment.
 
 This link only needs to exist before the first Release PR is merged; it does not need to be reconfigured per release.
+
+## Forcing a version
+
+To ship an exact version (for example graduating `0.x` to `1.0.0`), put a `Release-As:` footer on the squash commit that lands on `main`:
+
+```text
+feat: graduate to 1.0.0
+
+Release-As: 1.0.0
+```
+
+This repository's squash merge setting uses the PR title as the subject and a **blank** body, so a footer in the PR description alone is discarded. When merging with `gh`, pass the footer explicitly:
+
+```bash
+gh pr merge <n> --squash \
+  --subject "feat: graduate to 1.0.0" \
+  --body "Release-As: 1.0.0"
+```
+
+release-please then opens a Release PR for that version. Do not hand-edit `package.json`, `.release-please-manifest.json`, or `CHANGELOG.md`.
 
 ## Notes
 
