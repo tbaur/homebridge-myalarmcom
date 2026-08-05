@@ -409,8 +409,11 @@ describe('previewSecret', () => {
 
     // A band, not the exact length: the log needs to distinguish a real token
     // from a truncated paste, not publish one more fact about the credential.
+    // Do not assert the digit string of the exact length is absent from the
+    // whole preview — the random scrypt fingerprint can collide with it
+    // (e.g. length 28 vs `scrypt:…28`), which flakes CI without leaking the
+    // credential. The band regex already proves the exact length is not shown.
     expect(preview).toMatch(/^\(20-49 chars, scrypt:[0-9a-f]{8}\)$/)
-    expect(preview).not.toContain(String(TRUST_TOKEN.length))
     expect(preview).not.toContain(TRUST_TOKEN)
     // Not even a fragment. A log is no place to spend a credential's entropy.
     expect(preview).not.toContain(TRUST_TOKEN.slice(-4))
