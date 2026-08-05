@@ -150,13 +150,14 @@ describe('platform lifecycle', () => {
   describe('shutdown', () => {
     it('clears the poll and keep-alive intervals it armed', async () => {
       const armed: unknown[] = []
-      const realSetInterval = global.setInterval
+      const realSetInterval = global.setInterval.bind(global)
       jest.spyOn(global, 'setInterval').mockImplementation(((
         handler: Parameters<typeof setInterval>[0],
         delay?: number,
-        ...rest: unknown[]
       ) => {
-        const handle = realSetInterval(handler, delay, ...rest)
+        // Omit rest args: @types/node types them as `void | undefined`, so
+        // spreading `unknown[]` fails typecheck under the locked 20.x types.
+        const handle = realSetInterval(handler as () => void, delay)
         if (delay === POLL_INTERVAL_SEC * 1_000 || delay === KEEPALIVE_INTERVAL_MS) {
           armed.push(handle)
         }
