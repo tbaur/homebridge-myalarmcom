@@ -28,7 +28,7 @@ Anyone who has the cookie can sign in as you without your password and without a
 
 ## When it expires
 
-You will see a `TwoFactorRequiredError` in the log, together with an `[auth]` line telling you to copy a fresh cookie. The plugin will not keep retrying — repeated attempts against a two-factor challenge are what get Alarm.com accounts locked — so it re-reports the same problem rather than quietly backing off.
+You will see a `TwoFactorRequiredError` in the log, together with a line telling you to copy a fresh cookie. The plugin will not keep retrying — repeated attempts against a two-factor challenge are what get Alarm.com accounts locked — so it re-reports the same problem rather than quietly backing off.
 
 Repeat the steps above, then **restart Homebridge**. Configuration is read once at startup, so a new cookie in `config.json` has no effect until then.
 
