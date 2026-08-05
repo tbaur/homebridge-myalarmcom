@@ -255,12 +255,21 @@ export declare const PARTITION_TARGET_SETTLE_MS: number;
 /**
  * Deadline on the HomeKit-initiated arming command itself.
  *
- * HAP terminates a set handler after 10 seconds, so anything slower than that
- * is reported to the user as a failure regardless of what the panel does. The
- * worst case without a bound is far longer — up to 30s of pacing, plus a login,
- * plus the command POST — which showed the user a failed arm while the panel
- * armed anyway. Bounded below HAP's limit so the plugin gets to say what
- * happened rather than being cut off mid-request.
+ * HAP terminates a set handler after 10 seconds, so anything slower than that is
+ * reported to the user as a failure regardless of what the panel does. The worst
+ * case without a bound is far longer — up to 30s of pacing, plus a login, plus
+ * the command POST — which showed the user a failed arm while the panel armed
+ * anyway.
+ *
+ * Set just *under* HAP's limit rather than comfortably under it. Any deadline
+ * shorter than 10s turns a command that would have completed between the
+ * deadline and 10s into a reported failure, so that window should be as narrow
+ * as possible while still leaving the plugin time to log the outcome and return
+ * a specific status instead of being cut off mid-request.
+ *
+ * This is a judgement call, not a measurement: the command POST itself is fast
+ * (the 20-30s figure people quote is the panel *settling* afterwards), so the
+ * realistic way to exceed this is pacing plus an interposed sign-in.
  */
 export declare const PARTITION_COMMAND_DEADLINE_MS: number;
 /**

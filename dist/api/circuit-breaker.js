@@ -42,10 +42,18 @@ exports.DEFAULT_CIRCUIT_BREAKER_CONFIG = {
      */
     failureWindowMs: 5 * settings_1.MS_PER_MINUTE,
     /**
-     * Comfortably longer than one request's full retry budget.
+     * Wide enough to absorb one request's retries when they fail *fast*.
      *
-     * `MAX_API_RETRY_ATTEMPTS` attempts with jittered backoff from 1s, plus the
-     * 1s pacing gap between them, fits well inside this.
+     * `MAX_API_RETRY_ATTEMPTS` attempts with jittered backoff from 1s, plus the 1s
+     * pacing gap between them, fits inside this — which covers the case this
+     * exists for: a 4xx or a refused connection retried three times is one signal
+     * about the service, not three.
+     *
+     * It deliberately does *not* cover a request that fails by timing out, since
+     * three 30s timeouts span longer than any sane coalescing window. Those still
+     * count separately, and that is the right direction: a service that accepts
+     * connections and then never answers should open the breaker sooner than one
+     * returning fast errors, not later.
      */
     failureCoalesceMs: 15 * settings_1.MS_PER_SECOND,
 };

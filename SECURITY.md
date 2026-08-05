@@ -75,7 +75,7 @@ Every request identifies itself as `homebridge-myalarmcom/<version>` in its `Use
 
 Nothing else: no telemetry, no analytics, no crash reporting, no third party.
 
-Outbound traffic is paced at **one request per second and 60 per minute**, with a 30-second ceiling on how long a caller will be made to wait before the request is refused outright. A circuit breaker opens after 5 failing *requests* within 5 minutes — one failing request counts once however many times it retried — and then refuses requests locally for 30 seconds at a time.
+Outbound traffic is paced at **one request per second and 60 per minute**, with a 30-second ceiling on how long a caller will be made to wait before the request is refused outright. A circuit breaker opens after 5 failures within 5 minutes and then refuses requests locally for 30 seconds at a time. Failures within 15 seconds of each other count once, so one request retried three times against a fast-failing service is one signal rather than three; a request that fails by timing out takes longer than that and still counts each attempt, which opens the breaker sooner on a service that stops answering entirely.
 
 ## Account Lockout
 

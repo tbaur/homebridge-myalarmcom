@@ -11,7 +11,10 @@
     "noEmit": true,
     "declaration": false,
     "declarationMap": false,
-    "sourceMap": false
+    "sourceMap": false,
+    // Turned off with `sourceMap`, which it depends on. TypeScript rejects
+    // `inlineSources` without a map to inline them into.
+    "inlineSources": false
   },
   "include": ["src/**/*", "tests/**/*"],
   // The base config excludes `tests`, which would leave every test file out of

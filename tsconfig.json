@@ -13,6 +13,13 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
+    // Source text embedded in the maps rather than referenced from them.
+    // `src/` is not published, so a map whose `sources` point at `../../src/*.ts`
+    // resolves to nothing on a user's machine — the maps ship, and are useless.
+    // Embedding makes them self-contained, so a stack trace in someone's
+    // Homebridge log resolves to real TypeScript lines, which is the whole
+    // reason to ship maps for a plugin that is debugged remotely.
+    "inlineSources": true,
     "moduleResolution": "node",
     "types": ["node"],
     // Suppresses TS5107 for moduleResolution=node10, which stops working in
