@@ -24,7 +24,13 @@
  */
 /** Remove sensitive data from an arbitrary string. */
 export declare function sanitizeString(value: string): string;
-/** Convert an unknown thrown value into a sanitized, log-safe message. */
+/**
+ * Convert an unknown thrown value into a sanitized, log-safe message.
+ *
+ * The cause chain is walked, because the wrapper is rarely the useful half: a
+ * `NetworkError` saying "request failed" wraps the `ECONNREFUSED` that actually
+ * tells an operator what to fix.
+ */
 export declare function sanitizeError(err: unknown): string;
 /**
  * Render a value passed alongside a log message so it cannot leak a secret.
@@ -36,12 +42,23 @@ export declare function sanitizeError(err: unknown): string;
  */
 export declare function sanitizeLogParameter(value: unknown): unknown;
 /**
+ * Coarse size band for a secret.
+ *
+ * A band answers the only question a log needs ("does this look like a real
+ * token or a truncated paste?") without publishing the exact length, which is
+ * one more fact an attacker holding the log would not otherwise have.
+ */
+export declare function lengthBand(length: number): string;
+/**
  * Render a secret as a short, non-reversible fingerprint for diagnostics.
  *
  * Enough to tell "the token changed" or "the token is empty" apart in a log.
  * Never a slice of the secret itself: disclosing even four characters of a
  * credential buys no diagnostic power that a fingerprint does not, and a log
  * is not a place to spend any of a secret's entropy.
+ *
+ * CodeQL's password-hash query only accepts memory-hard KDFs for
+ * password-tainted values, which is why this is scrypt rather than an HMAC.
  */
 export declare function previewSecret(secret: string | undefined | null): string;
 /**

@@ -11,15 +11,14 @@
         "title": "Name",
         "type": "string",
         "default": "MyAlarmCom",
-        "required": true,
-        "description": "Name shown in the Homebridge log."
+        "required": false,
+        "description": "Name Homebridge shows for this platform in its log."
       },
       "username": {
         "title": "Username",
         "type": "string",
         "required": true,
-        "format": "email",
-        "description": "The email address you sign in to Alarm.com with."
+        "description": "The username you sign in to Alarm.com with. Usually an email address, but any Alarm.com login works."
       },
       "password": {
         "title": "Password",
@@ -37,7 +36,7 @@
         "x-schema-form": {
           "type": "password"
         },
-        "description": "The value of the `twoFactorAuthenticationId` browser cookie from a signed-in Alarm.com session. Treat this as a password: it bypasses two-factor authentication on its own. Leave blank only if the account has two-factor disabled."
+        "description": "The value of the `twoFactorAuthenticationId` browser cookie from a signed-in Alarm.com session. Treat this as a password: it bypasses two-factor authentication on its own. A six-digit authenticator code is rejected, as is a whole cookie header — paste only this one cookie’s value. Leave blank only if the account has two-factor disabled."
       },
       "pollIntervalSeconds": {
         "title": "Poll Interval (seconds)",
@@ -71,24 +70,25 @@
         "title": "Include unmonitored sensors",
         "type": "boolean",
         "default": false,
-        "description": "Expose sensors that Alarm.com reports as having monitoring disabled. These are hidden by default because their readings may not be maintained."
+        "description": "Expose sensors that Alarm.com reports as having monitoring disabled. These are hidden by default because their readings may not be maintained. Exposed sensors are marked inactive in HomeKit rather than appearing normal, because an unsupervised sensor’s state cannot be trusted."
       },
       "ignoredDeviceIds": {
         "title": "Ignored Device IDs",
         "type": "array",
         "required": false,
-        "description": "Alarm.com device IDs to leave out of HomeKit entirely. Device IDs appear in the Homebridge log during discovery.",
+        "description": "Alarm.com device IDs to leave out of HomeKit entirely. Each ID is shown in the log when its accessory is added, and is also the accessory’s Serial Number in the Home app.",
         "items": {
           "type": "string",
           "title": "Device ID",
           "placeholder": "e.g., 1234567-17"
-        }
+        },
+        "default": []
       },
       "debug": {
         "title": "Debug logging",
         "type": "boolean",
         "default": false,
-        "description": "Emit verbose diagnostics. Credentials and cookies are redacted, but review any log before sharing it publicly."
+        "description": "Emit verbose diagnostics. Also requires Homebridge Debug Mode (the -D flag, or Settings → Homebridge Debug Mode): Homebridge discards DEBUG lines otherwise, so this option alone produces no extra output. Credentials and cookies are redacted, but device names and Alarm.com identifiers are not, so a debug log describes your home’s layout and activity. Review any log before sharing it."
       },
       "diagnosticsInterval": {
         "title": "Diagnostics interval (seconds)",
@@ -99,7 +99,7 @@
         "x-schema-form": {
           "type": "number"
         },
-        "description": "Seconds between health/activity heartbeats in the Homebridge log. `0` disables (default). Allowed range 0–86400 (24h); values 1–29 are raised to 30. Boot and shutdown snapshots are included when enabled. Credentials are never included."
+        "description": "Seconds between health/activity heartbeats in the Homebridge log. `0` disables (default). Allowed range 0–86400 (24h); values 1–29 are raised to 30. At 30 that is roughly 2,880 lines a day, so prefer 300 or more unless you are actively debugging. Boot and shutdown snapshots are included when enabled. Credentials are never included."
       }
     }
   },
@@ -108,7 +108,12 @@
       "type": "fieldset",
       "title": "Account",
       "expandable": false,
-      "items": ["name", "username", "password", "twoFactorAuthenticationId"]
+      "items": [
+        "name",
+        "username",
+        "password",
+        "twoFactorAuthenticationId"
+      ]
     },
     {
       "type": "fieldset",

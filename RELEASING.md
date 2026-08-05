@@ -9,7 +9,7 @@ Releases are fully automated with [release-please](https://github.com/googleapis
 
    | PR title prefix                                   | Example                                | Version bump (pre-1.0) |
    | ------------------------------------------------- | -------------------------------------- | ---------------------- |
-   | `fix:`                                            | `fix: handle 409 two-factor challenge` | patch (0.1.0 → 0.1.1)  |
+   | `fix:`, `perf:`                                   | `fix: handle 409 two-factor challenge` | patch (0.1.0 → 0.1.1)  |
    | `feat:`                                           | `feat: add night arming support`       | patch (0.1.0 → 0.1.1)  |
    | `feat!:` / `fix!:` or a `BREAKING CHANGE:` footer | `feat!: drop Node 20`                  | minor (0.1.0 → 0.2.0)  |
    | `chore:`, `docs:`, `refactor:`, `test:`, `ci:`    | `docs: fix typo`                       | no release             |
@@ -21,9 +21,19 @@ Releases are fully automated with [release-please](https://github.com/googleapis
 5. Merging the Release PR triggers the `release.yml` workflow, which:
    - creates the `vX.Y.Z` git tag,
    - publishes a GitHub Release with the changelog notes,
-   - runs the `publish` job (build → lint → test → `npm publish` with provenance) on Node 24.
+   - runs the `publish` job (build → typecheck → lint → test → `npm publish --dry-run` → `npm publish --provenance --access public`) on Node 24.
 
 A release therefore reduces to: merge the code PR(s), then merge the Release PR.
+
+## Recovery
+
+`release.yml` has three triggers, so a run that failed after tagging does not need the tag deleting:
+
+- **Push to `main`** — the normal path; this is what release-please's merge produces.
+- **`release: published`** — publishing the GitHub Release by hand re-triggers the `publish` job. Use this when the tag and Release exist but the publish step failed.
+- **`workflow_dispatch`** — run it manually from the Actions tab.
+
+All three converge on the same `publish` job, which re-verifies build, typecheck, lint, and tests before publishing, so none of them can ship something untested.
 
 ## Branch protection
 
@@ -31,7 +41,7 @@ A release therefore reduces to: merge the code PR(s), then merge the Release PR.
 
 - **Require a pull request before merging** (0 required approvals) — keeps direct pushes off `main` without blocking a solo maintainer.
 - **Block force-pushes and deletions.**
-- **No required status checks.** The Tests workflow runs on every code PR and is visible there, but it is intentionally *not* a hard merge gate. The Release PR is opened by the built-in `GITHUB_TOKEN`, and GitHub does not trigger workflows for such PRs (loop prevention), so a required check would leave every Release PR permanently unmergeable. The `publish` job re-runs build → lint → test before `npm publish`, so releases are still gated on a green build.
+- **No required status checks.** The Tests workflow runs on every code PR and is visible there, but it is intentionally *not* a hard merge gate. The Release PR is opened by the built-in `GITHUB_TOKEN`, and GitHub does not trigger workflows for such PRs (loop prevention), so a required check would leave every Release PR permanently unmergeable. The `publish` job re-runs the whole gate — build, typecheck, lint, test — before `npm publish`, so releases are still gated on a green build. That job is deliberately not weaker than the one a code PR passes.
 
 > If enforced required checks on the Release PR are ever wanted, the only way to get them is to have release-please open its PR with a Personal Access Token instead of the built-in token, so the Tests workflow fires. That trades a stored secret for enforced checks; the current setup avoids the secret.
 
@@ -56,7 +66,9 @@ This link only needs to exist before the first Release PR is merged; it does not
 Manual publishing is rarely needed and bypasses CI provenance and manifest syncing. If unavoidable:
 
 ```bash
-npm run clean && npm run build && npm run lint && npm test
-npm publish --dry-run   # verify contents
-npm publish             # requires npm login + OTP
+npm run clean && npm run build && npm run lint && npm run typecheck && npm test
+npm publish --dry-run                  # verify contents
+npm publish --access public            # requires npm login + OTP
 ```
+
+Provenance is unavailable outside CI, so a manually published version carries none. Prefer the `release: published` recovery trigger above.

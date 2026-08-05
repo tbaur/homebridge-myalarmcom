@@ -20,8 +20,9 @@ import {
   type PartitionAttributes,
 } from '../../../src/types/alarm'
 import partitionsFixture from '../../fixtures/partitions.json'
+import { fixtureAt } from '../../helpers/fixtures'
 
-const livePanel = partitionsFixture.data[0].attributes as PartitionAttributes
+const livePanel = fixtureAt(partitionsFixture.data, 0, 'partitions').attributes as PartitionAttributes
 
 describe('readSensorState', () => {
   describe('pairings verified on live hardware', () => {
@@ -214,7 +215,7 @@ describe('supportsNightArming', () => {
   })
 
   it('is false when the panel reports no extended arming options at all', () => {
-    const attributes: PartitionAttributes = { ...livePanel, extendedArmingOptions: undefined }
+    const { extendedArmingOptions: _omitted, ...attributes } = livePanel
 
     expect(supportsNightArming(attributes)).toBe(false)
   })
@@ -243,7 +244,7 @@ describe('acceptsArmingModifier', () => {
   })
 
   it('rejects every modifier when the panel reports no extended arming options', () => {
-    const attributes: PartitionAttributes = { ...livePanel, extendedArmingOptions: undefined }
+    const { extendedArmingOptions: _omitted, ...attributes } = livePanel
 
     expect(acceptsArmingModifier(attributes, 'ArmedStay', ArmingModifier.FORCE_ARM)).toBe(false)
   })

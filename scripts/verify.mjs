@@ -29,46 +29,46 @@
 
 import { createRequire } from 'node:module'
 import { stdout } from 'node:process'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
+import { handleHelp, hasFlag, readFlag, readNumericFlag } from './lib/cli.mjs'
+import { createTerminalLogger, DIST_DIR, requireBuild } from './lib/plugin-logger.mjs'
 import { confirmPhrase, resolveCredentials } from './lib/prompt.mjs'
+import { redactFreeText } from './lib/scrub.mjs'
 
-const here = dirname(fileURLToPath(import.meta.url))
-const distDir = join(here, '..', 'dist')
+handleHelp(`
+Verify the compiled plugin against a live Alarm.com account.
+
+  node scripts/verify.mjs [options]
+
+  --listen <seconds>   How long to watch the event stream (default 90, max 3600).
+  --arm <mode>         Send one command: stay, away, or disarm. Requires typed
+                       confirmation.
+  --arm-cycle          Arm stay, watch it settle, then disarm. Always attempts a
+                       disarm on the way out, including after an interrupt.
+  --verbose            Include the plugin's debug lines.
+  -h, --help           Show this message.
+
+Everything except --arm and --arm-cycle is read-only.
+
+Output lists your device names and current door/window states: it is a floor
+plan of your house with the doors labelled. Review it before sharing.
+
+Credentials come from ADC_USERNAME, ADC_PASSWORD, and ADC_MFA_TOKEN, or are
+prompted for when a terminal is attached.
+`)
+
+requireBuild()
+
 const require = createRequire(import.meta.url)
-
-if (!existsSync(join(distDir, 'index.js'))) {
-  stdout.write('dist/ is missing. Run "npm run build" first.\n')
-  process.exit(1)
-}
-
-const { SessionManager } = require(join(distDir, 'api/session-manager.js'))
-const { AlarmComClient } = require(join(distDir, 'api/client.js'))
-const { EventStream } = require(join(distDir, 'api/event-stream.js'))
-const mappers = require(join(distDir, 'utils/mappers.js'))
-const alarmTypes = require(join(distDir, 'types/alarm.js'))
-const events = require(join(distDir, 'types/events.js'))
-
-/** Console-backed logger matching the interface the plugin expects. */
-const createLogger = (isVerbose) => ({
-  debug: (message) => {
-    if (isVerbose) {
-      stdout.write(`  · ${message}\n`)
-    }
-  },
-  info: (message) => stdout.write(`  · ${message}\n`),
-  warn: (message) => stdout.write(`  ! ${message}\n`),
-  error: (message) => stdout.write(`  ✗ ${message}\n`),
-})
+const { SessionManager } = require(join(DIST_DIR, 'api/session-manager.js'))
+const { AlarmComClient } = require(join(DIST_DIR, 'api/client.js'))
+const { EventStream } = require(join(DIST_DIR, 'api/event-stream.js'))
+const mappers = require(join(DIST_DIR, 'utils/mappers.js'))
+const alarmTypes = require(join(DIST_DIR, 'types/alarm.js'))
+const events = require(join(DIST_DIR, 'types/events.js'))
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
-function readFlag(name, fallback) {
-  const index = process.argv.indexOf(`--${name}`)
-  return index === -1 ? fallback : process.argv[index + 1]
-}
 
 /** Reverse an enum object into value -> name, for readable output. */
 function nameOf(enumObject, value) {
@@ -172,7 +172,7 @@ async function sendCommand(client, partitionId, action) {
     stdout.write(`  REFUSED: ${error?.constructor?.name ?? 'Error'}\n`)
     stdout.write(`    code       ${error?.code ?? '(none)'}\n`)
     stdout.write(`    httpStatus ${error?.httpStatus ?? '(none)'}\n`)
-    stdout.write(`    message    ${error?.message}\n`)
+    stdout.write(`    message    ${redactFreeText(error?.message ?? '(none)')}\n`)
     return false
   }
 }
@@ -213,11 +213,22 @@ async function armCycle(client, partition) {
     }
   }
 
+  // Deliberately re-entrant, and deliberately not `process.once`. The disarm
+  // polls for up to 90 seconds, and an operator watching a slow disarm is very
+  // likely to press Ctrl-C again — which with `once` reached Node's default
+  // handler and killed the process mid-disarm, leaving the house armed. That is
+  // exactly the outcome this whole block exists to prevent.
+  let isDisarmInFlight = false
   const onInterrupt = () => {
+    if (isDisarmInFlight) {
+      stdout.write('\n  Disarm already in progress; waiting for it to finish.\n')
+      return
+    }
+    isDisarmInFlight = true
     stdout.write('\n  Interrupted. Attempting disarm before exit.\n')
     disarm().finally(() => process.exit(1))
   }
-  process.once('SIGINT', onInterrupt)
+  process.on('SIGINT', onInterrupt)
 
   try {
     stdout.write('\n  Arming (stay)...\n')
@@ -234,10 +245,15 @@ async function armCycle(client, partition) {
       }
     }
   } finally {
-    process.removeListener('SIGINT', onInterrupt)
+    // The listener is removed *after* the disarm, not before. Removing it first
+    // left the up-to-90-second disarm poll completely unprotected: Ctrl-C during
+    // it reached Node's default handler and killed the process mid-disarm,
+    // leaving the house armed — the exact outcome the handler above exists to
+    // prevent, reintroduced by the ordering of its own cleanup.
     if (isArmed) {
       await disarm()
     }
+    process.removeListener('SIGINT', onInterrupt)
   }
 }
 
@@ -271,11 +287,19 @@ async function attemptArm(client, partition, mode) {
     const result = await client.commandPartition(partition.id, action, {})
     stdout.write(`  ACCEPTED. Panel reports state ${result?.attributes?.state}.\n`)
     stdout.write('  Arming takes 20-30s to settle; watch the events below.\n')
+
+    if (action !== 'disarm') {
+      // Said plainly, because this path installs no interrupt handler: unlike
+      // --arm-cycle, a single command is meant to leave the panel where it put
+      // it, and the operator is about to be told that Ctrl-C stops the script.
+      stdout.write('\n  NOTE: the panel is now armed and this script will NOT disarm it.\n')
+      stdout.write('        Ctrl-C stops the event listener only. Disarm from the app or panel.\n')
+    }
   } catch (error) {
     stdout.write(`  REFUSED: ${error?.constructor?.name ?? 'Error'}\n`)
-    stdout.write(`    code       ${error?.code ?? '(none)'}\n`)
-    stdout.write(`    httpStatus ${error?.httpStatus ?? '(none)'}\n`)
-    stdout.write(`    message    ${error?.message}\n`)
+    stdout.write(`    code    ${error?.code ?? '(none)'}\n`)
+    stdout.write(`    status  ${error?.status ?? '(none)'}\n`)
+    stdout.write(`    message ${redactFreeText(error?.message ?? '(none)')}\n`)
   }
 }
 
@@ -353,11 +377,10 @@ async function listen(client, seconds, context, log) {
 }
 
 async function main() {
-  const listenSeconds = Number(readFlag('listen', '90'))
-  const armMode = readFlag('arm', null)
-  const isArmCycle = process.argv.includes('--arm-cycle')
-  const isVerbose = process.argv.includes('--verbose')
-  const log = createLogger(isVerbose)
+  const listenSeconds = readNumericFlag('--listen', { fallback: 90, min: 0, max: 3_600 })
+  const armMode = readFlag('--arm', 'stay') ?? null
+  const isArmCycle = hasFlag('--arm-cycle')
+  const log = createTerminalLogger('verify', hasFlag('--verbose'))
 
   if (armMode && !['stay', 'away', 'disarm'].includes(armMode)) {
     throw new Error('--arm accepts "stay", "away", or "disarm"')
@@ -433,6 +456,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  stdout.write(`\nFailed: ${error?.message ?? error}\n`)
+  stdout.write(`\nFailed: ${redactFreeText(String(error?.message ?? error))}\n`)
   process.exit(1)
 })

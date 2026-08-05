@@ -15,7 +15,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HomeKitSmokeState = exports.HomeKitContactState = exports.HomeKitSecurityTarget = exports.HomeKitSecurityState = void 0;
 exports.toHomeKitSecurityState = toHomeKitSecurityState;
-exports.toPartitionState = toPartitionState;
 exports.toPartitionAction = toPartitionAction;
 exports.armingModeFor = armingModeFor;
 exports.toDisplayedSecurityState = toDisplayedSecurityState;
@@ -54,18 +53,17 @@ var HomeKitSmokeState;
     HomeKitSmokeState[HomeKitSmokeState["SMOKE_NOT_DETECTED"] = 0] = "SMOKE_NOT_DETECTED";
     HomeKitSmokeState[HomeKitSmokeState["SMOKE_DETECTED"] = 1] = "SMOKE_DETECTED";
 })(HomeKitSmokeState || (exports.HomeKitSmokeState = HomeKitSmokeState = {}));
-const PARTITION_TO_HOMEKIT = {
-    [alarm_1.PartitionState.DISARMED]: HomeKitSecurityState.DISARMED,
-    [alarm_1.PartitionState.ARMED_STAY]: HomeKitSecurityState.STAY_ARM,
-    [alarm_1.PartitionState.ARMED_AWAY]: HomeKitSecurityState.AWAY_ARM,
-    [alarm_1.PartitionState.ARMED_NIGHT]: HomeKitSecurityState.NIGHT_ARM,
-};
-const HOMEKIT_TARGET_TO_PARTITION = {
-    [HomeKitSecurityTarget.STAY_ARM]: alarm_1.PartitionState.ARMED_STAY,
-    [HomeKitSecurityTarget.AWAY_ARM]: alarm_1.PartitionState.ARMED_AWAY,
-    [HomeKitSecurityTarget.NIGHT_ARM]: alarm_1.PartitionState.ARMED_NIGHT,
-    [HomeKitSecurityTarget.DISARM]: alarm_1.PartitionState.DISARMED,
-};
+/**
+ * A `Map`, not an object literal: the key is an unvalidated API value, and an
+ * object literal would resolve `"constructor"` to a function rather than
+ * `undefined`, quietly defeating the guard below.
+ */
+const PARTITION_TO_HOMEKIT = new Map([
+    [alarm_1.PartitionState.DISARMED, HomeKitSecurityState.DISARMED],
+    [alarm_1.PartitionState.ARMED_STAY, HomeKitSecurityState.STAY_ARM],
+    [alarm_1.PartitionState.ARMED_AWAY, HomeKitSecurityState.AWAY_ARM],
+    [alarm_1.PartitionState.ARMED_NIGHT, HomeKitSecurityState.NIGHT_ARM],
+]);
 /**
  * Map an Alarm.com partition state to a HomeKit security state.
  *
@@ -75,11 +73,9 @@ const HOMEKIT_TARGET_TO_PARTITION = {
  * tile for a system whose real state we do not know.
  */
 function toHomeKitSecurityState(partitionState) {
-    return PARTITION_TO_HOMEKIT[partitionState];
-}
-/** Map a HomeKit target state to the Alarm.com state it requests. */
-function toPartitionState(target) {
-    return HOMEKIT_TARGET_TO_PARTITION[target];
+    return typeof partitionState === 'number'
+        ? PARTITION_TO_HOMEKIT.get(partitionState)
+        : undefined;
 }
 /** Map a HomeKit target state to the Alarm.com command verb. */
 function toPartitionAction(target) {
@@ -131,7 +127,14 @@ function toDisplayedSecurityState(attributes) {
     }
     return toHomeKitSecurityState(attributes.state);
 }
-/** Human-readable arming state for logs. */
+/**
+ * Human-readable arming state for logs.
+ *
+ * Takes a plain `number` because callers hold HomeKit characteristic values,
+ * which are numbers at runtime whatever the enum claims. The default branch is
+ * the point: a value outside the enum must read as an obvious unknown rather
+ * than being asserted into one of the five safe-sounding labels.
+ */
 function toSecurityStateLabel(state) {
     switch (state) {
         case HomeKitSecurityState.STAY_ARM:
@@ -164,11 +167,12 @@ function toImmediateSensorLabel(kind, isTriggered) {
             return isTriggered ? 'Activated' : 'Not Reset';
     }
 }
-const DEVICE_TYPE_TO_SERVICE = {
-    [alarm_1.SensorDeviceType.CONTACT]: 'contact',
-    [alarm_1.SensorDeviceType.MOTION]: 'motion',
-    [alarm_1.SensorDeviceType.SMOKE]: 'smoke',
-};
+/** See the note on {@link PARTITION_TO_HOMEKIT} for why this is a `Map`. */
+const DEVICE_TYPE_TO_SERVICE = new Map([
+    [alarm_1.SensorDeviceType.CONTACT, 'contact'],
+    [alarm_1.SensorDeviceType.MOTION, 'motion'],
+    [alarm_1.SensorDeviceType.SMOKE, 'smoke'],
+]);
 /**
  * Choose the HomeKit service for a sensor.
  *
@@ -176,7 +180,9 @@ const DEVICE_TYPE_TO_SERVICE = {
  * platform reports and skips rather than guessing at.
  */
 function toSensorServiceKind(deviceType) {
-    return DEVICE_TYPE_TO_SERVICE[deviceType];
+    return typeof deviceType === 'number'
+        ? DEVICE_TYPE_TO_SERVICE.get(deviceType)
+        : undefined;
 }
 /**
  * Express a triggered/at-rest reading as the value its service expects.

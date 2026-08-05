@@ -11,20 +11,30 @@
  * their alarm system's app access, not merely this integration. So a session is
  * held as long as it works, refreshed with a cheap keep-alive rather than a new
  * login, and re-established no more often than a hard floor allows.
+ *
+ * `authIntervalMinutes` therefore means "how long a session may go unverified
+ * before a fresh login", not "how long before the session is thrown away". The
+ * keep-alive is what does the verifying; without it counting, the keep-alive
+ * would have no effect on login frequency at all, which is the entire reason it
+ * exists.
  */
 
-import { AuthenticationError, TwoFactorRequiredError } from '../errors'
+import { AuthenticationError, LoginThrottledError, TwoFactorRequiredError } from '../errors'
+import { MAX_LOGIN_FLOOR_WAIT_MS, MS_PER_MINUTE, MS_PER_SECOND } from '../settings'
 import type { Logger } from '../utils/logger'
 import { sleep } from '../utils/retry'
+import { sanitizeError } from '../utils/sanitizers'
 import { authenticate, keepAlive, type Credentials, type Session } from './auth'
 
 export interface SessionManagerOptions {
   credentials: Credentials
-  /** Session lifetime before a proactive re-login, in minutes. */
+  /** How long a session may go unverified before a fresh login, in minutes. */
   authIntervalMinutes: number
   log: Logger
   /** Called after a successful sign-in, for diagnostics. */
   onSessionEstablished?: () => void
+  /** Cancels in-flight authentication when the platform shuts down. */
+  signal?: AbortSignal
 }
 
 /**
@@ -35,15 +45,37 @@ export interface SessionManagerOptions {
  */
 const KEEPALIVE_FAILURE_LIMIT = 3
 
+/**
+ * Minimum gap after a *failed* sign-in before another is attempted.
+ *
+ * Much shorter than the full re-authentication floor, because a transient
+ * failure should not lock the plugin out for the whole interval — but long
+ * enough that a retry loop cannot turn one API call into a burst of logins.
+ * Deliberately below the initial-discovery backoff so startup still paces
+ * itself on that instead.
+ */
+const FAILED_LOGIN_FLOOR_MS = 3 * MS_PER_SECOND
+
 /** Establishes, reuses, and refreshes the Alarm.com session. */
 export class SessionManager {
   readonly #credentials: Credentials
   readonly #sessionLifetimeMs: number
   readonly #log: Logger
-  readonly #onSessionEstablished?: () => void
+  readonly #onSessionEstablished: (() => void) | undefined
+  readonly #signal: AbortSignal | undefined
 
   #session: Session | null = null
+  /** When the held session was last known good: a login or a keep-alive. */
+  #sessionVerifiedAt = 0
   #lastLoginAttempt = 0
+  /**
+   * A credential failure that will not clear on its own.
+   *
+   * Held so the floor re-reports the real problem instead of masking a bad
+   * password as a generic throttle, which would leave a user with nothing in
+   * the log to act on after the single original error scrolled away.
+   */
+  #permanentFailure: AuthenticationError | null = null
   /** In-flight login, so concurrent callers share one attempt. */
   #pendingLogin: Promise<Session> | null = null
   /** Consecutive keep-alive transport failures against the current session. */
@@ -51,14 +83,15 @@ export class SessionManager {
 
   constructor(options: SessionManagerOptions) {
     this.#credentials = options.credentials
-    this.#sessionLifetimeMs = options.authIntervalMinutes * 60_000
+    this.#sessionLifetimeMs = options.authIntervalMinutes * MS_PER_MINUTE
     this.#log = options.log
     this.#onSessionEstablished = options.onSessionEstablished
+    this.#signal = options.signal
   }
 
-  /** Whether the current session is still within its configured lifetime. */
-  #isFresh(session: Session): boolean {
-    return Date.now() - session.createdAt.getTime() < this.#sessionLifetimeMs
+  /** Whether the current session has been verified recently enough to reuse. */
+  #isFresh(): boolean {
+    return Date.now() - this.#sessionVerifiedAt < this.#sessionLifetimeMs
   }
 
   /**
@@ -69,7 +102,7 @@ export class SessionManager {
    * pattern that trips abuse detection.
    */
   async getSession(): Promise<Session> {
-    if (this.#session && this.#isFresh(this.#session)) {
+    if (this.#session && this.#isFresh()) {
       return this.#session
     }
 
@@ -86,42 +119,86 @@ export class SessionManager {
     }
   }
 
-  async #login(): Promise<Session> {
-    // Never allow logins closer together than the configured lifetime after a
-    // successful sign-in (or a permanent credential rejection). Transient
-    // failures intentionally leave the floor alone so a boot-time network blip
-    // can be retried on the discovery backoff rather than waiting ten minutes.
-    const sinceLastAttempt = Date.now() - this.#lastLoginAttempt
-    if (this.#lastLoginAttempt > 0 && sinceLastAttempt < this.#sessionLifetimeMs) {
-      const waitMs = this.#sessionLifetimeMs - sinceLastAttempt
-      this.#log.debug(`deferring re-authentication for ${Math.round(waitMs / 1000)}s to stay within the login floor`)
-      await sleep(waitMs)
+  /**
+   * Enforce the minimum gap between logins.
+   *
+   * A short remainder is simply waited out. A long one is refused: the floor
+   * can be up to a day, and sleeping through it inside `getSession()` blocks
+   * the poll cycle and any HomeKit arm/disarm queued behind it, with the
+   * caller's in-flight guard held the whole time.
+   *
+   * @throws {AuthenticationError} The last attempt failed permanently.
+   * @throws {LoginThrottledError} The remaining wait is too long to hold inline.
+   */
+  async #awaitLoginFloor(): Promise<void> {
+    if (this.#lastLoginAttempt === 0) {
+      return
     }
+
+    const remainingMs = this.#sessionLifetimeMs - (Date.now() - this.#lastLoginAttempt)
+    if (remainingMs <= 0) {
+      return
+    }
+
+    // Re-raise the real diagnosis rather than reporting a throttle. Nothing
+    // about waiting longer fixes a rejected password, and the user needs to
+    // keep seeing why.
+    if (this.#permanentFailure) {
+      throw this.#permanentFailure
+    }
+
+    if (remainingMs > MAX_LOGIN_FLOOR_WAIT_MS) {
+      throw new LoginThrottledError(remainingMs)
+    }
+
+    this.#log.debug(
+      `deferring re-authentication for ${Math.round(remainingMs / MS_PER_SECOND)}s to stay within the login floor`,
+    )
+    await sleep(remainingMs, this.#signal)
+  }
+
+  async #login(): Promise<Session> {
+    // The floor applies after a successful sign-in or a permanent credential
+    // rejection. Transient failures intentionally leave it alone so a boot-time
+    // network blip can be retried on the discovery backoff instead.
+    await this.#awaitLoginFloor()
 
     this.#log.debug('Signing in to Alarm.com')
 
     try {
-      this.#session = await authenticate(this.#credentials, this.#log)
+      this.#session = await authenticate(this.#credentials, this.#log, this.#signal)
       this.#lastLoginAttempt = Date.now()
+      this.#sessionVerifiedAt = Date.now()
       this.#keepAliveFailures = 0
+      this.#permanentFailure = null
       this.#log.debug('Alarm.com session established')
       this.#onSessionEstablished?.()
       return this.#session
     } catch (error) {
       this.#session = null
+      this.#sessionVerifiedAt = 0
       this.#keepAliveFailures = 0
+
+      // Even a transient failure stamps a short floor. Without it, nothing
+      // paced re-login at runtime: a retryable failure let the next caller try
+      // again immediately, and since sign-in bypasses the request rate limiter
+      // that meant up to six login attempts per API call. Only the circuit
+      // breaker bounded it, which is thin cover for the one operation Alarm.com
+      // polices hardest. Startup is unaffected — the discovery backoff paces
+      // that path, and this floor is shorter than its first retry.
+      this.#lastLoginAttempt = Date.now() - (this.#sessionLifetimeMs - FAILED_LOGIN_FLOOR_MS)
 
       // These two are permanent until the user changes something. Say so
       // plainly, because the alternative is a log full of identical retries.
-      // Stamp the floor so we do not hammer Alarm.com with the same rejection.
+      // Stamp the full floor so we do not hammer Alarm.com with the same rejection.
       if (error instanceof TwoFactorRequiredError) {
-        this.#lastLoginAttempt = Date.now()
-        this.#log.error(
+        this.#recordPermanentFailure(
+          error,
           'Alarm.com requires two-factor verification. Copy a fresh "twoFactorAuthenticationId" cookie from a signed-in browser into the plugin config.',
         )
       } else if (error instanceof AuthenticationError) {
-        this.#lastLoginAttempt = Date.now()
-        this.#log.error(
+        this.#recordPermanentFailure(
+          error,
           'Alarm.com rejected the configured credentials. Fix them before restarting; repeated failed sign-ins can lock the account.',
         )
       }
@@ -130,8 +207,19 @@ export class SessionManager {
     }
   }
 
+  #recordPermanentFailure(error: AuthenticationError, guidance: string): void {
+    this.#lastLoginAttempt = Date.now()
+    this.#permanentFailure = error
+    this.#log.error(guidance)
+  }
+
   /**
    * Refresh the session without a full login.
+   *
+   * A success re-stamps the freshness clock, which is the whole point: without
+   * that, the next login lands on the auth interval regardless of how healthy
+   * the session is, and the keep-alive spends a request every few minutes
+   * without ever preventing the operation it exists to prevent.
    *
    * @returns Whether a live session is still held afterwards.
    */
@@ -142,7 +230,7 @@ export class SessionManager {
     }
 
     try {
-      const isAlive = await keepAlive(session)
+      const isAlive = await keepAlive(session, this.#signal)
       if (!isAlive) {
         this.#log.debug('keep-alive reported the session is no longer valid')
         // Only clear if this is still the session we probed. A concurrent
@@ -150,11 +238,16 @@ export class SessionManager {
         // was in flight; wiping that would force another policed login.
         if (this.#session === session) {
           this.#session = null
+          this.#sessionVerifiedAt = 0
           this.#keepAliveFailures = 0
         }
         return false
       }
-      this.#keepAliveFailures = 0
+
+      if (this.#session === session) {
+        this.#sessionVerifiedAt = Date.now()
+        this.#keepAliveFailures = 0
+      }
       return true
     } catch (error) {
       // Transport errors are inconclusive once; repeated failures against the
@@ -164,8 +257,10 @@ export class SessionManager {
       }
 
       this.#keepAliveFailures++
+      // sanitizeError, not String: it walks the cause chain, and the actionable
+      // half of a wrapped NetworkError is the ECONNREFUSED underneath it.
       this.#log.debug(
-        `keep-alive failed (${this.#keepAliveFailures}/${KEEPALIVE_FAILURE_LIMIT}): ${String(error)}`,
+        `keep-alive failed (${this.#keepAliveFailures}/${KEEPALIVE_FAILURE_LIMIT}): ${sanitizeError(error)}`,
       )
 
       if (this.#keepAliveFailures >= KEEPALIVE_FAILURE_LIMIT) {
@@ -173,6 +268,7 @@ export class SessionManager {
           'Alarm.com keep-alive failed repeatedly; discarding the session so the next request re-authenticates',
         )
         this.#session = null
+        this.#sessionVerifiedAt = 0
         this.#keepAliveFailures = 0
       }
       return false
@@ -182,6 +278,7 @@ export class SessionManager {
   /** Discard the current session so the next call re-authenticates. */
   invalidate(): void {
     this.#session = null
+    this.#sessionVerifiedAt = 0
     this.#keepAliveFailures = 0
   }
 

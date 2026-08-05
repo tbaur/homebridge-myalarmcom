@@ -47,15 +47,24 @@ export interface CollectionResponse<TAttributes> {
   included?: Resource<unknown>[]
 }
 
-/** Resource `type` discriminators returned by Alarm.com. */
-export enum ResourceType {
-  PARTITION = 'devices/partition',
-  SENSOR = 'devices/sensor',
+/** Credentials for the push event stream. */
+export interface EventStreamToken {
+  token: string
+  /** Endpoint reported by Alarm.com, when it supplies one. */
+  endpoint?: string
 }
 
 // ---------------------------------------------------------------------------
 // Sensors
 // ---------------------------------------------------------------------------
+
+/**
+ * A sensor mapped onto the HomeKit service that should represent it.
+ *
+ * Declared here rather than beside the mapping functions so the event decoder
+ * can name a device category without `types/` depending on `utils/`.
+ */
+export type SensorServiceKind = 'contact' | 'motion' | 'smoke'
 
 /**
  * Sensor hardware category, from a sensor's `deviceType` attribute.
@@ -120,23 +129,30 @@ const RESTING_SENSOR_STATES: ReadonlySet<number> = new Set([
   SensorState.DRY,
 ])
 
-/** Human-readable labels per device type, matching Alarm.com's own UI text. */
-const STATE_LABELS: Partial<Record<SensorDeviceType, Partial<Record<SensorState, string>>>> = {
-  [SensorDeviceType.CONTACT]: {
-    [SensorState.CLOSED]: 'Closed',
-    [SensorState.OPEN]: 'Open',
-  },
-  [SensorDeviceType.MOTION]: {
-    [SensorState.IDLE]: 'Idle',
-    [SensorState.ACTIVE]: 'Activated',
-  },
-  [SensorDeviceType.SMOKE]: {
+/**
+ * Human-readable labels per device type, matching Alarm.com's own UI text.
+ *
+ * A `Map` rather than an object literal because the keys come straight off an
+ * unvalidated API response: an object literal inherits from `Object.prototype`,
+ * so a `deviceType` of `"constructor"` would resolve to a function instead of
+ * `undefined` and defeat every downstream guard.
+ */
+const STATE_LABELS: ReadonlyMap<number, ReadonlyMap<number, string>> = new Map([
+  [SensorDeviceType.CONTACT, new Map([
+    [SensorState.CLOSED, 'Closed'],
+    [SensorState.OPEN, 'Open'],
+  ])],
+  [SensorDeviceType.MOTION, new Map([
+    [SensorState.IDLE, 'Idle'],
+    [SensorState.ACTIVE, 'Activated'],
+  ])],
+  [SensorDeviceType.SMOKE, new Map([
     // Alarm.com's wording for a smoke detector at rest. Not a fault condition:
     // it reported openClosedStatus=CLOSED alongside this state.
-    [SensorState.CLOSED]: 'Not Reset',
-    [SensorState.ACTIVE]: 'Activated',
-  },
-}
+    [SensorState.CLOSED, 'Not Reset'],
+    [SensorState.ACTIVE, 'Activated'],
+  ])],
+])
 
 /** A sensor reading resolved into something HomeKit can act on. */
 export interface SensorReading {
@@ -155,25 +171,34 @@ export interface SensorReading {
  * cover states this plugin has not seen. Disagreement is surfaced via
  * `isAmbiguous` rather than silently resolved, so the platform can log it
  * instead of guessing wrong in either direction.
+ *
+ * Arguments are typed `unknown` because they come from an API response parsed
+ * without validation; a non-numeric value resolves to an ambiguous "Unknown"
+ * reading rather than indexing a table with whatever arrived.
  */
 export function readSensorState(
-  deviceType: number,
-  state: number,
-  openClosedStatus?: number,
+  deviceType: unknown,
+  state: unknown,
+  openClosedStatus?: unknown,
 ): SensorReading {
-  const label = STATE_LABELS[deviceType as SensorDeviceType]?.[state as SensorState]
-    ?? SensorState[state]
-    ?? 'Unknown'
+  if (typeof state !== 'number') {
+    return { label: 'Unknown', isTriggered: false, isAmbiguous: true }
+  }
+
+  const labels = typeof deviceType === 'number' ? STATE_LABELS.get(deviceType) : undefined
+  const label = labels?.get(state) ?? SensorState[state] ?? 'Unknown'
 
   const isStateTriggered = TRIGGERED_SENSOR_STATES.has(state)
   const isStateResting = RESTING_SENSOR_STATES.has(state)
   const isStateKnown = isStateTriggered || isStateResting
 
-  if (openClosedStatus === undefined || openClosedStatus === OpenClosedStatus.UNKNOWN) {
+  const openClosed = typeof openClosedStatus === 'number' ? openClosedStatus : undefined
+
+  if (openClosed === undefined || openClosed === OpenClosedStatus.UNKNOWN) {
     return { label, isTriggered: isStateTriggered, isAmbiguous: !isStateKnown }
   }
 
-  const isOpenTriggered = openClosedStatus === OpenClosedStatus.OPEN
+  const isOpenTriggered = openClosed === OpenClosedStatus.OPEN
 
   // Unrecognised state: fall back to the normalised reading rather than
   // reporting a tripped smoke detector as safe.
@@ -215,11 +240,16 @@ export interface SensorAttributes {
 // Partitions
 // ---------------------------------------------------------------------------
 
+/** Arming commands Alarm.com accepts on a partition. */
+export type PartitionAction = 'armStay' | 'armAway' | 'disarm'
+
 /**
  * Security panel arming state.
  *
- * Verified: DISARMED. The test account is provisioned read-only and never left
- * that state, so the armed values are inferred.
+ * Verified: DISARMED and ARMED_STAY, both observed live by arming and
+ * disarming from the mobile app while watching the account. Inferred: UNKNOWN,
+ * ARMED_AWAY, ARMED_NIGHT — the read-only test account cannot issue those
+ * commands. See docs/PROTOCOL.md.
  */
 export enum PartitionState {
   UNKNOWN = 0,

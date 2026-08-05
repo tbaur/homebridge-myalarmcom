@@ -1,13 +1,13 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-# A sample workflow which sets up periodic OSV-Scanner scanning for vulnerabilities,
-# in addition to a PR check which fails if new vulnerabilities are introduced.
+# Vulnerability scanning with OSV-Scanner.
 #
-# For more examples and options, including how to ignore specific vulnerabilities,
-# see https://google.github.io/osv-scanner/github-action/
+# OSV-Scanner is a Google tool, not a GitHub-certified action, and is governed
+# by its own terms of service and privacy policy. It is pinned to a commit SHA
+# for the same reason every other action in this repository is: a tag can be
+# re-pointed by its upstream, and this workflow holds `security-events: write`.
+#
+# Runs on pull requests and merge queues (fail on newly introduced advisories),
+# on pushes to main, and weekly so an advisory published against an unchanged
+# dependency is still caught.
 
 name: OSV-Scanner
 
@@ -21,29 +21,36 @@ on:
   push:
     branches: [ "main" ]
 
-permissions:
-  # Required to upload SARIF file to CodeQL. See: https://github.com/github/codeql-action/issues/2117
-  actions: read
-  # Require writing security events to upload SARIF file to security tab
-  security-events: write
-  # Read commit contents
-  contents: read
+# Least privilege at the workflow level; each job opts into what it needs.
+permissions: {}
 
 jobs:
   scan-scheduled:
     if: ${{ github.event_name == 'push' || github.event_name == 'schedule' }}
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.8
+    permissions:
+      contents: read
+      # Uploading a SARIF file to the security tab needs both of these.
+      # See https://github.com/github/codeql-action/issues/2117
+      actions: read
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
     with:
-      # Example of specifying custom arguments
+      # `--skip-git` because the scan is of declared dependencies, not of commit
+      # history; without it the scanner also reports advisories against the
+      # repository's own git submodule metadata, which there is none of here.
       scan-args: |-
         -r
         --skip-git
         ./
+
   scan-pr:
     if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v2.3.8
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
     with:
-      # Example of specifying custom arguments
       scan-args: |-
         -r
         --skip-git

@@ -15,8 +15,14 @@ export declare class MyAlarmComPlatform implements DynamicPlatformPlugin {
     readonly Service: typeof Service;
     readonly Characteristic: typeof Characteristic;
     readonly api: API;
-    readonly client: AlarmComClient;
     constructor(log: Logging, config: MyAlarmComPlatformConfig, api: API);
+    /**
+     * The API client, used by accessories to issue commands.
+     *
+     * Only reachable once the configuration is usable: an unusable one publishes
+     * no accessories, so there is nothing to call this.
+     */
+    get client(): AlarmComClient;
     /** Homebridge replays cached accessories here on startup. */
     configureAccessory(accessory: PlatformAccessory): void;
     /** Record a HomeKit-originated arming command for diagnostics. */

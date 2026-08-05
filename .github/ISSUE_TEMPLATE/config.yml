@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/tbaur/homebridge-myalarmcom/security/advisories/new
+    about: Never report a vulnerability in a public issue. Use private vulnerability reporting instead; see SECURITY.md.
+  - name: Ask a question or discuss an idea
+    url: https://github.com/tbaur/homebridge-myalarmcom/discussions
+    about: For questions, setup help, and ideas that are not yet a bug report or a feature request.
+  - name: Capturing the two-factor cookie
+    url: https://github.com/tbaur/homebridge-myalarmcom/blob/main/docs/AUTH.md
+    about: The twoFactorAuthenticationId cookie is not a six-digit authenticator code. Start here if sign-in fails.

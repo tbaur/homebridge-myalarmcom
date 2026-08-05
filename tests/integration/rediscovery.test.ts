@@ -159,6 +159,30 @@ describe('re-enumerating the account while running', () => {
     jest.advanceTimersByTime(60_000)
   }
 
+  /**
+   * Keep firing the poll timer until something is observable.
+   *
+   * A single tick is not enough to assert on: `#refreshAll` deliberately skips
+   * a tick while the previous cycle is still in flight, so whether one poll
+   * produces a request depends on how long the preceding await took. Retrying is
+   * what makes the assertion about the plugin's behaviour rather than about the
+   * test's timing.
+   */
+  async function pollUntil(
+    predicate: () => boolean,
+    description: string,
+    timeoutMs = 5_000,
+  ): Promise<void> {
+    const deadline = performance.now() + timeoutMs
+    while (!predicate()) {
+      if (performance.now() > deadline) {
+        throw new Error(`Timed out after ${timeoutMs}ms polling for ${description}`)
+      }
+      poll()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+
   beforeEach(() => {
     api = new FakeHomebridgeApi()
     log = createHomebridgeLogging()
@@ -178,11 +202,10 @@ describe('re-enumerating the account while running', () => {
     expect(api.registeredNames).toContain('Front Door')
 
     // The system id is cached, so only the device list is fetched again.
-    nock(BASE_URL).get(SYSTEM_PATH).reply(200, SYSTEM_WITHOUT_FRONT_DOOR)
+    nock(BASE_URL).persist().get(SYSTEM_PATH).reply(200, SYSTEM_WITHOUT_FRONT_DOOR)
     await waitOutRediscoveryInterval()
-    poll()
 
-    await waitFor(() => api.unregistered.length > 0, { description: 'the device to be dropped' })
+    await pollUntil(() => api.unregistered.length > 0, 'the device to be dropped')
     expect(api.unregistered.map((accessory) => accessory.displayName)).toEqual(['Front Door'])
   })
 
@@ -190,16 +213,14 @@ describe('re-enumerating the account while running', () => {
     await launch()
     nock(BASE_URL).get(SYSTEM_PATH).reply(200, SYSTEM_WITHOUT_FRONT_DOOR)
     await waitOutRediscoveryInterval()
-    poll()
-    await waitFor(() => api.unregistered.length > 0, { description: 'the device to be dropped' })
+    await pollUntil(() => api.unregistered.length > 0, 'the device to be dropped')
 
     // Further polls may also be rediscoveries (short interval + waitFor latency);
     // keep the reduced system list available so they do not hang on a missing nock.
     nock(BASE_URL).persist().get(SYSTEM_PATH).reply(200, SYSTEM_WITHOUT_FRONT_DOOR)
 
     sensorReads.length = 0
-    poll()
-    await waitFor(() => sensorReads.length > 0, { description: 'the next ordinary poll' })
+    await pollUntil(() => sensorReads.length > 0, 'the next ordinary poll')
 
     expect(sensorReads[0]).not.toContain(FRONT_DOOR)
   })
@@ -210,8 +231,7 @@ describe('re-enumerating the account while running', () => {
     sensorReads.length = 0
 
     await waitOutRediscoveryInterval()
-    poll()
-    await waitFor(() => sensorReads.length > 0, { description: 'the rediscovery to read sensors' })
+    await pollUntil(() => sensorReads.length > 0, 'the rediscovery to read sensors')
 
     expect(api.unregistered).toEqual([])
     expect(api.registeredNames).toContain('Front Door')
@@ -220,15 +240,14 @@ describe('re-enumerating the account while running', () => {
   it('logs periodic rediscovery at debug, not info', async () => {
     // Scoped debug is dropped unless config.debug is on.
     await launch({ debug: true })
-    expect(log.infoMessages.some((message) => message.startsWith('Discovered '))).toBe(true)
+    expect(log.infoMessages.some((message) => message.includes('Discovered '))).toBe(true)
 
     const infoBefore = log.infoMessages.length
-    nock(BASE_URL).get(SYSTEM_PATH).reply(200, systemFixture)
+    nock(BASE_URL).persist().get(SYSTEM_PATH).reply(200, systemFixture)
     await waitOutRediscoveryInterval()
-    poll()
-    await waitFor(
+    await pollUntil(
       () => log.debugMessages.some((message) => message.includes('Rediscovering devices')),
-      { description: 'the rediscovery debug line' },
+      'the rediscovery debug line',
     )
 
     expect(
@@ -237,7 +256,7 @@ describe('re-enumerating the account while running', () => {
       ),
     ).toBe(true)
     expect(
-      log.infoMessages.slice(infoBefore).some((message) => message.startsWith('Discovered ')),
+      log.infoMessages.slice(infoBefore).some((message) => message.includes('Discovered ')),
     ).toBe(false)
   })
 
@@ -246,12 +265,11 @@ describe('re-enumerating the account while running', () => {
     expect(api.registeredNames).toContain('Front Door')
 
     sensorAttributeOverrides[FRONT_DOOR] = { isMonitoringEnabled: false }
-    nock(BASE_URL).get(SYSTEM_PATH).reply(200, systemFixture)
+    nock(BASE_URL).persist().get(SYSTEM_PATH).reply(200, systemFixture)
 
     await waitOutRediscoveryInterval()
-    poll()
 
-    await waitFor(() => api.unregistered.length > 0, { description: 'the unmonitored sensor to be dropped' })
+    await pollUntil(() => api.unregistered.length > 0, 'the unmonitored sensor to be dropped')
     expect(api.unregistered.map((accessory) => accessory.displayName)).toEqual(['Front Door'])
     expect(log.infoMessages.join('\n')).toMatch(/monitoring is disabled/)
   })
@@ -277,7 +295,9 @@ describe('re-enumerating the account while running', () => {
     )
 
     // The next poll comes before the interval is up, so it is an ordinary
-    // refresh rather than another enumeration.
+    // refresh rather than another enumeration. Deliberately one tick, not
+    // pollUntil: retrying would eventually cross the shortened interval and
+    // trigger the second enumeration this test exists to rule out.
     sensorReads.length = 0
     poll()
     await waitFor(() => sensorReads.length > 0, { description: 'the ordinary poll to run' })

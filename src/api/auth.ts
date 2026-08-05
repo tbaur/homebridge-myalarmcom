@@ -14,16 +14,21 @@
 
 import {
   AuthenticationError,
+  createApiError,
   LoginFormError,
   TwoFactorRequiredError,
 } from '../errors'
 import {
   CSRF_COOKIE_NAME,
+  CSRF_HEADER_NAME,
   EVENT_FIELD_SENTINEL,
+  IS_FROM_NEW_SITE_FIELD,
+  KEEPALIVE_REQUEST_TIMEOUT_MS,
   KEEPALIVE_URL,
   LOGIN_FORM_FIELDS,
   LOGIN_PAGE_URL,
   LOGIN_POST_URL,
+  LOGIN_REQUEST_TIMEOUT_MS,
   MFA_COOKIE_NAME,
   PASSWORD_FIELD,
   USERNAME_FIELD,
@@ -48,7 +53,6 @@ export interface Session {
   /** Anti-CSRF value for the `ajaxrequestuniquekey` header. */
   ajaxKey: string
   /** When this session was established. */
-  createdAt: Date
 }
 
 /** Result of scraping the login page. */
@@ -56,6 +60,19 @@ interface HiddenFields {
   found: Record<string, string>
   missing: string[]
 }
+
+/**
+ * One compiled pattern per hidden field, built once at module load.
+ *
+ * Scoped to a single tag with `[^>]*`. The earlier unbounded `[\s\S]*?` would
+ * skip past an input that had no adjacent `value=` and capture some *other*
+ * field's value, so a layout change looked like success with the wrong bytes —
+ * defeating the missing-field detection that exists to make such a change
+ * diagnosable.
+ */
+const HIDDEN_FIELD_PATTERNS: ReadonlyArray<readonly [string, RegExp]> = LOGIN_FORM_FIELDS.map(
+  (name) => [name, new RegExp(`name="${name}"[^>]*?value="([^"]*)"`)] as const,
+)
 
 /**
  * Pull the hidden WebForms inputs out of the login page HTML.
@@ -68,12 +85,12 @@ export function scrapeHiddenFields(html: string): HiddenFields {
   const found: Record<string, string> = {}
   const missing: string[] = []
 
-  for (const name of LOGIN_FORM_FIELDS) {
-    const match = new RegExp(`name="${name}"[\\s\\S]*?value="([^"]*)"`).exec(html)
-    if (match) {
-      found[name] = match[1]
-    } else {
+  for (const [name, pattern] of HIDDEN_FIELD_PATTERNS) {
+    const value = pattern.exec(html)?.[1]
+    if (value === undefined) {
       missing.push(name)
+    } else {
+      found[name] = value
     }
   }
 
@@ -98,7 +115,7 @@ export function buildLoginBody(
     __EVENTARGUMENT: EVENT_FIELD_SENTINEL,
     __VIEWSTATEENCRYPTED: EVENT_FIELD_SENTINEL,
     ...hiddenFields,
-    IsFromNewSite: '1',
+    [IS_FROM_NEW_SITE_FIELD]: '1',
     [USERNAME_FIELD]: username,
     [PASSWORD_FIELD]: password,
   })
@@ -113,6 +130,7 @@ export function buildLoginBody(
  * challenge, while the login-response set alone was accepted. This is the one
  * non-obvious detail that makes the whole flow work.
  *
+ * @param signal Cancels both requests when the platform shuts down.
  * @throws {LoginFormError} The login page could not be parsed.
  * @throws {TwoFactorRequiredError} Alarm.com demanded two-factor verification.
  * @throws {AuthenticationError} The credentials were rejected.
@@ -120,10 +138,28 @@ export function buildLoginBody(
 export async function authenticate(
   credentials: Credentials,
   log: Logger,
+  signal?: AbortSignal,
 ): Promise<Session> {
-  const pageResponse = await httpRequest(LOGIN_PAGE_URL)
-  const html = await pageResponse.text()
-  const { found: hiddenFields, missing } = scrapeHiddenFields(html)
+  const pageResponse = await httpRequest(LOGIN_PAGE_URL, {
+    timeoutMs: LOGIN_REQUEST_TIMEOUT_MS,
+    ...(signal ? { signal } : {}),
+  })
+
+  // Checked before scraping. A 503 maintenance page or a bot-check interstitial
+  // has no `__VIEWSTATE` either, and reporting that as "Alarm.com changed its
+  // sign-in page" is both wrong and permanent: LoginFormError is classified as
+  // needing a human, so a ten-second blip that coincided with a restart used to
+  // disable the plugin until someone noticed — and sent them looking for an
+  // update that does not exist.
+  if (!pageResponse.ok) {
+    throw createApiError(
+      pageResponse.status,
+      `Alarm.com returned ${pageResponse.status} for its sign-in page`,
+      { body: pageResponse.text },
+    )
+  }
+
+  const { found: hiddenFields, missing } = scrapeHiddenFields(pageResponse.text)
 
   if (missing.length > 0) {
     throw new LoginFormError(
@@ -131,6 +167,42 @@ export async function authenticate(
     )
   }
 
+  const loginResponse = await httpRequest(LOGIN_POST_URL, {
+    method: 'POST',
+    headers: buildLoginHeaders(credentials),
+    body: buildLoginBody(credentials.username, credentials.password, hiddenFields),
+    timeoutMs: LOGIN_REQUEST_TIMEOUT_MS,
+    ...(signal ? { signal } : {}),
+  })
+
+  const jar = new CookieJar()
+  jar.absorb(loginResponse.headers)
+
+  if (log.isDebugEnabled) {
+    log.debug(
+      `login responded ${loginResponse.status} with cookies [${jar.names.join(', ')}], sent trust token ${previewSecret(credentials.twoFactorAuthenticationId)}`,
+    )
+  }
+
+  assertLoginSucceeded(loginResponse.status)
+
+  const ajaxKey = jar.get(CSRF_COOKIE_NAME)
+  if (!ajaxKey) {
+    throw new AuthenticationError(
+      `Signed in but Alarm.com did not return the "${CSRF_COOKIE_NAME}" cookie needed to call its API.`,
+    )
+  }
+
+  warnOnReplacedTrustToken(credentials, jar.get(MFA_COOKIE_NAME), log)
+
+  return {
+    cookieHeader: jar.toHeader(),
+    ajaxKey,
+  }
+}
+
+/** Headers for the login postback, including the trust cookie when there is one. */
+function buildLoginHeaders(credentials: Credentials): Record<string, string> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
   }
@@ -140,43 +212,37 @@ export async function authenticate(
   if (credentials.twoFactorAuthenticationId) {
     headers.Cookie = `${MFA_COOKIE_NAME}=${credentials.twoFactorAuthenticationId}`
   }
+  return headers
+}
 
-  const loginResponse = await httpRequest(LOGIN_POST_URL, {
-    method: 'POST',
-    headers,
-    body: buildLoginBody(credentials.username, credentials.password, hiddenFields),
-  })
-
-  const jar = new CookieJar()
-  jar.absorb(loginResponse)
-
-  log.debug(
-    `login responded ${loginResponse.status} with cookies [${jar.names.join(', ')}], sent trust token ${previewSecret(credentials.twoFactorAuthenticationId)}`,
-  )
-
-  if (loginResponse.status === 409) {
+/**
+ * Turn a login status into the right error, or return for success.
+ *
+ * A WebForms login reports failure by re-rendering the form with a 200 rather
+ * than redirecting, so success is the redirect and 200 is the error case.
+ */
+function assertLoginSucceeded(status: number): void {
+  if (status === 409) {
     throw new TwoFactorRequiredError()
   }
-
-  // A WebForms login reports failure by re-rendering the form with a 200 rather
-  // than redirecting, so success is the redirect and 200 is the error case.
-  if (loginResponse.status === 200) {
+  if (status === 200) {
     throw new AuthenticationError(
       'Alarm.com rejected the username or password. Note that repeated failures will lock the account.',
     )
   }
+}
 
-  const ajaxKey = jar.get(CSRF_COOKIE_NAME)
-  if (!ajaxKey) {
-    throw new AuthenticationError(
-      `Signed in but Alarm.com did not return the "${CSRF_COOKIE_NAME}" cookie needed to call its API.`,
-    )
-  }
-
-  // If Alarm.com hands back a *different* trust token than the one supplied,
-  // the supplied one was not honoured. Surfacing this early turns an eventual
-  // mystery 409 into a clear warning.
-  const returnedTrustToken = jar.get(MFA_COOKIE_NAME)
+/**
+ * Warn when Alarm.com hands back a different trust token than the one supplied.
+ *
+ * That means the supplied one was not honoured. Surfacing it early turns an
+ * eventual mystery 409 into a clear warning while the plugin still works.
+ */
+function warnOnReplacedTrustToken(
+  credentials: Credentials,
+  returnedTrustToken: string | undefined,
+  log: Logger,
+): void {
   if (
     credentials.twoFactorAuthenticationId
     && returnedTrustToken
@@ -185,12 +251,6 @@ export async function authenticate(
     log.warn(
       'Alarm.com issued a new two-factor trust token, which means the configured one was not accepted. Re-copy the cookie from a signed-in browser if requests start failing.',
     )
-  }
-
-  return {
-    cookieHeader: jar.toHeader(),
-    ajaxKey,
-    createdAt: new Date(),
   }
 }
 
@@ -201,14 +261,17 @@ export async function authenticate(
  * polices for abuse, so refreshing an existing session avoids the operation
  * most likely to lock the account.
  *
+ * @param signal Cancels the probe when the platform shuts down.
  * @returns Whether the session is still valid.
  */
-export async function keepAlive(session: Session): Promise<boolean> {
+export async function keepAlive(session: Session, signal?: AbortSignal): Promise<boolean> {
   const response = await httpRequest(KEEPALIVE_URL, {
     headers: {
       Cookie: session.cookieHeader,
-      ajaxrequestuniquekey: session.ajaxKey,
+      [CSRF_HEADER_NAME]: session.ajaxKey,
     },
+    timeoutMs: KEEPALIVE_REQUEST_TIMEOUT_MS,
+    ...(signal ? { signal } : {}),
   })
 
   return response.status === 200

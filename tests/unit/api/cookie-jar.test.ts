@@ -10,32 +10,32 @@
 
 import { CookieJar } from '../../../src/api/cookie-jar'
 
-function responseWithCookies(...cookies: string[]): Response {
+function headersWithCookies(...cookies: string[]): Headers {
   const headers = new Headers()
   for (const cookie of cookies) {
     headers.append('set-cookie', cookie)
   }
-  return new Response(null, { status: 302, headers })
+  return headers
 }
 
 describe('CookieJar', () => {
   it('absorbs every Set-Cookie on a response', () => {
     const jar = new CookieJar()
 
-    jar.absorb(responseWithCookies(
+    jar.absorb(headersWithCookies(
       'ASP.NET_SessionId=session-value; path=/; HttpOnly',
       'afg=csrf-value; path=/; secure',
     ))
 
     expect(jar.get('ASP.NET_SessionId')).toBe('session-value')
     expect(jar.get('afg')).toBe('csrf-value')
-    expect(jar.size).toBe(2)
+    expect(jar.names).toEqual(['ASP.NET_SessionId', 'afg'])
   })
 
   it('keeps only the cookie value, discarding its attributes', () => {
     const jar = new CookieJar()
 
-    jar.absorb(responseWithCookies('afg=csrf-value; path=/; Expires=Wed, 21 Oct 2026 07:28:00 GMT'))
+    jar.absorb(headersWithCookies('afg=csrf-value; path=/; Expires=Wed, 21 Oct 2026 07:28:00 GMT'))
 
     expect(jar.get('afg')).toBe('csrf-value')
   })
@@ -43,34 +43,34 @@ describe('CookieJar', () => {
   it('accepts a value containing an equals sign', () => {
     const jar = new CookieJar()
 
-    jar.absorb(responseWithCookies('__VIEWSTATE=abc==; path=/'))
+    jar.absorb(headersWithCookies('__VIEWSTATE=abc==; path=/'))
 
     expect(jar.get('__VIEWSTATE')).toBe('abc==')
   })
 
   it('treats an emptied cookie as a removal', () => {
     const jar = new CookieJar()
-    jar.set('afg', 'csrf-value')
+    jar.absorb(headersWithCookies('afg=csrf-value'))
 
-    jar.absorb(responseWithCookies('afg=; path=/'))
+    jar.absorb(headersWithCookies('afg=; path=/'))
 
-    expect(jar.has('afg')).toBe(false)
+    expect(jar.get('afg')).toBeUndefined()
   })
 
   it('treats the literal "deleted" value as a removal', () => {
     const jar = new CookieJar()
-    jar.set('twoFactorAuthenticationId', 'trust-token')
+    jar.absorb(headersWithCookies('twoFactorAuthenticationId=trust-token'))
 
-    jar.absorb(responseWithCookies('twoFactorAuthenticationId=deleted; path=/'))
+    jar.absorb(headersWithCookies('twoFactorAuthenticationId=deleted; path=/'))
 
-    expect(jar.has('twoFactorAuthenticationId')).toBe(false)
+    expect(jar.get('twoFactorAuthenticationId')).toBeUndefined()
   })
 
   it('lets a later value replace an earlier one', () => {
     const jar = new CookieJar()
 
-    jar.absorb(responseWithCookies('afg=first'))
-    jar.absorb(responseWithCookies('afg=second'))
+    jar.absorb(headersWithCookies('afg=first'))
+    jar.absorb(headersWithCookies('afg=second'))
 
     expect(jar.get('afg')).toBe('second')
   })
@@ -78,32 +78,31 @@ describe('CookieJar', () => {
   it('skips a malformed Set-Cookie rather than storing nonsense', () => {
     const jar = new CookieJar()
 
-    jar.absorb(responseWithCookies('not-a-cookie'))
+    jar.absorb(headersWithCookies('not-a-cookie'))
 
-    expect(jar.size).toBe(0)
+    expect(jar.names).toEqual([])
   })
 
   it('does nothing with a response carrying no cookies', () => {
     const jar = new CookieJar()
 
-    jar.absorb(new Response(null, { status: 200 }))
+    jar.absorb(new Headers())
 
-    expect(jar.size).toBe(0)
+    expect(jar.names).toEqual([])
     expect(jar.toHeader()).toBe('')
   })
 
   it('serialises to a Cookie request header', () => {
     const jar = new CookieJar()
 
-    jar.absorb(responseWithCookies('ASP.NET_SessionId=session-value; path=/', 'afg=csrf-value'))
+    jar.absorb(headersWithCookies('ASP.NET_SessionId=session-value; path=/', 'afg=csrf-value'))
 
     expect(jar.toHeader()).toBe('ASP.NET_SessionId=session-value; afg=csrf-value')
   })
 
   it('exposes names without values, which is all that is safe to log', () => {
     const jar = new CookieJar()
-    jar.set('afg', 'csrf-value')
-    jar.set('twoFactorAuthenticationId', 'trust-token')
+    jar.absorb(headersWithCookies('afg=csrf-value', 'twoFactorAuthenticationId=trust-token'))
 
     expect(jar.names).toEqual(['afg', 'twoFactorAuthenticationId'])
     expect(jar.names.join()).not.toContain('csrf-value')
@@ -111,6 +110,6 @@ describe('CookieJar', () => {
 
   it('reports a missing cookie as undefined', () => {
     expect(new CookieJar().get('afg')).toBeUndefined()
-    expect(new CookieJar().has('afg')).toBe(false)
+    expect(new CookieJar().names).toEqual([])
   })
 })

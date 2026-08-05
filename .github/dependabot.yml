@@ -20,6 +20,10 @@ updates:
       # out of the group so each arrives as its own PR and gets evaluated and
       # migrated deliberately rather than bundled into a routine update.
       dev-dependencies:
+        # Scoped to development. Without this, a minor bump to `ws` — the only
+        # dependency that actually ships — landed in a group labelled dev-only
+        # and reviewed as routine.
+        dependency-type: "development"
         patterns:
           - "*"
         update-types:

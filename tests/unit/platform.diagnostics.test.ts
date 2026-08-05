@@ -23,11 +23,17 @@ import identitiesFixture from '../fixtures/identities.json'
 import partitionsFixture from '../fixtures/partitions.json'
 import sensorsFixture from '../fixtures/sensors.json'
 import systemFixture from '../fixtures/system.json'
+import { CircuitState } from '../../src/api/circuit-breaker'
+import { KEEPALIVE_INTERVAL_MS } from '../../src/settings'
 
 jest.mock('../../src/utils/retry', () => {
   const actual = jest.requireActual<typeof import('../../src/utils/retry')>('../../src/utils/retry')
   return { ...actual, sleep: () => Promise.resolve() }
 })
+
+/** Heartbeat cadence used throughout, deliberately unlike any other interval. */
+const DIAGNOSTICS_INTERVAL_SEC = 45
+const DIAGNOSTICS_INTERVAL_MS = DIAGNOSTICS_INTERVAL_SEC * 1_000
 
 const CONFIG: MyAlarmComPlatformConfig = {
   platform: 'MyAlarmCom',
@@ -100,12 +106,19 @@ describe('platform diagnostics', () => {
     interceptSignIn()
     interceptDiscovery()
 
+    // The heartbeat is picked out by its interval, which is why CONFIG sets the
+    // poll and auth intervals far away from it. Asserted rather than assumed:
+    // a constant that drifted into collision would otherwise capture the wrong
+    // handler and leave four tests failing on a confusing null dereference.
+    expect(DIAGNOSTICS_INTERVAL_MS).not.toBe(KEEPALIVE_INTERVAL_MS)
+    expect(DIAGNOSTICS_INTERVAL_MS).not.toBe(Number(CONFIG.pollIntervalSeconds) * 1_000)
+
     const realSetInterval = global.setInterval.bind(global)
     setIntervalSpy = jest.spyOn(global, 'setInterval').mockImplementation((handler, timeout) => {
-      if (timeout === 60_000 && typeof handler === 'function') {
-        diagnosticsHeartbeat = handler as () => void
+      if (timeout === DIAGNOSTICS_INTERVAL_MS && typeof handler === 'function') {
+        diagnosticsHeartbeat = handler
       }
-      return realSetInterval(handler as () => void, timeout as number)
+      return realSetInterval(handler, timeout as number)
     })
   })
 
@@ -123,7 +136,7 @@ describe('platform diagnostics', () => {
   })
 
   it('emits a start snapshot and periodic heartbeats when enabled', async () => {
-    await launch({ diagnosticsInterval: 60 })
+    await launch({ diagnosticsInterval: DIAGNOSTICS_INTERVAL_SEC })
 
     const startLine = log.infoMessages.find((message) => message.includes('Diagnostics start'))
     expect(startLine).toBeDefined()
@@ -146,7 +159,7 @@ describe('platform diagnostics', () => {
   })
 
   it('emits a stop snapshot on shutdown', async () => {
-    await launch({ diagnosticsInterval: 60 })
+    await launch({ diagnosticsInterval: DIAGNOSTICS_INTERVAL_SEC })
     log.infoMessages.length = 0
 
     api.emit('shutdown')
@@ -155,7 +168,7 @@ describe('platform diagnostics', () => {
   })
 
   it('emits Diagnostics stop only once when shutdown is signaled twice', async () => {
-    await launch({ diagnosticsInterval: 60 })
+    await launch({ diagnosticsInterval: DIAGNOSTICS_INTERVAL_SEC })
     log.infoMessages.length = 0
 
     api.emit('shutdown')
@@ -165,11 +178,11 @@ describe('platform diagnostics', () => {
   })
 
   it('logs a degraded transition when the circuit breaker opens', async () => {
-    await launch({ diagnosticsInterval: 60 })
+    await launch({ diagnosticsInterval: DIAGNOSTICS_INTERVAL_SEC })
     expect(diagnosticsHeartbeat).not.toBeNull()
 
     jest.spyOn(platform.client, 'getStatus').mockReturnValue({
-      circuitBreaker: { state: 'OPEN' },
+      circuitBreaker: { state: CircuitState.OPEN },
       rateLimiter: { remaining: 100 },
       hasSession: true,
     })
@@ -181,7 +194,7 @@ describe('platform diagnostics', () => {
   })
 
   it('does not throw when a diagnostics reader fails during a heartbeat', async () => {
-    await launch({ diagnosticsInterval: 60 })
+    await launch({ diagnosticsInterval: DIAGNOSTICS_INTERVAL_SEC })
     expect(diagnosticsHeartbeat).not.toBeNull()
 
     jest.spyOn(platform.client, 'getStatus').mockImplementation(() => {

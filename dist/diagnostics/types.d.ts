@@ -6,10 +6,16 @@
  *
  * @fileoverview Diagnostics report shapes for health/activity logging.
  */
+import type { CircuitState } from '../api/circuit-breaker';
+import type { SensorServiceKind } from '../types/alarm';
+/** Channels a diagnostics report can be emitted on. */
+export type DiagnosticsChannel = 'health' | 'health.degraded' | 'health.recovered' | 'diagnostics.start' | 'diagnostics.stop';
+/** Reported condition of the push event stream. */
+export type WebSocketState = 'disabled' | 'disconnected' | 'connecting' | 'connected' | 'closed';
 /** A single heartbeat or boot/shutdown diagnostics report. */
 export interface DiagnosticsSnapshot {
     /** Channel identifier, e.g. `health`, `diagnostics.start`, `diagnostics.stop`. */
-    msg: string;
+    msg: DiagnosticsChannel;
     lifecycle: {
         health: 'healthy' | 'degraded';
         reasons: string[];
@@ -22,18 +28,19 @@ export interface DiagnosticsSnapshot {
         /** Sensors published to HomeKit. */
         sensors: number;
         /** Sensor counts by HomeKit kind (`contact`, `motion`, `smoke`). */
-        byType: Record<string, number>;
+        byType: Partial<Record<SensorServiceKind, number>>;
         /** Devices skipped via `ignoredDeviceIds`. */
         ignored: number;
     };
     websocket: {
-        state: string;
+        state: WebSocketState;
         lastEventAgeSec: number | null;
         reconnects: number;
     };
     circuitBreaker: {
-        state: string;
-        lastTripAt: number | null;
+        state: CircuitState;
+        /** ISO-8601, not epoch milliseconds: this field is read by humans. */
+        lastTripAt: string | null;
         trips: number;
     };
     rateLimiter: {

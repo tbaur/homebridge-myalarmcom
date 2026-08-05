@@ -21,9 +21,9 @@ exports.EVENT_TYPE_USER_LOGGED_IN = 55;
  * The only event types this plugin interprets.
  *
  * Alarm.com's enumeration runs to several hundred values and is undocumented.
- * These three are decoded because all three were observed on live hardware and
- * their meaning is unambiguous. Everything else is deliberately left alone;
- * see {@link readSensorEventHint}.
+ * `CLOSED` and `OPENED_AND_CLOSED` were observed on live hardware; `OPENED` is
+ * inferred from its pairing with them. Everything else is deliberately left
+ * alone; see {@link readSensorEventHint} and docs/PROTOCOL.md.
  */
 var ContactEventType;
 (function (ContactEventType) {

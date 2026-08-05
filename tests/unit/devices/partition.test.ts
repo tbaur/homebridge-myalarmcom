@@ -21,6 +21,8 @@ import {
 } from '../../helpers/homekit'
 import { createRecordingLogger, messagesAt, type RecordingLogger } from '../../helpers/logger'
 import partitionsFixture from '../../fixtures/partitions.json'
+import { fixtureAt } from '../../helpers/fixtures'
+import { PARTITION_TARGET_SETTLE_MS } from '../../../src/settings'
 
 const livePartition = partitionsFixture.data[0] as unknown as Resource<PartitionAttributes>
 
@@ -48,7 +50,7 @@ describe('PartitionAccessory', () => {
   }
 
   function service(): Service {
-    return servicesOf(bed.accessory)[0]
+    return fixtureAt(servicesOf(bed.accessory), 0, 'published services')
   }
 
   function targetCharacteristic(): Characteristic {
@@ -107,6 +109,36 @@ describe('PartitionAccessory', () => {
       expect(messagesAt(log, 'warn').join('\n')).toMatch(/active alarm on "Home"/)
     })
 
+    /**
+     * `ALARM_TRIGGERED` is 4, which is a legal *current* state and an illegal
+     * *target*: HAP caps the target at 3 and silently rewrote 4 to 3. So during an
+     * alarm the Home app tile read "Triggered" while its own control read
+     * "Disarm", and HAP emitted a characteristic warning on every poll for the
+     * duration of the alarm. The panel is still armed in whatever mode it was, so
+     * that is what the target has to keep showing.
+     */
+    it('keeps showing the armed target during an alarm rather than an out-of-range value', () => {
+      accessory.update(withAttributes({ state: 3 }))
+      expect(characteristicValue(service(), Characteristic.SecuritySystemTargetState))
+        .toBe(HomeKitSecurityTarget.AWAY_ARM)
+
+      accessory.update(withAttributes({ state: 3, hasActiveAlarm: true }))
+
+      expect(characteristicValue(service(), Characteristic.SecuritySystemCurrentState))
+        .toBe(HomeKitSecurityState.ALARM_TRIGGERED)
+      expect(characteristicValue(service(), Characteristic.SecuritySystemTargetState))
+        .toBe(HomeKitSecurityTarget.AWAY_ARM)
+    })
+
+    /** The alarm-cleared edge must survive a reading the plugin cannot map. */
+    it('reports an alarm clearing even when the next state is unrecognised', () => {
+      accessory.update(withAttributes({ state: 3, hasActiveAlarm: true }))
+
+      accessory.update(withAttributes({ state: 99, hasActiveAlarm: false }))
+
+      expect(messagesAt(log, 'info').join('\n')).toMatch(/alarm on "Home" has cleared/)
+    })
+
     it('logs arming changes at info after the first reading', () => {
       accessory.update(withAttributes({ state: 1 }))
       expect(messagesAt(log, 'debug')).toContain('Home: Disarmed')
@@ -115,11 +147,28 @@ describe('PartitionAccessory', () => {
       expect(messagesAt(log, 'info')).toContain('Home: Armed Away')
     })
 
-    it('leaves the tile disarmed rather than guessing at an unknown panel state', () => {
+    /**
+     * The one failure a security integration must not have. A green,
+     * safe-looking tile for a panel whose real state is unknown is
+     * indistinguishable from a genuinely disarmed system, so the last known
+     * state stands and the tile is visibly faulted instead.
+     */
+    it('keeps the last known state and raises a fault on an unknown panel state', () => {
+      accessory.update(withAttributes({ state: 3 }))
+
       accessory.update(withAttributes({ state: 99 }))
 
       expect(characteristicValue(service(), Characteristic.SecuritySystemCurrentState))
-        .toBe(HomeKitSecurityState.DISARMED)
+        .toBe(HomeKitSecurityState.AWAY_ARM)
+      expect(characteristicValue(service(), Characteristic.StatusFault))
+        .toBe(Characteristic.StatusFault.GENERAL_FAULT)
+      expect(messagesAt(log, 'warn').join('\n')).toMatch(/does not recognise \(99\)/)
+    })
+
+    it('still answers disarmed before any reading, because HAP needs a value', async () => {
+      const current = service().getCharacteristic(Characteristic.SecuritySystemCurrentState)
+
+      await expect(current.handleGetRequest()).resolves.toBe(HomeKitSecurityState.DISARMED)
     })
 
     it('raises a fault for a malfunctioning panel', () => {
@@ -192,6 +241,75 @@ describe('PartitionAccessory', () => {
         .toBe(HomeKitSecurityTarget.AWAY_ARM)
       expect(characteristicValue(service(), Characteristic.SecuritySystemCurrentState))
         .toBe(HomeKitSecurityState.AWAY_ARM)
+    })
+
+    /**
+     * Confirmation is not guaranteed. Night arming is sent as a stay command, so
+     * the panel lands on a state that never equals the requested target, and a
+     * user can abort an arm at the keypad. Either left the Home app showing
+     * "Arming…" for the life of the process.
+     */
+    it('gives up on a target the panel never reaches', async () => {
+      jest.useFakeTimers()
+      try {
+        accessory.update(controllable)
+        await requestTarget(HomeKitSecurityTarget.AWAY_ARM)
+
+        jest.advanceTimersByTime(PARTITION_TARGET_SETTLE_MS)
+        accessory.update({ ...controllable, attributes: { ...controllable.attributes, state: 1 } })
+
+        expect(characteristicValue(service(), Characteristic.SecuritySystemTargetState))
+          .toBe(HomeKitSecurityTarget.DISARM)
+        expect(messagesAt(log, 'info').join('\n')).toMatch(/did not reach Armed Away/)
+      } finally {
+        jest.useRealTimers()
+      }
+    })
+
+    /**
+     * Computing these only once meant a panel that later gained night arming,
+     * or an account that was granted permission to arm, kept the first
+     * reading's properties until Homebridge restarted.
+     */
+    it('re-offers the modes when the panel starts advertising a new one', () => {
+      accessory.update(controllable)
+      expect(targetCharacteristic().props.validValues)
+        .not.toContain(HomeKitSecurityTarget.NIGHT_ARM)
+
+      accessory.update({
+        ...controllable,
+        attributes: {
+          ...controllable.attributes,
+          extendedArmingOptions: { ArmedStay: [0], ArmedNight: [0] },
+        },
+      })
+
+      expect(targetCharacteristic().props.validValues).toContain(HomeKitSecurityTarget.NIGHT_ARM)
+    })
+
+    it('makes the tile writable when the account is granted permission', () => {
+      accessory.update(livePartition)
+      expect(targetCharacteristic().props.perms).not.toContain('pw')
+
+      accessory.update(controllable)
+
+      expect(targetCharacteristic().props.perms).toContain('pw')
+    })
+
+    /**
+     * A siren that starts is reported; one that stops used to be reported
+     * nowhere, so a log could show when an alarm began but never when it ended.
+     */
+    it('warns once on the edge into alarm and says plainly when it clears', () => {
+      const inAlarm = withAttributes({ hasActiveAlarm: true })
+
+      accessory.update(inAlarm)
+      accessory.update(inAlarm)
+      expect(messagesAt(log, 'warn').filter((line) => line.includes('active alarm'))).toHaveLength(1)
+
+      accessory.update(withAttributes({ hasActiveAlarm: false }))
+
+      expect(messagesAt(log, 'info').join('\n')).toMatch(/alarm on "Home" has cleared/)
     })
   })
 

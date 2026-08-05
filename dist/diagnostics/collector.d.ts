@@ -15,30 +15,24 @@
  * It only ever reads in-memory state via the supplied `readers`; it never
  * performs any network I/O.
  */
+import type { ClientStatus } from '../api/client';
+import type { EventStreamStatus } from '../api/event-stream';
+import type { SensorServiceKind } from '../types/alarm';
 import type { ResolvedConfig } from '../types/config';
-import type { DiagnosticsSnapshot } from './types';
-/** Subset of `client.getStatus()` the collector relies on. */
-export interface ClientStatusLike {
-    circuitBreaker: {
-        state: string;
-    };
-    rateLimiter: {
-        remaining: number;
-    };
-    hasSession: boolean;
-}
-/** Subset of event-stream status the collector relies on. */
-export interface WebSocketStatusLike {
-    isConnected: boolean;
-    isConnecting: boolean;
-    isClosed: boolean;
-    lastEventAgeSec: number | null;
-}
+import type { DiagnosticsChannel, DiagnosticsSnapshot } from './types';
+/**
+ * Status shapes the collector reads.
+ *
+ * Aliases of the producers' own types rather than re-declarations: the two
+ * previously identical copies could drift apart without anything noticing.
+ */
+export type ClientStatusLike = ClientStatus;
+export type WebSocketStatusLike = EventStreamStatus;
 /** Absolute device gauges, computed by the platform from its accessories. */
 export interface DeviceGauges {
     partitions: number;
     sensors: number;
-    byType: Record<string, number>;
+    byType: Partial<Record<SensorServiceKind, number>>;
     ignored: number;
 }
 /**
@@ -59,6 +53,12 @@ interface CollectorOptions {
     /** Injectable clock for deterministic tests. Defaults to `Date.now`. */
     now?: () => number;
 }
+/** One set of reader values, taken once and shared across a report. */
+interface ReaderSnapshot {
+    status: ClientStatus;
+    ws: EventStreamStatus | null;
+    isEventStreamExpected: boolean;
+}
 /** Health classification result. */
 export interface HealthRollup {
     health: 'healthy' | 'degraded';
@@ -75,9 +75,9 @@ export declare class DiagnosticsCollector {
      * (`networked`), so instant pre-flight rejections (breaker open, rate
      * limited) do not skew percentiles.
      */
-    apiRequest(latencyMs: number, ok: boolean, networked?: boolean): void;
+    apiRequest(latencyMs: number, isOk: boolean, wasNetworked?: boolean): void;
     /** Record the result of a polling cycle. */
-    pollCycle(ok: number, failed: number, durationMs: number): void;
+    pollCycle(okCount: number, failedCount: number, durationMs: number): void;
     /** Record a WebSocket reconnection (live channel recovered). */
     wsReconnect(): void;
     /** Record a circuit-breaker trip (transition into the open state). */
@@ -93,17 +93,12 @@ export declare class DiagnosticsCollector {
     /** Record a retry attempt. */
     retry(): void;
     /**
-     * Nearest-rank percentile (0..100) over the bounded recent-latency window.
-     * Returns 0 when no samples are available.
-     */
-    percentile(p: number): number;
-    /**
      * Classify current health from live readers.
      *
      * Degraded when the circuit breaker is open, the expected event stream has
      * been down longer than the threshold, or the recent API error rate is high.
      */
-    rollup(readers: DiagnosticsReaders): HealthRollup;
+    rollup(readers: DiagnosticsReaders, prefetched?: ReaderSnapshot): HealthRollup;
     /**
      * Build a heartbeat report: counters are deltas since the previous heartbeat
      * (the marker is then advanced) and everything else is an absolute gauge.
@@ -113,7 +108,7 @@ export declare class DiagnosticsCollector {
      * Build a session-cumulative snapshot (no marker advance), including the
      * redacted config echo. Used for boot/shutdown reports.
      */
-    snapshot(msg: string, readers: DiagnosticsReaders): DiagnosticsSnapshot;
+    snapshot(msg: DiagnosticsChannel, readers: DiagnosticsReaders): DiagnosticsSnapshot;
 }
 export {};
 //# sourceMappingURL=collector.d.ts.map

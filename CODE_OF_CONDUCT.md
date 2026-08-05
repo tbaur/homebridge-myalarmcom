@@ -27,7 +27,11 @@ Maintainers have the right to remove, edit, or reject comments, commits, code, i
 
 ## Reporting
 
-Report issues to the project maintainers via GitHub issues or direct contact.
+Report conduct concerns to the maintainers by opening a GitHub issue.
+
+If the matter should not be public, this single-maintainer project has no dedicated private conduct channel; the advisory form is reserved for security vulnerabilities. Contact the maintainer directly through their GitHub profile instead.
+
+Security vulnerabilities are not conduct issues and must never be reported through a public issue — see [SECURITY.md](SECURITY.md).
 
 ## Attribution
 

@@ -11,7 +11,8 @@
  * numeric constants below mirror HAP's own values; a unit test asserts they
  * still match at runtime, so the decoupling cannot silently drift.
  */
-import { PartitionState, type ArmingModeName, type PartitionAttributes, type SensorAttributes } from '../types/alarm';
+import { type ArmingModeName, type PartitionAction, type PartitionAttributes, type SensorAttributes, type SensorServiceKind } from '../types/alarm';
+export type { SensorServiceKind };
 /** Mirrors `Characteristic.SecuritySystemCurrentState`. */
 export declare enum HomeKitSecurityState {
     STAY_ARM = 0,
@@ -45,11 +46,9 @@ export declare enum HomeKitSmokeState {
  * "disarmed" would be actively dangerous: it would show a green, safe-looking
  * tile for a system whose real state we do not know.
  */
-export declare function toHomeKitSecurityState(partitionState: number): HomeKitSecurityState | undefined;
-/** Map a HomeKit target state to the Alarm.com state it requests. */
-export declare function toPartitionState(target: number): PartitionState | undefined;
+export declare function toHomeKitSecurityState(partitionState: unknown): HomeKitSecurityState | undefined;
 /** Map a HomeKit target state to the Alarm.com command verb. */
-export declare function toPartitionAction(target: number): 'armStay' | 'armAway' | 'disarm' | undefined;
+export declare function toPartitionAction(target: number): PartitionAction | undefined;
 /**
  * Resolve which arming mode's capabilities govern a requested target state.
  *
@@ -67,8 +66,15 @@ export declare function armingModeFor(target: number): ArmingModeName;
  * distinguishes them.
  */
 export declare function toDisplayedSecurityState(attributes: PartitionAttributes): HomeKitSecurityState | undefined;
-/** Human-readable arming state for logs. */
-export declare function toSecurityStateLabel(state: HomeKitSecurityState): string;
+/**
+ * Human-readable arming state for logs.
+ *
+ * Takes a plain `number` because callers hold HomeKit characteristic values,
+ * which are numbers at runtime whatever the enum claims. The default branch is
+ * the point: a value outside the enum must read as an obvious unknown rather
+ * than being asserted into one of the five safe-sounding labels.
+ */
+export declare function toSecurityStateLabel(state: number): string;
 /**
  * Label for an event-hinted sensor reading (before the confirming API read).
  *
@@ -76,15 +82,13 @@ export declare function toSecurityStateLabel(state: HomeKitSecurityState): strin
  * resting/triggered outcomes, so push and poll logs stay consistent.
  */
 export declare function toImmediateSensorLabel(kind: SensorServiceKind, isTriggered: boolean): string;
-/** A sensor mapped onto the HomeKit service that should represent it. */
-export type SensorServiceKind = 'contact' | 'motion' | 'smoke';
 /**
  * Choose the HomeKit service for a sensor.
  *
  * Returns `undefined` for device types this plugin does not handle, which the
  * platform reports and skips rather than guessing at.
  */
-export declare function toSensorServiceKind(deviceType: number): SensorServiceKind | undefined;
+export declare function toSensorServiceKind(deviceType: unknown): SensorServiceKind | undefined;
 /** A sensor's reading expressed for HomeKit. */
 export interface MappedSensorState {
     kind: SensorServiceKind;

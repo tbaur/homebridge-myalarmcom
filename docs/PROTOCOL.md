@@ -14,11 +14,13 @@ There is no REST API. There is a website, and the website talks to a private JSO
 
 First, `GET https://www.alarm.com/login` and scrape four hidden inputs from the HTML: `__VIEWSTATE`, `__VIEWSTATEGENERATOR`, `__EVENTVALIDATION`, and `__PREVIOUSPAGE`. These are the first thing that will break if Alarm.com redesigns the page, which is why the plugin reports precisely which field went missing rather than a generic failure.
 
-Second, `POST https://www.alarm.com/web/Default.aspx` as `application/x-www-form-urlencoded`, echoing those four fields back along with the credentials. The username field is named `ctl00$ContentPlaceHolder1$loginform$txtUserName` and the password field is plain `txtPassword`. Three further fields — `__EVENTTARGET`, `__EVENTARGUMENT`, and `__VIEWSTATEENCRYPTED` — are sent as the **literal four-character string `null`**, not as an empty value and not omitted. This looks like a bug and is not; it is what the endpoint accepts.
+Second, `POST https://www.alarm.com/web/Default.aspx` as `application/x-www-form-urlencoded`, echoing those four fields back along with the credentials. The username field is named `ctl00$ContentPlaceHolder1$loginform$txtUserName` and the password field is plain `txtPassword`. Three further fields — `__EVENTTARGET`, `__EVENTARGUMENT`, and `__VIEWSTATEENCRYPTED` — are sent as the **literal four-character string `null`**, not as an empty value and not omitted. This looks like a bug and is not; it is what the endpoint accepts. One more field, `IsFromNewSite=1`, is also posted; the web app sends it and this client matches known-working bytes.
+
+Scrape each hidden field with a pattern bounded to a single tag (`name="X"[^>]*?value="([^"]*)"`). An unbounded `[\s\S]*?` will skip past an input that has no adjacent `value=` and capture some *other* field's value, so a layout change looks like success with the wrong bytes — which defeats the missing-field reporting above.
 
 If the account has two-factor authentication enabled, this POST must carry a `Cookie: twoFactorAuthenticationId=<value>` header. See [the cookie](#the-two-factor-cookie) below.
 
-Third, read the session cookies off the login **response**. Success is a `302`. A `200` means the form re-rendered, which is how WebForms reports a rejected credential — so the intuitive success check is exactly backwards here.
+Third, read the session cookies off the login **response**. Success is a redirect — `302` is what was observed. A `200` means the form re-rendered, which is how WebForms reports a rejected credential, so the intuitive success check is exactly backwards here. The plugin treats only `200` (bad credentials) and `409` (two-factor required) as failures; every other status falls through to the cookie check, on the grounds that a session with the `afg` cookie is a working session whatever status accompanied it.
 
 ### Only replay the login response's cookies
 
@@ -97,7 +99,7 @@ Arming takes 20–30 seconds to settle at the panel. Do not expect the response 
 
 | Value | Meaning        |
 | ----- | -------------- |
-| 0     | Unknown        |
+| 0     | Unknown (inferred) |
 | 1     | Closed         |
 | 2     | Open           |
 | 3     | Idle           |
@@ -147,6 +149,12 @@ Connect to `{metaData.endpoint}?auth={value}`, defaulting to `wss://webskt.alarm
 
 Check that endpoint before appending the token to it. It is chosen by the server and the token is a live credential, so an unvalidated value lets one field in one response decide where a credential for a security system is sent, and a `ws://` value would send it in clear text. Require `wss:` on an `alarm.com` host and fall back to the default otherwise.
 
+### The token expires in about five minutes
+
+**Inferred from observed behaviour, not documented by Alarm.com.** A connection established with a token stops receiving frames roughly five minutes after the token was issued, and the socket is not always closed when that happens — so a client that waits for a close event can sit on a silently dead connection while HomeKit shows stale state and nothing anywhere reports an error.
+
+The plugin therefore fetches a fresh token and re-establishes the connection every ~3.5 minutes rather than waiting to be disconnected, with *subtractive* jitter so the refresh always lands before the expiry rather than sometimes after it.
+
 ### Do not encode the token
 
 **Verified, and it fails in a way that points at the wrong cause.**
@@ -191,7 +199,7 @@ Join `UnitId` and `DeviceId` with a hyphen to get the device resource ID.
 | `8`         | Panel disarmed              | Sent by the partition on a disarm from the mobile app     |
 | `9`         | Panel armed, stay           | Sent by the partition on an arm-stay from the mobile app  |
 | `13`        | Sensor bypassed             | Fired by two open windows as an arm-stay bypassed them    |
-| `15`        | Contact opened              | Inferred from the pairing with `0` and `100`              |
+| `15`        | Contact opened *(inferred)* | Inferred from the pairing with `0` and `100`              |
 | `35`        | Sensor bypass cleared       | Fired by the same two windows on disarm                   |
 | `55`        | A user signed in            | Fires on the plugin's own logins; carries no device state |
 | `100`       | Contact opened *and* closed | Opening a door and shutting it produces one `100`         |

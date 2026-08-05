@@ -37,11 +37,19 @@ export interface CollectionResponse<TAttributes> {
     data: Resource<TAttributes>[];
     included?: Resource<unknown>[];
 }
-/** Resource `type` discriminators returned by Alarm.com. */
-export declare enum ResourceType {
-    PARTITION = "devices/partition",
-    SENSOR = "devices/sensor"
+/** Credentials for the push event stream. */
+export interface EventStreamToken {
+    token: string;
+    /** Endpoint reported by Alarm.com, when it supplies one. */
+    endpoint?: string;
 }
+/**
+ * A sensor mapped onto the HomeKit service that should represent it.
+ *
+ * Declared here rather than beside the mapping functions so the event decoder
+ * can name a device category without `types/` depending on `utils/`.
+ */
+export type SensorServiceKind = 'contact' | 'motion' | 'smoke';
 /**
  * Sensor hardware category, from a sensor's `deviceType` attribute.
  *
@@ -104,8 +112,12 @@ export interface SensorReading {
  * cover states this plugin has not seen. Disagreement is surfaced via
  * `isAmbiguous` rather than silently resolved, so the platform can log it
  * instead of guessing wrong in either direction.
+ *
+ * Arguments are typed `unknown` because they come from an API response parsed
+ * without validation; a non-numeric value resolves to an ambiguous "Unknown"
+ * reading rather than indexing a table with whatever arrived.
  */
-export declare function readSensorState(deviceType: number, state: number, openClosedStatus?: number): SensorReading;
+export declare function readSensorState(deviceType: unknown, state: unknown, openClosedStatus?: unknown): SensorReading;
 /** Attributes returned on a sensor resource. */
 export interface SensorAttributes {
     description: string;
@@ -128,11 +140,15 @@ export interface SensorAttributes {
     macAddress?: string;
     manufacturer?: string | null;
 }
+/** Arming commands Alarm.com accepts on a partition. */
+export type PartitionAction = 'armStay' | 'armAway' | 'disarm';
 /**
  * Security panel arming state.
  *
- * Verified: DISARMED. The test account is provisioned read-only and never left
- * that state, so the armed values are inferred.
+ * Verified: DISARMED and ARMED_STAY, both observed live by arming and
+ * disarming from the mobile app while watching the account. Inferred: UNKNOWN,
+ * ARMED_AWAY, ARMED_NIGHT — the read-only test account cannot issue those
+ * commands. See docs/PROTOCOL.md.
  */
 export declare enum PartitionState {
     UNKNOWN = 0,

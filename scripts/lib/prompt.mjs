@@ -12,16 +12,39 @@
 
 import { stdin, stdout } from 'node:process'
 
+/**
+ * Raised when stdin closes before an answer arrives.
+ *
+ * A non-interactive run — CI, `ssh host 'node scripts/probe.mjs'`, a cron
+ * wrapper — used to print a prompt, receive EOF, and exit 0 having done
+ * nothing, reporting success for a run that never happened.
+ */
+const NO_INPUT = 'No input available. Set ADC_USERNAME, ADC_PASSWORD, and '
+  + 'ADC_MFA_TOKEN when running without a terminal.'
+
 /** Prompt for a value on stdout, echoing what is typed. */
 export function promptText(question) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     stdout.write(question)
     stdin.setEncoding('utf8')
     stdin.resume()
-    stdin.once('data', (chunk) => {
+
+    const cleanup = () => {
+      stdin.removeListener('data', onData)
+      stdin.removeListener('end', onEnd)
       stdin.pause()
+    }
+    const onData = (chunk) => {
+      cleanup()
       resolve(chunk.toString().trim())
-    })
+    }
+    const onEnd = () => {
+      cleanup()
+      reject(new Error(NO_INPUT))
+    }
+
+    stdin.once('data', onData)
+    stdin.once('end', onEnd)
   })
 }
 
@@ -38,6 +61,7 @@ export function promptHidden(question) {
     let value = ''
     const cleanup = () => {
       stdin.removeListener('data', onData)
+      stdin.removeListener('end', onEnd)
       if (stdin.isTTY) {
         stdin.setRawMode(wasRaw)
       }
@@ -64,8 +88,13 @@ export function promptHidden(question) {
         }
       }
     }
+    const onEnd = () => {
+      cleanup()
+      reject(new Error(NO_INPUT))
+    }
 
     stdin.on('data', onData)
+    stdin.once('end', onEnd)
   })
 }
 

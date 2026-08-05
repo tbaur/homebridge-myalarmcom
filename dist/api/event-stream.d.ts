@@ -13,9 +13,9 @@
  * depending on several hundred undocumented event codes, and being wrong about
  * one of them in a security integration is not an acceptable failure mode.
  */
+import type { EventStreamToken } from '../types/alarm';
 import { type AlarmComEvent } from '../types/events';
 import type { Logger } from '../utils/logger';
-import type { EventStreamToken } from './client';
 export type { AlarmComEvent };
 export interface EventStreamOptions {
     log: Logger;

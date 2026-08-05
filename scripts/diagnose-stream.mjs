@@ -15,37 +15,62 @@
  * So this tries every combination at once and reports which ones connect.
  * Read-only: it opens sockets and closes them.
  *
- * Usage: node scripts/diagnose-stream.mjs
+ * Usage: node scripts/diagnose-stream.mjs [--verbose]
+ *
+ * Requires a build: run "npm run build" first, or use "npm run diagnose-stream".
  */
 
 import { createRequire } from 'node:module'
 import { stdout } from 'node:process'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 
 import WsPackage from 'ws'
+import { handleHelp, hasFlag } from './lib/cli.mjs'
+import { createTerminalLogger, DIST_DIR, requireBuild } from './lib/plugin-logger.mjs'
 import { resolveCredentials } from './lib/prompt.mjs'
+import { redactFreeText } from './lib/scrub.mjs'
+import { isWebSocketUrl } from './lib/session.mjs'
 
-const here = dirname(fileURLToPath(import.meta.url))
-const distDir = join(here, '..', 'dist')
+handleHelp(`
+Diagnose why the Alarm.com event stream will not connect.
+
+  node scripts/diagnose-stream.mjs [--verbose]
+
+Opens and immediately closes one socket per client/encoding combination and
+reports which ones the server accepts. Read-only; it sends no commands.
+
+  --verbose   Include the plugin's debug lines.
+  -h, --help  Show this message.
+
+Credentials come from ADC_USERNAME, ADC_PASSWORD, and ADC_MFA_TOKEN, or are
+prompted for when a terminal is attached.
+`)
+
+requireBuild()
+
 const require = createRequire(import.meta.url)
-
-if (!existsSync(join(distDir, 'index.js'))) {
-  stdout.write('dist/ is missing. Run "npm run build" first.\n')
-  process.exit(1)
-}
-
-const { SessionManager } = require(join(distDir, 'api/session-manager.js'))
-const { AlarmComClient } = require(join(distDir, 'api/client.js'))
+const { lengthBand, sanitizeString } = require(join(DIST_DIR, 'utils/sanitizers.js'))
+const { SessionManager } = require(join(DIST_DIR, 'api/session-manager.js'))
+const { AlarmComClient } = require(join(DIST_DIR, 'api/client.js'))
 
 const ATTEMPT_TIMEOUT_MS = 12_000
 
-const quietLog = {
-  debug: () => undefined,
-  info: (message) => stdout.write(`  · ${message}\n`),
-  warn: (message) => stdout.write(`  ! ${message}\n`),
-  error: (message) => stdout.write(`  ✗ ${message}\n`),
+/** Fallback endpoint, matching the plugin's own default. */
+const DEFAULT_ENDPOINT = 'wss://webskt.alarm.com:8443'
+
+const log = createTerminalLogger('diagnose', hasFlag('--verbose'))
+
+/**
+ * Render a socket failure so it cannot carry the token it was authenticating with.
+ *
+ * This is the one place the whole script exists to reach, and it is also where
+ * `ws` is least careful: a malformed endpoint is reported as
+ * `SyntaxError: Invalid URL: wss://…?auth=<the live token>`. The redacting
+ * logger covers the plugin components this script drives, but not the sockets
+ * it opens itself.
+ */
+function describeFailure(error) {
+  return redactFreeText(sanitizeString(String(error?.message ?? error)))
 }
 
 /**
@@ -76,7 +101,7 @@ function attempt(label, makeSocket) {
     try {
       socket = makeSocket()
     } catch (error) {
-      finish('THREW', error?.message ?? String(error))
+      finish('THREW', describeFailure(error))
       return
     }
 
@@ -85,7 +110,7 @@ function attempt(label, makeSocket) {
     if (typeof socket.on === 'function') {
       socket.on('open', () => finish('CONNECTED', 'upgrade accepted'))
       socket.on('unexpected-response', (_req, res) => finish('REFUSED', `HTTP ${res.statusCode}`))
-      socket.on('error', (error) => finish('ERROR', error?.message ?? String(error)))
+      socket.on('error', (error) => finish('ERROR', describeFailure(error)))
       socket.on('close', (code) => finish('CLOSED', `close code ${code}`))
       return
     }
@@ -107,16 +132,28 @@ async function main() {
       twoFactorAuthenticationId: credentials.mfaToken ?? '',
     },
     authIntervalMinutes: 10,
-    log: quietLog,
+    log,
   })
-  const client = new AlarmComClient({ sessionManager, log: quietLog })
+  const client = new AlarmComClient({ sessionManager, log })
 
   stdout.write('\n── Token ──\n')
   const { token, endpoint } = await client.getEventStreamToken()
-  const target = endpoint ?? 'wss://webskt.alarm.com:8443'
+
+  // The endpoint is one field in a server response, and the token is appended
+  // to it. Unchecked, whoever controls that field controls where a live
+  // credential for a home security system is sent — and a `ws://` value would
+  // send it in clear text. The plugin refuses such an endpoint; so must this.
+  const target = endpoint && isWebSocketUrl(endpoint) ? endpoint : DEFAULT_ENDPOINT
+  if (endpoint && target !== endpoint) {
+    stdout.write('  ! Ignoring a reported endpoint that is not secure alarm.com; using the default.\n')
+  }
 
   stdout.write(`  endpoint reported   ${endpoint ?? '(none; using the default)'}\n`)
-  stdout.write(`  token length        ${token.length}\n`)
+  // Banded, not exact. This output is pasted into issues by definition, and the
+  // precise length of a live credential is one more fact an attacker holding the
+  // paste would not otherwise have. A band answers the diagnostic question
+  // ("did we get a token, and is it plausibly whole?") without publishing it.
+  stdout.write(`  token length        ${lengthBand(token.length)}\n`)
   // Whether the token needs encoding at all is the crux, so report it plainly.
   const encoded = encodeURIComponent(token)
   stdout.write(`  encoding changes it ${encoded !== token}\n`)
@@ -155,6 +192,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  stdout.write(`\nFailed: ${error?.message ?? error}\n`)
+  stdout.write(`\nFailed: ${describeFailure(error)}\n`)
   process.exit(1)
 })

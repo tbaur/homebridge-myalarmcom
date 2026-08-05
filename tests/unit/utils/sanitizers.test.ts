@@ -200,8 +200,116 @@ describe('sanitizeString', () => {
     })
   })
 
-  it('redacts a bearer token', () => {
-    expect(sanitizeString(`Authorization: Bearer ${STREAM_TOKEN}`)).toBe('Authorization: Bearer ***')
+  describe('Authorization headers', () => {
+    it('redacts a bearer token', () => {
+      expect(sanitizeString(`Authorization: Bearer ${STREAM_TOKEN}`))
+        .toBe('Authorization: Bearer ***')
+    })
+
+    /** Basic carries the password itself, and has no `=` for the length backstop. */
+    it('redacts Basic credentials while keeping the scheme visible', () => {
+      expect(sanitizeString('Authorization: Basic dXNlcjpjb3JyZWN0LWhvcnNl'))
+        .toBe('Authorization: Basic ***')
+    })
+
+    it('redacts a scheme it has never heard of', () => {
+      expect(sanitizeString('authorization: Acme-V2 aVerySecretValue'))
+        .toBe('authorization: Acme-V2 ***')
+    })
+  })
+
+  /**
+   * SECRET_KEYS covers the names Alarm.com uses today. These are the shapes a
+   * future payload or a copy-pasted capture could introduce, which a
+   * name-by-name blocklist would let through by default.
+   */
+  describe('credential-shaped keys the plugin has never seen', () => {
+    it.each([
+      ['{"access_token":"aVerySecretValue"}', '{"access_token":"***"}'],
+      ['{"apiKey":"aVerySecretValue"}', '{"apiKey":"***"}'],
+      ['{"refreshToken":"aVerySecretValue"}', '{"refreshToken":"***"}'],
+      ['{"sessionId":"aVerySecretValue"}', '{"sessionId":"***"}'],
+      ['{"clientSecret":"aVerySecretValue"}', '{"clientSecret":"***"}'],
+      ['{"authorization":"Basic abc"}', '{"authorization":"***"}'],
+    ])('redacts the value of %s', (input, expected) => {
+      expect(sanitizeString(input)).toBe(expected)
+    })
+
+    it('normalises separators, so snake_case spellings match too', () => {
+      expect(sanitizeString(`{"two_factor_authentication_id":"${TRUST_TOKEN}"}`))
+        .not.toContain(TRUST_TOKEN)
+    })
+
+    it('leaves an already-redacted value alone rather than losing the field name', () => {
+      expect(sanitizeString('{"password":"***"}')).toBe('{"password":"***"}')
+    })
+  })
+
+  /**
+   * Alarm.com serves whole HTML pages where JSON is expected, so an error
+   * message can carry megabytes. Every pattern is linear, but running twenty of
+   * them over that much text still blocks the event loop inside the logger.
+   */
+  it('truncates an enormous input rather than scanning all of it', () => {
+    const huge = 'a'.repeat(200_000)
+
+    const sanitized = sanitizeString(huge)
+
+    expect(sanitized.length).toBeLessThan(10_000)
+    expect(sanitized).toContain('200000 chars truncated')
+  })
+
+  /**
+   * `[^"]*` is the obvious way to spell a JSON string body and it is wrong: it
+   * stops at the first quote. A password containing `\"` had everything after
+   * that quote printed in cleartext while the line still ended in a reassuring
+   * `***`, which is worse than no redaction because it looks handled.
+   */
+  it('redacts a whole JSON secret that itself contains an escaped quote', () => {
+    const awkward = String.raw`abc\"def-tail-that-must-not-appear`
+
+    const sanitized = sanitizeString(`{"password":"${awkward}"}`)
+
+    expect(sanitized).toBe('{"password":"***"}')
+    expect(sanitized).not.toContain('tail-that-must-not-appear')
+  })
+
+  it('redacts an Authorization header that carries no scheme', () => {
+    const sanitized = sanitizeString('authorization: aVerySecretTokenValue123456')
+
+    expect(sanitized).toBe('authorization: ***')
+  })
+
+  it('keeps the scheme but not the credential when there is one', () => {
+    expect(sanitizeString('Authorization: Bearer aVerySecretTokenValue123456'))
+      .toBe('Authorization: Bearer ***')
+  })
+
+  it('is idempotent, so a re-sanitized line does not degrade', () => {
+    for (const line of [
+      'Authorization: Bearer ***',
+      'authorization: ***',
+      '{"password":"***"}',
+      'cookie: ***',
+    ]) {
+      expect(sanitizeString(line)).toBe(line)
+    }
+  })
+
+  /**
+   * The patterns run against response bodies chosen by a remote service, so the
+   * cost of the scan must not be chosen by it either. A key pattern built as
+   * `[\w.-]*(?:token|secret)[\w.-]*` looks harmless and backtracks quadratically:
+   * 27ms at the truncation cap, and unbounded without one.
+   */
+  it('stays fast on input built to make the patterns backtrack', () => {
+    const adversarial = `"${'a'.repeat(4_000)}authorization${'a'.repeat(4_000)}`
+
+    const startedAt = performance.now()
+    sanitizeString(adversarial)
+    const elapsedMs = performance.now() - startedAt
+
+    expect(elapsedMs).toBeLessThan(150)
   })
 
   it('leaves text carrying no secrets alone', () => {
@@ -263,13 +371,46 @@ describe('sanitizeError', () => {
     expect(sanitizeError({ toString: () => `afg=${CSRF}` })).toBe('afg=***')
     expect(sanitizeError(undefined)).toBe('undefined')
   })
+
+  /**
+   * The wrapper is rarely the useful half. "Request failed" wrapping an
+   * `ECONNREFUSED` used to log only the first, discarding the one detail that
+   * tells an operator what to fix.
+   */
+  it('includes the underlying cause, which is usually the actionable part', () => {
+    const error = new Error('Request to https://www.alarm.com/login failed', {
+      cause: new Error('connect ECONNREFUSED 127.0.0.1:443'),
+    })
+
+    expect(sanitizeError(error)).toBe(
+      'Request to https://www.alarm.com/login failed: connect ECONNREFUSED 127.0.0.1:443',
+    )
+  })
+
+  it('redacts secrets found in a cause, not just the outer message', () => {
+    const error = new Error('login failed', { cause: new Error(`rejected afg=${CSRF}`) })
+
+    expect(sanitizeError(error)).not.toContain(CSRF)
+  })
+
+  it('stops walking a cause chain that loops back on itself', () => {
+    const inner: Error & { cause?: unknown } = new Error('inner')
+    const outer = new Error('outer', { cause: inner })
+    inner.cause = outer
+
+    expect(() => sanitizeError(outer)).not.toThrow()
+    expect(sanitizeError(outer)).toBe('outer: inner')
+  })
 })
 
 describe('previewSecret', () => {
   it('describes a secret without disclosing any of it', () => {
     const preview = previewSecret(TRUST_TOKEN)
 
-    expect(preview).toMatch(new RegExp(`^\\(${TRUST_TOKEN.length} chars, scrypt:[0-9a-f]{8}\\)$`))
+    // A band, not the exact length: the log needs to distinguish a real token
+    // from a truncated paste, not publish one more fact about the credential.
+    expect(preview).toMatch(/^\(20-49 chars, scrypt:[0-9a-f]{8}\)$/)
+    expect(preview).not.toContain(String(TRUST_TOKEN.length))
     expect(preview).not.toContain(TRUST_TOKEN)
     // Not even a fragment. A log is no place to spend a credential's entropy.
     expect(preview).not.toContain(TRUST_TOKEN.slice(-4))

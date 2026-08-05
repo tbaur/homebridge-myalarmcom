@@ -35,7 +35,7 @@ describe('RateLimiter', () => {
     const limiter = new RateLimiter({ minIntervalMs: 1_000 })
 
     await expect(limiter.acquire()).resolves.toBeUndefined()
-    expect(limiter.getStatus().requestsInWindow).toBe(1)
+    expect(limiter.getStatus().remaining).toBe(DEFAULT_RATE_LIMITER_CONFIG.maxRequests - 1)
   })
 
   it('spaces consecutive requests by the minimum interval', async () => {
@@ -70,7 +70,7 @@ describe('RateLimiter', () => {
     await limiter.acquire()
     await limiter.acquire()
 
-    expect(limiter.getStatus()).toMatchObject({ requestsInWindow: 2, remaining: 0 })
+    expect(limiter.getStatus().remaining).toBe(0)
 
     const third = limiter.acquire()
     const tracked = track(third)
@@ -90,7 +90,8 @@ describe('RateLimiter', () => {
 
     await jest.advanceTimersByTimeAsync(1_001)
 
-    expect(limiter.getStatus().requestsInWindow).toBe(0)
+    // Both slots of this limiter's own two-request window are free again.
+    expect(limiter.getStatus().remaining).toBe(2)
     await expect(limiter.acquire()).resolves.toBeUndefined()
   })
 
@@ -128,26 +129,11 @@ describe('RateLimiter', () => {
     expect(operation).not.toHaveBeenCalled()
   })
 
-  it('reports what it is currently allowing', async () => {
+  it('reports how many slots are left in the window', async () => {
     const limiter = new RateLimiter({ minIntervalMs: 1_000, maxRequests: 60, windowMs: 60_000 })
     await limiter.acquire()
 
-    expect(limiter.getStatus()).toEqual({
-      requestsInWindow: 1,
-      maxRequests: 60,
-      remaining: 59,
-      msUntilNextSlot: 1_000,
-    })
-  })
-
-  it('forgets everything when reset', async () => {
-    const limiter = new RateLimiter({ minIntervalMs: 1_000 })
-    await limiter.acquire()
-
-    limiter.reset()
-
-    expect(limiter.getStatus().requestsInWindow).toBe(0)
-    await expect(limiter.acquire()).resolves.toBeUndefined()
+    expect(limiter.getStatus()).toEqual({ remaining: 59 })
   })
 
   it('defaults to one request a second and sixty a minute', () => {
@@ -162,6 +148,17 @@ describe('RateLimiter', () => {
     const limiter = new RateLimiter()
     await limiter.acquire()
 
-    expect(limiter.getStatus()).toMatchObject({ maxRequests: 60, msUntilNextSlot: 1_000 })
+    expect(limiter.getStatus().remaining)
+      .toBe(DEFAULT_RATE_LIMITER_CONFIG.maxRequests - 1)
+
+    // The default one-second minimum interval is what actually holds the second
+    // request, which is the observable half of the default pacing.
+    const claim = limiter.acquire()
+    const second = track(claim)
+    await jest.advanceTimersByTimeAsync(DEFAULT_RATE_LIMITER_CONFIG.minIntervalMs - 1)
+    expect(second.isSettled()).toBe(false)
+    await jest.advanceTimersByTimeAsync(1)
+    await claim
+    expect(second.isSettled()).toBe(true)
   })
 })

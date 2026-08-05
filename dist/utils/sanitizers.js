@@ -27,19 +27,28 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.sanitizeString = sanitizeString;
 exports.sanitizeError = sanitizeError;
 exports.sanitizeLogParameter = sanitizeLogParameter;
+exports.lengthBand = lengthBand;
 exports.previewSecret = previewSecret;
 exports.sanitizeUrl = sanitizeUrl;
 const node_crypto_1 = require("node:crypto");
 /**
- * Fixed salt for {@link previewSecret} fingerprints.
+ * Per-process salt for {@link previewSecret} fingerprints.
  *
- * Not a credential. These previews are for log correlation only — never stored
- * or checked like a password. CodeQL's password-hash query only accepts
- * memory-hard KDFs (scrypt/bcrypt/PBKDF2/Argon2) for password-tainted values,
- * so scrypt is used even though a keyed HMAC would otherwise be enough here.
- * Call sites are rare (login diagnostics), so the cost is acceptable.
+ * Random rather than a constant. A fingerprint only ever needs to answer "is
+ * this the same value as the last line said?", which holds within one process,
+ * and a hard-coded salt in a public repository turns the digest into an offline
+ * oracle that can confirm a guessed secret. Regenerating per process costs
+ * nothing and removes that property entirely.
  */
-const SECRET_PREVIEW_SALT = 'homebridge-myalarmcom:secret-preview';
+const SECRET_PREVIEW_SALT = (0, node_crypto_1.randomBytes)(16);
+/**
+ * Upper bound on the text a single sanitize pass will scan.
+ *
+ * Alarm.com serves whole HTML pages where JSON is expected, so an error message
+ * can carry megabytes. Every pattern here is linear, but running twenty of them
+ * over megabytes still blocks the event loop inside the logger.
+ */
+const MAX_SANITIZE_LENGTH = 8_192;
 /**
  * Every value that must never reach a log, declared once.
  *
@@ -75,7 +84,37 @@ const NON_SENSITIVE_COOKIE_NAMES = new Set([
     'adc_e_alarm_locale', 'adc_e_cookie_banner', 'adc_e_donottrack',
     'adc_e_gpc_enabled', 'adc_e_loggedinassubscriber', 'adc_e_origin_locale',
 ]);
-const escapeForPattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function escapeForPattern(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+/**
+ * Allow a name to match however it is punctuated.
+ *
+ * `twoFactorAuthenticationId` and `two_factor_authentication_id` are the same
+ * secret. Word boundaries are found from the camelCase humps and from any
+ * separators already present, then each boundary is allowed to be `_`, `-`, or
+ * nothing. Enumerating both spellings by hand is the mistake this file's header
+ * already records once.
+ */
+function aliasPattern(alias) {
+    // Marked before escaping, because the escaped form and the substituted
+    // character class both contain characters this would otherwise re-match.
+    const BOUNDARY = '\u0000';
+    return alias
+        .replace(/[_-]/g, BOUNDARY)
+        .replace(/(?<=[a-z0-9])(?=[A-Z])/g, BOUNDARY)
+        .split(BOUNDARY)
+        .map(escapeForPattern)
+        .join('[_-]?');
+}
+/**
+ * The body of a JSON string, allowing escaped characters.
+ *
+ * `[^"]*` is the obvious spelling and it is wrong: it stops at the first quote,
+ * so a password containing `\"` had everything after that quote printed in
+ * cleartext while the line still ended in a reassuring `***`.
+ */
+const JSON_STRING_BODY = '(?:[^"\\\\]|\\\\.)*';
 /**
  * Build the redaction rules for one secret.
  *
@@ -84,32 +123,73 @@ const escapeForPattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
  * one is exactly the gap that leaked session ids out of API error bodies.
  */
 function rulesForSecret({ canonical, aliases }) {
-    const group = aliases.map(escapeForPattern).join('|');
+    const group = aliases.map(aliasPattern).join('|');
     return [
-        { pattern: new RegExp(`"(?:${group})"\\s*:\\s*"[^"]*"`, 'gi'), replacement: `"${canonical}":"***"` },
+        {
+            pattern: new RegExp(`"(?:${group})"\\s*:\\s*"${JSON_STRING_BODY}"`, 'gi'),
+            replacement: `"${canonical}":"***"`,
+        },
         { pattern: new RegExp(`\\b(?:${group})\\s*[=:]\\s*"?[^;&\\s"']*`, 'gi'), replacement: `${canonical}=***` },
     ];
 }
 /**
+ * JSON keys whose *name* suggests the value is a credential.
+ *
+ * Tested against a captured key rather than woven into the surrounding pattern.
+ * Inlining it produced `"[\w.-]*(?:secret|token|…)[\w.-]*"`, whose leading
+ * character class overlaps the alternation that follows it — cleanly quadratic,
+ * and measurably so: 27ms at the truncation cap.
+ */
+const CREDENTIAL_KEY_SHAPE = /secret|token|passw(?:or)?d|api[_-]?key|sessionid|credential|authoriz/i;
+/** Any JSON `"key": "value"` pair. Linear: the key class cannot contain a quote. */
+const JSON_KEY_VALUE = new RegExp(`"([\\w.$-]+)"\\s*:\\s*"${JSON_STRING_BODY}"`, 'g');
+/**
  * Patterns for sensitive data that must never reach a log.
  *
- * Every pattern is linear with no nested quantifiers, so none is vulnerable to
- * catastrophic backtracking on a large or hostile input.
+ * Every pattern is linear: no nested quantifiers, and no quantified class that
+ * can overlap the literal or alternation following it. That second condition is
+ * the one that is easy to miss — a key pattern built as
+ * `[\w.-]*(?:token|secret)[\w.-]*` looks harmless and backtracks quadratically.
+ * Where a name has to be *matched* rather than described, capture it and test
+ * it separately (see {@link CREDENTIAL_KEY_SHAPE}). The suite times a
+ * pathological input to keep this honest.
  */
 const SENSITIVE_PATTERNS = [
     ...SECRET_KEYS.flatMap(rulesForSecret),
     // Whole Cookie/Set-Cookie headers, in JSON and header form. The header form
     // cannot match the JSON one for the same quote-before-colon reason above.
-    { pattern: /"(?:set-)?cookie"\s*:\s*"[^"]*"/gi, replacement: '"cookie":"***"' },
+    {
+        pattern: new RegExp(`"(?:set-)?cookie"\\s*:\\s*"${JSON_STRING_BODY}"`, 'gi'),
+        replacement: '"cookie":"***"',
+    },
     { pattern: /\b(set-)?cookie\s*:\s*[^\n\r]*/gi, replacement: 'cookie: ***' },
     // Event-stream token, which rides in the query string of the socket URL.
     // It is not one opaque parameter: it arrives already percent-escaped and
     // containing structural `&`, so redacting only as far as the first separator
     // leaves most of the token, and its signature, in the log.
     { pattern: /([?&]auth=)[^\s"']*/gi, replacement: '$1***' },
+    // Any Authorization header, with or without a scheme. Basic carries the
+    // password itself, and `Basic <base64>` has no `=` for the length backstop
+    // below to catch. A scheme is kept when present, because knowing whether a
+    // request sent Basic or Bearer is diagnostically useful and discloses
+    // nothing; a schemeless value is redacted whole.
+    {
+        pattern: /\b(authorization\s*:\s*)([^\s,;"']+)(\s+[^\s,;"']+)?/gi,
+        redact: (_match, prefix, scheme, credential) => credential === undefined ? `${prefix}***` : `${prefix}${scheme} ***`,
+    },
     // Runs to the end of the credential, not to the first `&`. A bearer token is
     // not a query parameter, so `&` is part of the value rather than a separator.
     { pattern: /\bbearer\s+[^\s,"']+/gi, replacement: 'Bearer ***' },
+    // Credential-shaped JSON keys the plugin has never seen. SECRET_KEYS covers
+    // the names Alarm.com uses today; this covers the ones a future payload,
+    // dependency, or copy-pasted capture might introduce. Redacting by shape
+    // costs a slightly noisier log and fails closed, which is the trade this
+    // file makes everywhere else. Only the value is replaced — a field *name*
+    // is not a secret, and keeping it is what makes the log still readable.
+    {
+        pattern: JSON_KEY_VALUE,
+        redact: (match, key) => (CREDENTIAL_KEY_SHAPE.test(key) ? `"${key}":"***"` : match),
+    },
 ];
 /** Two or more `name=value` pairs joined by `;`, i.e. a serialized cookie header. */
 const COOKIE_HEADER_SHAPE = /(?:^|\s)[\w.~$-]+=[^;\s]*;\s*[\w.~$-]+=/;
@@ -139,21 +219,41 @@ function redactUnknownCookies(value) {
 }
 /** Remove sensitive data from an arbitrary string. */
 function sanitizeString(value) {
-    let result = value;
-    for (const { pattern, replacement } of SENSITIVE_PATTERNS) {
-        result = result.replace(pattern, replacement);
+    let result = value.length > MAX_SANITIZE_LENGTH
+        ? `${value.slice(0, MAX_SANITIZE_LENGTH)}… (${value.length} chars truncated)`
+        : value;
+    for (const rule of SENSITIVE_PATTERNS) {
+        result = 'redact' in rule
+            ? result.replace(rule.pattern, rule.redact)
+            : result.replace(rule.pattern, rule.replacement);
     }
     return redactUnknownCookies(result);
 }
-/** Convert an unknown thrown value into a sanitized, log-safe message. */
+/** How many wrapped causes to unwrap before giving up on a cycle. */
+const MAX_CAUSE_DEPTH = 5;
+/**
+ * Convert an unknown thrown value into a sanitized, log-safe message.
+ *
+ * The cause chain is walked, because the wrapper is rarely the useful half: a
+ * `NetworkError` saying "request failed" wraps the `ECONNREFUSED` that actually
+ * tells an operator what to fix.
+ */
 function sanitizeError(err) {
-    if (err instanceof Error) {
-        return sanitizeString(err.message);
-    }
     if (typeof err === 'string') {
         return sanitizeString(err);
     }
-    return sanitizeString(String(err));
+    if (!(err instanceof Error)) {
+        return sanitizeString(String(err));
+    }
+    const parts = [err.message];
+    let cause = err.cause;
+    for (let depth = 0; depth < MAX_CAUSE_DEPTH && cause instanceof Error; depth++) {
+        if (cause.message && !parts.includes(cause.message)) {
+            parts.push(cause.message);
+        }
+        cause = cause.cause;
+    }
+    return sanitizeString(parts.join(': '));
 }
 /**
  * Render a value passed alongside a log message so it cannot leak a secret.
@@ -174,14 +274,49 @@ function sanitizeLogParameter(value) {
         return value;
     }
     try {
-        return sanitizeString(JSON.stringify(value) ?? String(value));
+        return sanitizeString(JSON.stringify(value) ?? UNSERIALIZABLE);
     }
     catch {
-        // Circular or otherwise unserializable. Fall back to the string form,
-        // which is still redacted rather than passed through.
-        return sanitizeString(String(value));
+        // Circular or otherwise unserializable. The constructor name says more than
+        // `[object Object]` and cannot itself carry a secret.
+        return `${UNSERIALIZABLE} ${value.constructor?.name ?? 'object'}`;
     }
 }
+/** Stand-in for a value that cannot be rendered without risking a leak. */
+const UNSERIALIZABLE = '[unserializable]';
+/**
+ * Coarse size band for a secret.
+ *
+ * A band answers the only question a log needs ("does this look like a real
+ * token or a truncated paste?") without publishing the exact length, which is
+ * one more fact an attacker holding the log would not otherwise have.
+ */
+function lengthBand(length) {
+    if (length < 20) {
+        return 'under 20';
+    }
+    if (length < 50) {
+        return '20-49';
+    }
+    if (length < 100) {
+        return '50-99';
+    }
+    return '100+';
+}
+/**
+ * Fingerprints already computed this process.
+ *
+ * scrypt at Node's defaults allocates ~16 MB and blocks the event loop for tens
+ * of milliseconds. The same handful of secrets are previewed on every login, so
+ * without this the periodic re-authentication stalls the whole child bridge on
+ * a timer. The secrets are already resident in the session manager, so caching
+ * them here exposes nothing new — but it is capped anyway, because an unbounded
+ * structure keyed on plaintext credentials is the wrong shape to leave lying
+ * around whatever the current call sites happen to do.
+ */
+const fingerprintCache = new Map();
+/** Enough for the two or three secrets one process ever previews. */
+const MAX_FINGERPRINT_CACHE_ENTRIES = 8;
 /**
  * Render a secret as a short, non-reversible fingerprint for diagnostics.
  *
@@ -189,13 +324,23 @@ function sanitizeLogParameter(value) {
  * Never a slice of the secret itself: disclosing even four characters of a
  * credential buys no diagnostic power that a fingerprint does not, and a log
  * is not a place to spend any of a secret's entropy.
+ *
+ * CodeQL's password-hash query only accepts memory-hard KDFs for
+ * password-tainted values, which is why this is scrypt rather than an HMAC.
  */
 function previewSecret(secret) {
     if (!secret) {
         return '(none)';
     }
-    const fingerprint = (0, node_crypto_1.scryptSync)(secret, SECRET_PREVIEW_SALT, 4).toString('hex');
-    return `(${secret.length} chars, scrypt:${fingerprint})`;
+    let fingerprint = fingerprintCache.get(secret);
+    if (fingerprint === undefined) {
+        fingerprint = (0, node_crypto_1.scryptSync)(secret, SECRET_PREVIEW_SALT, 4).toString('hex');
+        if (fingerprintCache.size >= MAX_FINGERPRINT_CACHE_ENTRIES) {
+            fingerprintCache.clear();
+        }
+        fingerprintCache.set(secret, fingerprint);
+    }
+    return `(${lengthBand(secret.length)} chars, scrypt:${fingerprint})`;
 }
 /**
  * Strip the query string from a URL for logging.

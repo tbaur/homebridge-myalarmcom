@@ -90,3 +90,12 @@
 ### Features
 
 * add opt-in diagnostics health logging ([#3](https://github.com/tbaur/homebridge-myalarmcom/issues/3)) ([d26da30](https://github.com/tbaur/homebridge-myalarmcom/commit/d26da305f39def5591a10524c6124925bdf95996))
+
+## 0.1.0 (2026-07-29)
+
+Initial release.
+
+* Alarm.com security panels as HomeKit security systems, with a true triggered-alarm state and read-only presentation for accounts that cannot arm.
+* Contact, motion, and smoke sensors.
+* Push event stream over WebSocket, with polling as the safety net.
+* Client-side pacing, a circuit breaker, and hard floors on the poll and re-authentication intervals, because Alarm.com locks accounts that misbehave.

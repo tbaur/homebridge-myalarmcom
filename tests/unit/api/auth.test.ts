@@ -152,7 +152,6 @@ describe('authenticate', () => {
 
     expect(session.ajaxKey).toBe(CSRF_COOKIE)
     expect(session.cookieHeader).toContain(`ASP.NET_SessionId=${SESSION_COOKIE}`)
-    expect(session.createdAt).toBeInstanceOf(Date)
   })
 
   it('replays only the cookies from the login POST, never those from the login page', async () => {
@@ -278,7 +277,10 @@ describe('authenticate', () => {
     expect(debugOutput).toContain('afg')
     expect(debugOutput).not.toContain(CSRF_COOKIE)
     expect(debugOutput).not.toContain(TRUST_TOKEN)
-    expect(debugOutput).toContain(`${TRUST_TOKEN.length} chars`)
+    // A size band, not the exact length: enough to tell a real token from a
+    // truncated paste without publishing another fact about the credential.
+    expect(debugOutput).toMatch(/\(\d+-\d+ chars, scrypt:[0-9a-f]+\)/)
+    expect(debugOutput).not.toContain(`${TRUST_TOKEN.length} chars`)
   })
 })
 

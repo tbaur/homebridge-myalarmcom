@@ -11,7 +11,9 @@
 import {
   ApiParseError,
   ConfigurationError,
+  LoginThrottledError,
   NetworkError,
+  OperationAbortedError,
   RateLimitError,
 } from '../../../src/errors'
 import { computeBackoffMs, sleep, withRetry } from '../../../src/utils/retry'
@@ -42,6 +44,16 @@ describe('computeBackoffMs', () => {
     expect(computeBackoffMs(20, 1_000, 60_000, () => 0)).toBe(45_000)
   })
 
+  /**
+   * The cap is documented as a ceiling on any single delay, and `resolveDelayMs`
+   * refuses a *server* hint for exceeding it. Clamping before adding jitter let
+   * the plugin's own computed delay sit a quarter above the same ceiling.
+   */
+  it('never exceeds the cap even with jitter pushing upward', () => {
+    expect(computeBackoffMs(20, 1_000, 60_000, () => 1)).toBe(60_000)
+    expect(computeBackoffMs(1_024, 5_000, 300_000, () => 1)).toBe(300_000)
+  })
+
   it('never returns a negative delay', () => {
     expect(computeBackoffMs(1, 0, 60_000, () => 0)).toBe(0)
   })
@@ -57,7 +69,7 @@ describe('computeBackoffMs', () => {
 
 describe('withRetry', () => {
   let waits: number[]
-  let wait: (ms: number) => Promise<void>
+  let wait: (ms: number, signal?: AbortSignal) => Promise<void>
 
   beforeEach(() => {
     waits = []
@@ -122,16 +134,56 @@ describe('withRetry', () => {
     await expect(withRetry(operation, { maxAttempts: 3, baseDelayMs: 1_000, sleep: wait }))
       .rejects.toThrow(NetworkError)
     expect(waits).toHaveLength(2)
-    expect(waits[1]).toBeGreaterThan(waits[0])
+    expect(waits[1]).toBeGreaterThan(waits[0] ?? 0)
   })
 
-  it('honours a Retry-After from Alarm.com over its own backoff', async () => {
+  describe('a Retry-After the server asked for', () => {
+    it('is honoured over the computed backoff', async () => {
+      const operation = jest.fn()
+        .mockRejectedValueOnce(new RateLimitError('slow down', { retryAfterMs: 7_500 }))
+        .mockResolvedValue('ok')
+
+      await expect(withRetry(operation, { baseDelayMs: 1_000, sleep: wait })).resolves.toBe('ok')
+      expect(waits).toEqual([7_500])
+    })
+
+    /**
+     * `Retry-After: 86400` is either a mistake or a punishment. Sleeping
+     * through it inside a poll cycle holds that cycle's in-flight guard for a
+     * day, which silently stops all polling.
+     */
+    it('is abandoned rather than slept through when it exceeds the ceiling', async () => {
+      const operation = jest.fn()
+        .mockRejectedValue(new RateLimitError('come back tomorrow', { retryAfterMs: 86_400_000 }))
+
+      await expect(withRetry(operation, { maxDelayMs: 60_000, sleep: wait }))
+        .rejects.toThrow(RateLimitError)
+      expect(operation).toHaveBeenCalledTimes(1)
+      expect(waits).toEqual([])
+    })
+
+    /**
+     * An HTTP-date `Retry-After` parses to `0` when the local clock runs ahead
+     * of the server's, which would retry instantly against a service that just
+     * asked for room.
+     */
+    it('is floored at the computed backoff, so clock skew cannot remove it', async () => {
+      const operation = jest.fn()
+        .mockRejectedValueOnce(new RateLimitError('slow down', { retryAfterMs: 0 }))
+        .mockResolvedValue('ok')
+
+      await expect(withRetry(operation, { baseDelayMs: 1_000, sleep: wait })).resolves.toBe('ok')
+      expect(waits[0]).toBeGreaterThan(0)
+    })
+  })
+
+  it('waits out the login floor a session manager reports', async () => {
     const operation = jest.fn()
-      .mockRejectedValueOnce(new RateLimitError('slow down', { retryAfterMs: 7_500 }))
+      .mockRejectedValueOnce(new LoginThrottledError(3_000))
       .mockResolvedValue('ok')
 
-    await expect(withRetry(operation, { baseDelayMs: 1_000, sleep: wait })).resolves.toBe('ok')
-    expect(waits).toEqual([7_500])
+    await expect(withRetry(operation, { baseDelayMs: 100, sleep: wait })).resolves.toBe('ok')
+    expect(waits).toEqual([3_000])
   })
 
   it('computes a backoff for a rate limit that carried no Retry-After', async () => {
@@ -168,6 +220,17 @@ describe('withRetry', () => {
 
     expect(operation).toHaveBeenCalledTimes(1)
   })
+
+  it('abandons a pending backoff when the caller aborts', async () => {
+    const controller = new AbortController()
+    const operation = jest.fn().mockRejectedValue(new NetworkError('down'))
+
+    const pending = withRetry(operation, { baseDelayMs: 10_000, signal: controller.signal })
+    controller.abort()
+
+    await expect(pending).rejects.toThrow(OperationAbortedError)
+    expect(operation).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('sleep', () => {
@@ -185,6 +248,38 @@ describe('sleep', () => {
       await jest.advanceTimersByTimeAsync(1)
       await pending
       expect(isDone).toBe(true)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('rejects immediately when its signal has already aborted', async () => {
+    await expect(sleep(50, AbortSignal.abort())).rejects.toThrow(OperationAbortedError)
+  })
+
+  it('rejects and clears its timer when the signal aborts mid-wait', async () => {
+    const controller = new AbortController()
+
+    const pending = sleep(60_000, controller.signal)
+    controller.abort()
+
+    await expect(pending).rejects.toThrow(OperationAbortedError)
+  })
+
+  /**
+   * Backoff waits run to a minute, and the initial-discovery backoff to five.
+   * An unreferenced timer is what stops a child bridge appearing to hang for
+   * that long after Homebridge asks it to stop.
+   */
+  it('does not hold the event loop open', () => {
+    jest.useFakeTimers()
+    try {
+      const unref = jest.fn()
+      jest.spyOn(global, 'setTimeout').mockReturnValue({ unref } as unknown as NodeJS.Timeout)
+
+      void sleep(60_000)
+
+      expect(unref).toHaveBeenCalled()
     } finally {
       jest.useRealTimers()
     }

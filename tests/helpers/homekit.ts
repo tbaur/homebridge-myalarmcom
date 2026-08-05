@@ -32,7 +32,11 @@ type ServiceConstructor = { UUID: string } & (new (displayName?: string, subtype
  * HAP declares `Perms` as a const enum, so it cannot be passed around as an
  * object; the members are spelled out to keep the values tied to HAP anyway.
  */
-const PERMS = { PAIRED_READ: Perms.PAIRED_READ, NOTIFY: Perms.NOTIFY }
+const PERMS = {
+  PAIRED_READ: Perms.PAIRED_READ,
+  PAIRED_WRITE: Perms.PAIRED_WRITE,
+  NOTIFY: Perms.NOTIFY,
+}
 
 /** Stand-in for Homebridge's `PlatformAccessory`, holding real HAP services. */
 export class FakePlatformAccessory {

@@ -17,9 +17,13 @@ import {
   readSensorState,
   SensorDeviceType,
   type ArmingModeName,
+  type PartitionAction,
   type PartitionAttributes,
   type SensorAttributes,
+  type SensorServiceKind,
 } from '../types/alarm'
+
+export type { SensorServiceKind }
 
 /** Mirrors `Characteristic.SecuritySystemCurrentState`. */
 export enum HomeKitSecurityState {
@@ -50,19 +54,17 @@ export enum HomeKitSmokeState {
   SMOKE_DETECTED = 1,
 }
 
-const PARTITION_TO_HOMEKIT: Record<number, HomeKitSecurityState> = {
-  [PartitionState.DISARMED]: HomeKitSecurityState.DISARMED,
-  [PartitionState.ARMED_STAY]: HomeKitSecurityState.STAY_ARM,
-  [PartitionState.ARMED_AWAY]: HomeKitSecurityState.AWAY_ARM,
-  [PartitionState.ARMED_NIGHT]: HomeKitSecurityState.NIGHT_ARM,
-}
-
-const HOMEKIT_TARGET_TO_PARTITION: Record<number, PartitionState> = {
-  [HomeKitSecurityTarget.STAY_ARM]: PartitionState.ARMED_STAY,
-  [HomeKitSecurityTarget.AWAY_ARM]: PartitionState.ARMED_AWAY,
-  [HomeKitSecurityTarget.NIGHT_ARM]: PartitionState.ARMED_NIGHT,
-  [HomeKitSecurityTarget.DISARM]: PartitionState.DISARMED,
-}
+/**
+ * A `Map`, not an object literal: the key is an unvalidated API value, and an
+ * object literal would resolve `"constructor"` to a function rather than
+ * `undefined`, quietly defeating the guard below.
+ */
+const PARTITION_TO_HOMEKIT: ReadonlyMap<number, HomeKitSecurityState> = new Map([
+  [PartitionState.DISARMED, HomeKitSecurityState.DISARMED],
+  [PartitionState.ARMED_STAY, HomeKitSecurityState.STAY_ARM],
+  [PartitionState.ARMED_AWAY, HomeKitSecurityState.AWAY_ARM],
+  [PartitionState.ARMED_NIGHT, HomeKitSecurityState.NIGHT_ARM],
+])
 
 /**
  * Map an Alarm.com partition state to a HomeKit security state.
@@ -73,20 +75,15 @@ const HOMEKIT_TARGET_TO_PARTITION: Record<number, PartitionState> = {
  * tile for a system whose real state we do not know.
  */
 export function toHomeKitSecurityState(
-  partitionState: number,
+  partitionState: unknown,
 ): HomeKitSecurityState | undefined {
-  return PARTITION_TO_HOMEKIT[partitionState]
-}
-
-/** Map a HomeKit target state to the Alarm.com state it requests. */
-export function toPartitionState(target: number): PartitionState | undefined {
-  return HOMEKIT_TARGET_TO_PARTITION[target]
+  return typeof partitionState === 'number'
+    ? PARTITION_TO_HOMEKIT.get(partitionState)
+    : undefined
 }
 
 /** Map a HomeKit target state to the Alarm.com command verb. */
-export function toPartitionAction(
-  target: number,
-): 'armStay' | 'armAway' | 'disarm' | undefined {
+export function toPartitionAction(target: number): PartitionAction | undefined {
   switch (target) {
     case HomeKitSecurityTarget.STAY_ARM:
       return 'armStay'
@@ -140,8 +137,15 @@ export function toDisplayedSecurityState(
   return toHomeKitSecurityState(attributes.state)
 }
 
-/** Human-readable arming state for logs. */
-export function toSecurityStateLabel(state: HomeKitSecurityState): string {
+/**
+ * Human-readable arming state for logs.
+ *
+ * Takes a plain `number` because callers hold HomeKit characteristic values,
+ * which are numbers at runtime whatever the enum claims. The default branch is
+ * the point: a value outside the enum must read as an obvious unknown rather
+ * than being asserted into one of the five safe-sounding labels.
+ */
+export function toSecurityStateLabel(state: number): string {
   switch (state) {
     case HomeKitSecurityState.STAY_ARM:
       return 'Armed Stay'
@@ -175,14 +179,12 @@ export function toImmediateSensorLabel(kind: SensorServiceKind, isTriggered: boo
   }
 }
 
-/** A sensor mapped onto the HomeKit service that should represent it. */
-export type SensorServiceKind = 'contact' | 'motion' | 'smoke'
-
-const DEVICE_TYPE_TO_SERVICE: Record<number, SensorServiceKind> = {
-  [SensorDeviceType.CONTACT]: 'contact',
-  [SensorDeviceType.MOTION]: 'motion',
-  [SensorDeviceType.SMOKE]: 'smoke',
-}
+/** See the note on {@link PARTITION_TO_HOMEKIT} for why this is a `Map`. */
+const DEVICE_TYPE_TO_SERVICE: ReadonlyMap<number, SensorServiceKind> = new Map([
+  [SensorDeviceType.CONTACT, 'contact' as const],
+  [SensorDeviceType.MOTION, 'motion' as const],
+  [SensorDeviceType.SMOKE, 'smoke' as const],
+])
 
 /**
  * Choose the HomeKit service for a sensor.
@@ -190,8 +192,10 @@ const DEVICE_TYPE_TO_SERVICE: Record<number, SensorServiceKind> = {
  * Returns `undefined` for device types this plugin does not handle, which the
  * platform reports and skips rather than guessing at.
  */
-export function toSensorServiceKind(deviceType: number): SensorServiceKind | undefined {
-  return DEVICE_TYPE_TO_SERVICE[deviceType]
+export function toSensorServiceKind(deviceType: unknown): SensorServiceKind | undefined {
+  return typeof deviceType === 'number'
+    ? DEVICE_TYPE_TO_SERVICE.get(deviceType)
+    : undefined
 }
 
 /** A sensor's reading expressed for HomeKit. */

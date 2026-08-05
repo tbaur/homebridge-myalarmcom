@@ -18,6 +18,8 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DiagnosticsCollector = void 0;
+const circuit_breaker_1 = require("../api/circuit-breaker");
+const settings_1 = require("../settings");
 /** Maximum number of recent request latencies retained for percentile math. */
 const LATENCY_WINDOW = 200;
 /** Recent request outcomes retained for the rollup error-rate calculation. */
@@ -28,6 +30,14 @@ const API_ERROR_MIN_SAMPLES = 10;
 const API_ERROR_RATE_THRESHOLD = 0.5;
 /** Seconds the WebSocket may stay disconnected before health is degraded. */
 const WS_DOWN_THRESHOLD_SEC = 60;
+/** Read every reader exactly once. */
+function readSnapshot(readers) {
+    return {
+        status: readers.clientStatus(),
+        ws: readers.wsStatus(),
+        isEventStreamExpected: readers.eventStreamExpected(),
+    };
+}
 /** Accumulates diagnostics counters and renders heartbeat/snapshot reports. */
 class DiagnosticsCollector {
     #now;
@@ -64,26 +74,26 @@ class DiagnosticsCollector {
      * (`networked`), so instant pre-flight rejections (breaker open, rate
      * limited) do not skew percentiles.
      */
-    apiRequest(latencyMs, ok, networked = true) {
+    apiRequest(latencyMs, isOk, wasNetworked = true) {
         this.#apiRequests++;
-        if (!ok) {
+        if (!isOk) {
             this.#apiErrors++;
         }
-        if (networked && Number.isFinite(latencyMs) && latencyMs >= 0) {
+        if (wasNetworked && Number.isFinite(latencyMs) && latencyMs >= 0) {
             this.#latencies.push(latencyMs);
             if (this.#latencies.length > LATENCY_WINDOW) {
                 this.#latencies.shift();
             }
         }
-        this.#recentOutcomes.push(ok);
+        this.#recentOutcomes.push(isOk);
         if (this.#recentOutcomes.length > OUTCOME_WINDOW) {
             this.#recentOutcomes.shift();
         }
     }
     /** Record the result of a polling cycle. */
-    pollCycle(ok, failed, durationMs) {
-        this.#pollOk += ok;
-        this.#pollFailed += failed;
+    pollCycle(okCount, failedCount, durationMs) {
+        this.#pollOk += okCount;
+        this.#pollFailed += failedCount;
         if (Number.isFinite(durationMs) && durationMs >= 0) {
             this.#lastPollDurationMs = durationMs;
         }
@@ -118,18 +128,25 @@ class DiagnosticsCollector {
         this.#retries++;
     }
     /**
-     * Nearest-rank percentile (0..100) over the bounded recent-latency window.
-     * Returns 0 when no samples are available.
+     * Nearest-rank percentiles (0..100) over the bounded recent-latency window,
+     * from one sort. Zero for every rank when there are no samples.
+     *
+     * Batched because every report wants both p50 and p95, and computing them
+     * separately copied and sorted the whole window twice for no benefit. There
+     * was also a public single-rank wrapper around this, used by nothing but its
+     * own tests — so four tests asserted through an API the plugin did not use.
      */
-    percentile(p) {
+    #percentiles(ranks) {
         if (this.#latencies.length === 0) {
-            return 0;
+            return ranks.map(() => 0);
         }
         const sorted = [...this.#latencies].sort((a, b) => a - b);
-        const clamped = Math.min(100, Math.max(0, p));
-        const rank = Math.ceil((clamped / 100) * sorted.length);
-        const index = Math.min(sorted.length - 1, Math.max(0, rank - 1));
-        return sorted[index];
+        return ranks.map((rank) => {
+            const clamped = Math.min(100, Math.max(0, rank));
+            const position = Math.ceil((clamped / 100) * sorted.length);
+            const index = Math.min(sorted.length - 1, Math.max(0, position - 1));
+            return sorted[index] ?? 0;
+        });
     }
     /**
      * Classify current health from live readers.
@@ -137,13 +154,17 @@ class DiagnosticsCollector {
      * Degraded when the circuit breaker is open, the expected event stream has
      * been down longer than the threshold, or the recent API error rate is high.
      */
-    rollup(readers) {
+    rollup(readers, prefetched) {
         const reasons = [];
-        if (readers.clientStatus().circuitBreaker.state === 'OPEN') {
+        // Readers are cheap but not free: `clientStatus()` builds both the breaker
+        // and pacing snapshots, and both prune their timestamp arrays as a side
+        // effect. `#buildReport` already has these, so it passes them in rather than
+        // making every report do two full status builds.
+        const { status, ws, isEventStreamExpected } = prefetched ?? readSnapshot(readers);
+        if (status.circuitBreaker.state === circuit_breaker_1.CircuitState.OPEN) {
             reasons.push('circuitBreakerOpen');
         }
-        const ws = readers.wsStatus();
-        if (readers.eventStreamExpected() && ws !== null) {
+        if (isEventStreamExpected && ws !== null) {
             const wsAgeSec = ws.lastEventAgeSec ?? this.#uptimeSec();
             if (!ws.isConnected && wsAgeSec > WS_DOWN_THRESHOLD_SEC) {
                 reasons.push('webSocketDown');
@@ -207,7 +228,7 @@ class DiagnosticsCollector {
         return report;
     }
     #uptimeSec() {
-        return Math.round((this.#now() - this.#startedAtMs) / 1000);
+        return Math.round((this.#now() - this.#startedAtMs) / settings_1.MS_PER_SECOND);
     }
     #captureCounters() {
         return {
@@ -225,9 +246,10 @@ class DiagnosticsCollector {
         };
     }
     #buildReport(msg, counters, readers) {
-        const status = readers.clientStatus();
-        const ws = readers.wsStatus();
-        const { health, reasons } = this.rollup(readers);
+        const snapshot = readSnapshot(readers);
+        const { status, ws, isEventStreamExpected } = snapshot;
+        const { health, reasons } = this.rollup(readers, snapshot);
+        const [p50Ms, p95Ms] = this.#percentiles([50, 95]);
         return {
             msg,
             lifecycle: {
@@ -238,13 +260,13 @@ class DiagnosticsCollector {
             },
             devices: readers.devices(),
             websocket: {
-                state: webSocketState(ws, readers.eventStreamExpected()),
+                state: webSocketState(ws, isEventStreamExpected),
                 lastEventAgeSec: ws ? ws.lastEventAgeSec : null,
                 reconnects: counters.reconnects,
             },
             circuitBreaker: {
                 state: status.circuitBreaker.state,
-                lastTripAt: this.#lastTripAt,
+                lastTripAt: this.#lastTripAt === null ? null : new Date(this.#lastTripAt).toISOString(),
                 trips: counters.trips,
             },
             rateLimiter: {
@@ -262,8 +284,8 @@ class DiagnosticsCollector {
                 logins: counters.logins,
             },
             api: {
-                p50Ms: this.percentile(50),
-                p95Ms: this.percentile(95),
+                p50Ms: p50Ms ?? 0,
+                p95Ms: p95Ms ?? 0,
                 requests: counters.requests,
                 errors: counters.errors,
             },
@@ -276,8 +298,8 @@ class DiagnosticsCollector {
     }
 }
 exports.DiagnosticsCollector = DiagnosticsCollector;
-function webSocketState(ws, expected) {
-    if (!expected) {
+function webSocketState(ws, isExpected) {
+    if (!isExpected) {
         return 'disabled';
     }
     if (!ws) {

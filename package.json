@@ -41,8 +41,9 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@homebridge/hap-nodejs": "^2.1.9",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.1.0",
+    "@types/node": "^20.19.9",
     "@types/ws": "^8.5.13",
     "@typescript-eslint/eslint-plugin": "^8.51.0",
     "@typescript-eslint/parser": "^8.51.0",
@@ -62,21 +63,30 @@
     "build": "tsc",
     "build:watch": "tsc --watch",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build",
-    "probe": "node scripts/probe.mjs",
-    "verify": "npm run build && node scripts/verify.mjs",
-    "test": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --coverage",
-    "test:watch": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --watch",
-    "test:unit": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --coverage --testPathPattern=tests/unit",
-    "test:integration": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --testPathPattern=tests/integration --collectCoverage=false",
+    "diagnose-stream": "npm run build && node scripts/diagnose-stream.mjs",
     "lint": "eslint . --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage",
     "lint:fix": "eslint . --fix --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage",
-    "watch": "npm run build && node scripts/watch-arming.mjs"
+    "prepublishOnly": "npm run clean && npm run build",
+    "probe": "node scripts/probe.mjs",
+    "test": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --coverage",
+    "test:integration": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --testPathPatterns=tests/integration --collectCoverage=false",
+    "test:unit": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --coverage --testPathPatterns=tests/unit",
+    "test:watch": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --watch",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "verify": "npm run build && node scripts/verify.mjs",
+    "watch-arming": "npm run build && node scripts/watch-arming.mjs"
   },
   "files": [
-    "dist/**/*",
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/**/*.map",
     "config.schema.json",
+    "CHANGELOG.md",
     "LICENSE",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
 }

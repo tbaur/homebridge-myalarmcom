@@ -22,8 +22,14 @@ export interface RecordingLogger extends Logger {
   error: jest.Mock
 }
 
-export function createRecordingLogger(): RecordingLogger {
+/**
+ * @param isDebugEnabled Mirrors the real logger's flag. Components read it to
+ *   skip building payloads they would otherwise discard, so a double that
+ *   reported `false` would leave those branches untested.
+ */
+export function createRecordingLogger(isDebugEnabled = true): RecordingLogger {
   return {
+    isDebugEnabled,
     debug: jest.fn(),
     info: jest.fn(),
     warn: jest.fn(),
