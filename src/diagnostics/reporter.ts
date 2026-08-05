@@ -47,7 +47,12 @@ export class DiagnosticsReporter {
     return this.#intervalMs > 0
   }
 
-  /** Emit the boot snapshot and arm the heartbeat. Idempotent. */
+  /**
+   * Emit the boot snapshot and arm the heartbeat. Idempotent.
+   *
+   * Call after the platform is Ready so the start line reflects discovered
+   * devices and stream state, not zeros from before discovery.
+   */
   start(): void {
     if (!this.isEnabled || this.#timer) {
       return
@@ -63,6 +68,26 @@ export class DiagnosticsReporter {
     // Cleared on shutdown, but unref'd so a missed shutdown cannot keep the
     // process alive on a diagnostics timer.
     this.#timer.unref?.()
+  }
+
+  /**
+   * Debug-only snapshot when startup never reaches Ready.
+   *
+   * The INFO start line waits until after discovery so it is not a wall of
+   * zeros. A permanent boot failure still needs a config echo for bug reports;
+   * that lands here at debug (requires Homebridge `-D` plus `debug: true`).
+   */
+  noteBootFailure(): void {
+    if (!this.isEnabled || this.#timer || !this.#log.isDebugEnabled) {
+      return
+    }
+
+    this.#guard('boot-failure snapshot', () => {
+      const report = this.#collector.snapshot('diagnostics.start', this.#readers)
+      this.#log.debug(`Diagnostics boot (not ready): ${formatDiagnosticLine(report)}`)
+      const { lifecycle, msg, ...groups } = report
+      this.#log.debug('Diagnostics snapshot', { msg, ...groups, ...lifecycle })
+    })
   }
 
   /** Clear the heartbeat and emit the shutdown snapshot. Idempotent. */
@@ -151,25 +176,18 @@ function diagnosticLabel(msg: DiagnosticsSnapshot['msg']): string {
 /**
  * Concise human-readable summary line for a diagnostics report.
  *
- * Carries the plugin version and uptime because these lines are what users are
- * asked to attach to a bug report, and one that does not say which version
- * produced it starts with a round trip.
- *
- * The request and error counts mean different things on different channels —
- * per-interval on a heartbeat, cumulative on the start and stop snapshots — so
- * the window is named rather than left for the reader to infer.
+ * Kept short on purpose: these lines are scanned in a busy Homebridge log.
+ * Version/uptime live in the debug snapshot payload (and in the child-bridge
+ * banner), not on every heartbeat.
  */
 export function formatDiagnosticLine(report: DiagnosticsSnapshot): string {
   const { lifecycle, devices, websocket, api } = report
   const reasonText = lifecycle.reasons.length > 0 ? ` [${lifecycle.reasons.join(', ')}]` : ''
-  const window = report.msg === 'health' ? 'interval' : 'session'
 
   return (
     `${diagnosticLabel(report.msg)}: ${lifecycle.health}${reasonText} | `
-    + `v${lifecycle.pluginVersion} up ${lifecycle.uptimeSec}s | `
     + `devices ${devices.partitions}p/${devices.sensors}s | `
     + `ws ${websocket.state} | `
-    + `api p50 ${api.p50Ms}ms p95 ${api.p95Ms}ms `
-    + `(req ${api.requests}, err ${api.errors} this ${window})`
+    + `api p50 ${api.p50Ms}ms p95 ${api.p95Ms}ms (req ${api.requests}, err ${api.errors})`
   )
 }

@@ -135,14 +135,22 @@ describe('platform diagnostics', () => {
     expect(diagnosticsHeartbeat).toBeNull()
   })
 
-  it('emits a start snapshot and periodic heartbeats when enabled', async () => {
+  it('emits a start snapshot after Ready and periodic heartbeats when enabled', async () => {
     await launch({ diagnosticsInterval: DIAGNOSTICS_INTERVAL_SEC })
 
-    const startLine = log.infoMessages.find((message) => message.includes('Diagnostics start'))
+    const readyIndex = log.infoMessages.findIndex((message) => message.includes('Platform Ready'))
+    const startIndex = log.infoMessages.findIndex((message) => message.includes('Diagnostics start'))
+    expect(readyIndex).toBeGreaterThanOrEqual(0)
+    expect(startIndex).toBeGreaterThan(readyIndex)
+
+    const startLine = log.infoMessages[startIndex]
     expect(startLine).toBeDefined()
     // Homebridge appends extra log args as JSON; the human line must stand alone.
     expect(startLine).not.toContain('"msg"')
     expect(startLine).not.toContain('"devices"')
+    expect(startLine).not.toMatch(/v\d+\.\d+\.\d+ up /)
+    expect(startLine).not.toContain('this session')
+    expect(startLine).toMatch(/devices 1p\/\d+s/)
     expect(diagnosticsHeartbeat).not.toBeNull()
 
     const infoBefore = log.infoMessages.length
@@ -150,6 +158,7 @@ describe('platform diagnostics', () => {
     const healthLine = log.infoMessages.slice(infoBefore).find((message) => message.includes('Health:'))
     expect(healthLine).toBeDefined()
     expect(healthLine).not.toContain('"msg"')
+    expect(healthLine).not.toContain('this interval')
 
     const afterFirst = log.infoMessages.length
     diagnosticsHeartbeat!()

@@ -27,8 +27,21 @@ export declare class DiagnosticsReporter {
     constructor(options: DiagnosticsReporterOptions);
     /** Whether the user asked for heartbeats at all. */
     get isEnabled(): boolean;
-    /** Emit the boot snapshot and arm the heartbeat. Idempotent. */
+    /**
+     * Emit the boot snapshot and arm the heartbeat. Idempotent.
+     *
+     * Call after the platform is Ready so the start line reflects discovered
+     * devices and stream state, not zeros from before discovery.
+     */
     start(): void;
+    /**
+     * Debug-only snapshot when startup never reaches Ready.
+     *
+     * The INFO start line waits until after discovery so it is not a wall of
+     * zeros. A permanent boot failure still needs a config echo for bug reports;
+     * that lands here at debug (requires Homebridge `-D` plus `debug: true`).
+     */
+    noteBootFailure(): void;
     /** Clear the heartbeat and emit the shutdown snapshot. Idempotent. */
     stop(): void;
     /**
@@ -42,13 +55,9 @@ export declare class DiagnosticsReporter {
 /**
  * Concise human-readable summary line for a diagnostics report.
  *
- * Carries the plugin version and uptime because these lines are what users are
- * asked to attach to a bug report, and one that does not say which version
- * produced it starts with a round trip.
- *
- * The request and error counts mean different things on different channels —
- * per-interval on a heartbeat, cumulative on the start and stop snapshots — so
- * the window is named rather than left for the reader to infer.
+ * Kept short on purpose: these lines are scanned in a busy Homebridge log.
+ * Version/uptime live in the debug snapshot payload (and in the child-bridge
+ * banner), not on every heartbeat.
  */
 export declare function formatDiagnosticLine(report: DiagnosticsSnapshot): string;
 //# sourceMappingURL=reporter.d.ts.map

@@ -143,17 +143,16 @@ Review the log first. Credentials and cookies are redacted, but device names and
 ### Reading a `Health:` line
 
 ```
-Health: healthy | v1.0.0 up 3600s | devices 1p/19s | ws connected | api p50 120ms p95 410ms (req 42, err 0 this interval)
+Health: healthy | devices 1p/19s | ws connected | api p50 120ms p95 410ms (req 42, err 0)
 ```
 
 | Field | Meaning |
 |---|---|
 | `healthy` / `degraded` | Overall rollup. A degraded line names its reasons in brackets. |
-| `v… up …s` | Plugin version and seconds since startup. |
 | `devices 1p/19s` | Published partitions and sensors. |
 | `ws` | Event stream: `connected`, `connecting`, `disconnected`, `closed`, or `disabled` when `useEventStream` is off. |
 | `api p50 / p95` | Request latency percentiles over the last 200 requests. |
-| `req` / `err` | Request and error counts. `this interval` on a `Health:` line, `this session` on the boot and shutdown snapshots. |
+| `req` / `err` | Request and error counts since the previous heartbeat (`Health:`), or cumulative for the process on `Diagnostics start` / `Diagnostics stop`. |
 
 Degradation reasons:
 
@@ -163,7 +162,7 @@ Degradation reasons:
 | `webSocketDown` | The stream was expected but has been down for over 60 seconds. |
 | `apiErrorRateHigh` | More than half of the last 10 or more requests failed. |
 
-`Diagnostics start` and `Diagnostics stop` lines carry the same fields plus a redacted echo of the resolved configuration, so a bug report shows what the plugin actually parsed.
+`Diagnostics start` is emitted after Platform Ready (so device and stream fields are real). `Diagnostics stop` uses the same line shape. With Homebridge Debug Mode and `debug: true`, the structured snapshot (including plugin version, uptime, and a redacted config echo) is also logged at debug.
 
 ## Security
 
