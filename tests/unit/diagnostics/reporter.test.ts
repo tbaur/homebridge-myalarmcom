@@ -12,7 +12,8 @@
 import { CircuitState } from '../../../src/api/circuit-breaker'
 import type { DiagnosticsReaders } from '../../../src/diagnostics/collector'
 import { DiagnosticsCollector } from '../../../src/diagnostics/collector'
-import { DiagnosticsReporter } from '../../../src/diagnostics/reporter'
+import { DiagnosticsReporter, formatDiagnosticLine } from '../../../src/diagnostics/reporter'
+import type { DiagnosticsSnapshot } from '../../../src/diagnostics/types'
 import type { ResolvedConfig } from '../../../src/types/config'
 import { createRecordingLogger, messagesAt, type RecordingLogger } from '../../helpers/logger'
 
@@ -154,5 +155,48 @@ describe('DiagnosticsReporter', () => {
 
     expect(log.debug).not.toHaveBeenCalled()
     expect(messagesAt(log, 'info').join('\n')).toMatch(/Diagnostics start/)
+  })
+
+  it('formats the human line without version, uptime, or window labels', () => {
+    const report = {
+      msg: 'health',
+      lifecycle: {
+        health: 'healthy',
+        reasons: [],
+        uptimeSec: 3600,
+        pluginVersion: '1.0.1',
+      },
+      devices: { partitions: 1, sensors: 19, byType: { contact: 19 }, ignored: 0 },
+      websocket: { state: 'connected', lastEventAgeSec: 1, reconnects: 0 },
+      circuitBreaker: { state: CircuitState.CLOSED, lastTripAt: null, trips: 0 },
+      rateLimiter: { available: 60, throttled: 0 },
+      polling: { cadenceSec: 60, lastDurationMs: 100, ok: 1, failed: 0 },
+      session: { hasSession: true, logins: 1 },
+      api: { p50Ms: 120, p95Ms: 410, requests: 42, errors: 0 },
+      activity: { commandsSent: 0, externalChanges: 0, retries: 0 },
+    } satisfies DiagnosticsSnapshot
+
+    expect(formatDiagnosticLine(report)).toBe(
+      'Health: healthy | devices 1p/19s | ws connected | api p50 120ms p95 410ms (req 42, err 0)',
+    )
+  })
+
+  it('emits a boot-failure snapshot only at debug, and only before start', () => {
+    const reporter = createReporter()
+
+    reporter.noteBootFailure()
+    expect(messagesAt(log, 'info')).toHaveLength(0)
+    expect(messagesAt(log, 'debug').join('\n')).toMatch(/Diagnostics boot \(not ready\)/)
+
+    log = createRecordingLogger(false)
+    createReporter().noteBootFailure()
+    expect(log.debug).not.toHaveBeenCalled()
+
+    log = createRecordingLogger()
+    const armed = createReporter()
+    armed.start()
+    const debugCount = messagesAt(log, 'debug').length
+    armed.noteBootFailure()
+    expect(messagesAt(log, 'debug')).toHaveLength(debugCount)
   })
 })

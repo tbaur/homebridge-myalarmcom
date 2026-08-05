@@ -181,12 +181,11 @@ class MyAlarmComPlatform {
         if (!sessionManager) {
             return;
         }
-        // Armed before discovery, not after. An operator who enabled diagnostics
-        // specifically to debug a startup failure got nothing at all, because a
-        // permanent discovery failure returned before the reporter ever started —
-        // including the redacted config echo that would show what was parsed.
-        this.#reporter.start();
         if (!(await this.#awaitInitialDiscovery())) {
+            // INFO start waits until Ready so it is not a wall of zeros. A permanent
+            // boot failure still gets a debug snapshot (config echo) when diagnostics
+            // and debug logging are both on.
+            this.#reporter.noteBootFailure();
             return;
         }
         if (this.#isShuttingDown) {
@@ -207,6 +206,8 @@ class MyAlarmComPlatform {
             return;
         }
         this.#log.info('Platform Ready');
+        // After Ready: devices and stream state are real, so the start line is useful.
+        this.#reporter.start();
     }
     /**
      * Discover devices, retrying transient failures until success or shutdown.
