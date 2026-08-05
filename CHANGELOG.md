@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.2...v1.0.3) (2026-08-05)
+
+
+### Bug Fixes
+
+* validate cookie values with explicit RFC 6265 octet checks ([#43](https://github.com/tbaur/homebridge-myalarmcom/issues/43)) ([0c60aaf](https://github.com/tbaur/homebridge-myalarmcom/commit/0c60aaf673fad329d25875b650cb990f175d2c04))
+
 ## [1.0.2](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.1...v1.0.2) (2026-08-05)
 
 
