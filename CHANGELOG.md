@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.14...v1.0.0) (2026-08-05)
+
+
+### Features
+
+* graduate to 1.0.0 ([d27539d](https://github.com/tbaur/homebridge-myalarmcom/commit/d27539dcc27d74388299fc88dca9422a64faf54e))
+
 ## [0.1.14](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.13...v0.1.14) (2026-08-05)
 
 
