@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.1...v1.0.2) (2026-08-05)
+
+
+### Bug Fixes
+
+* restore diagnostics line format and emit start after Ready ([#40](https://github.com/tbaur/homebridge-myalarmcom/issues/40)) ([c3e8374](https://github.com/tbaur/homebridge-myalarmcom/commit/c3e83745230b29518d2ef203ae28856701adec62))
+
 ## [1.0.1](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.0...v1.0.1) (2026-08-05)
 
 
