@@ -153,7 +153,7 @@ Check that endpoint before appending the token to it. It is chosen by the server
 
 **Inferred from observed behaviour, not documented by Alarm.com.** A connection established with a token stops receiving frames roughly five minutes after the token was issued, and the socket is not always closed when that happens — so a client that waits for a close event can sit on a silently dead connection while HomeKit shows stale state and nothing anywhere reports an error.
 
-The plugin therefore fetches a fresh token and re-establishes the connection every ~3.5 minutes rather than waiting to be disconnected, with *subtractive* jitter so the refresh always lands before the expiry rather than sometimes after it.
+The plugin therefore fetches a fresh token and re-establishes the connection every ~3.5 minutes rather than waiting to be disconnected, with *subtractive* jitter so the refresh always lands before the expiry rather than sometimes after it. The cutover is **make-before-break**: the live socket stays up until the new handshake completes, and a hung upgrade abandons only the candidate and retries quietly. Disposing the live socket before the handshake used to turn a routine refresh into a real outage whenever Alarm.com was slow to accept the upgrade.
 
 ### Do not encode the token
 

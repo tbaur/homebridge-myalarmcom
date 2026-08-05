@@ -32,6 +32,7 @@ interface MutableReaders {
       isConnecting: boolean
       isClosed: boolean
       lastEventAgeSec: number | null
+      disconnectAgeSec: number | null
     } | null
   }
   rateLimiterRemaining: { value: number }
@@ -47,6 +48,7 @@ const makeReaders = (): MutableReaders => {
       isConnecting: false,
       isClosed: false,
       lastEventAgeSec: 2 as number | null,
+      disconnectAgeSec: null as number | null,
     },
   }
   const rateLimiterRemaining = { value: 50 }
@@ -208,9 +210,23 @@ describe('DiagnosticsCollector', () => {
         isConnecting: false,
         isClosed: false,
         lastEventAgeSec: 120,
+        disconnectAgeSec: 120,
       }
       const collector = new DiagnosticsCollector({ pluginVersion: '0.1.0', config: baseConfig() })
       expect(collector.rollup(m.readers).reasons).toContain('webSocketDown')
+    })
+
+    it('does not degrade on a brief disconnect after a quiet period', () => {
+      const m = makeReaders()
+      m.ws.value = {
+        isConnected: false,
+        isConnecting: false,
+        isClosed: false,
+        lastEventAgeSec: 999,
+        disconnectAgeSec: 1,
+      }
+      const collector = new DiagnosticsCollector({ pluginVersion: '0.1.0', config: baseConfig() })
+      expect(collector.rollup(m.readers)).toEqual({ health: 'healthy', reasons: [] })
     })
 
     it('does not treat a disabled event stream as degraded', () => {
@@ -221,6 +237,7 @@ describe('DiagnosticsCollector', () => {
         isConnecting: false,
         isClosed: true,
         lastEventAgeSec: 999,
+        disconnectAgeSec: 999,
       }
       const collector = new DiagnosticsCollector({ pluginVersion: '0.1.0', config: baseConfig() })
       expect(collector.rollup(m.readers)).toEqual({ health: 'healthy', reasons: [] })
@@ -284,10 +301,10 @@ describe('DiagnosticsCollector', () => {
     it.each([
       ['disabled', { isExpected: false, ws: null }],
       ['disconnected', { isExpected: true, ws: null }],
-      ['closed', { isExpected: true, ws: { isConnected: false, isConnecting: false, isClosed: true, lastEventAgeSec: null } }],
-      ['connected', { isExpected: true, ws: { isConnected: true, isConnecting: false, isClosed: false, lastEventAgeSec: 1 } }],
-      ['connecting', { isExpected: true, ws: { isConnected: false, isConnecting: true, isClosed: false, lastEventAgeSec: null } }],
-      ['disconnected', { isExpected: true, ws: { isConnected: false, isConnecting: false, isClosed: false, lastEventAgeSec: null } }],
+      ['closed', { isExpected: true, ws: { isConnected: false, isConnecting: false, isClosed: true, lastEventAgeSec: null, disconnectAgeSec: 5 } }],
+      ['connected', { isExpected: true, ws: { isConnected: true, isConnecting: false, isClosed: false, lastEventAgeSec: 1, disconnectAgeSec: null } }],
+      ['connecting', { isExpected: true, ws: { isConnected: false, isConnecting: true, isClosed: false, lastEventAgeSec: null, disconnectAgeSec: null } }],
+      ['disconnected', { isExpected: true, ws: { isConnected: false, isConnecting: false, isClosed: false, lastEventAgeSec: null, disconnectAgeSec: 1 } }],
     ])('is "%s" for the matching status', (expected, { isExpected, ws }) => {
       const m = makeReaders()
       m.eventStreamExpected.value = isExpected

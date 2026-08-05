@@ -36,6 +36,14 @@ export interface EventStreamStatus {
     isConnecting: boolean;
     isClosed: boolean;
     lastEventAgeSec: number | null;
+    /**
+     * Seconds since the live socket was lost.
+     *
+     * `null` while connected, or before the stream has ever connected. Health
+     * uses this — not {@link lastEventAgeSec} — so a quiet house does not look
+     * like an outage the moment the socket blips.
+     */
+    disconnectAgeSec: number | null;
 }
 /** Maintains a live connection to the Alarm.com event stream. */
 export declare class EventStream {
