@@ -35,13 +35,36 @@ const MIN_MFA_COOKIE_LENGTH = 20;
  */
 const MAX_CONFIG_STRING_LENGTH = 4_096;
 /**
- * Characters RFC 6265 permits in a cookie value.
+ * Whether `code` is an RFC 6265 cookie-octet.
+ *
+ * cookie-octet = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E
+ * (US-ASCII excluding CTLs, whitespace, DQUOTE, comma, semicolon, backslash).
+ *
+ * Written as explicit bounds rather than a character-class range: a regex form
+ * like `<-[` is correct but overlaps `\w` and trips CodeQL `js/overly-large-range`.
+ */
+function isCookieOctet(code) {
+    return code === 0x21
+        || (code >= 0x23 && code <= 0x2B)
+        || (code >= 0x2D && code <= 0x3A)
+        || (code >= 0x3C && code <= 0x5B)
+        || (code >= 0x5D && code <= 0x7E);
+}
+/**
+ * Whether every character is an RFC 6265 cookie-octet.
  *
  * The two-factor value is interpolated straight into a `Cookie` header, so a
  * pasted `name=value; other=value` string would inject a second cookie pair
  * rather than failing with something a user could act on.
  */
-const COOKIE_VALUE_PATTERN = /^[\w!#-+\--:<-[\]-~]*$/;
+function isCookieValue(value) {
+    for (let index = 0; index < value.length; index += 1) {
+        if (!isCookieOctet(value.charCodeAt(index))) {
+            return false;
+        }
+    }
+    return true;
+}
 function readRequiredString(value, field, report) {
     if (typeof value !== 'string' || value.trim().length === 0) {
         report.errors.push(`"${field}" is required in the ${settings_1.PLATFORM_NAME} platform config`);
@@ -172,7 +195,7 @@ function parseMfaCookie(value, report) {
         report.errors.push('"twoFactorAuthenticationId" looks like a six-digit authenticator code. It must instead be the value of the browser cookie of that name, copied from a signed-in Alarm.com session. See docs/AUTH.md for how to find it.');
         return '';
     }
-    if (!COOKIE_VALUE_PATTERN.test(cookie)) {
+    if (!isCookieValue(cookie)) {
         report.errors.push('"twoFactorAuthenticationId" contains characters that are not valid in a cookie value. Copy only the value of that one cookie, not the whole cookie header.');
         return '';
     }

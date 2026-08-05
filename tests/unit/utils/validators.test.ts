@@ -103,6 +103,27 @@ describe('the two-factor cookie', () => {
       .toMatch(/not valid in a cookie value/)
   })
 
+  it('rejects characters RFC 6265 excludes from cookie-octet', () => {
+    for (const value of [
+      'has space',
+      'comma,inside',
+      'semi;colon',
+      'double"quote',
+      'back\\slash',
+    ]) {
+      expect(errorsFor({ twoFactorAuthenticationId: value }))
+        .toMatch(/not valid in a cookie value/)
+    }
+  })
+
+  it('accepts the full RFC 6265 cookie-octet set', () => {
+    const octets = '!#$%&\'()*+-./0123456789:<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~'
+    const { config, warnings } = resolve({ twoFactorAuthenticationId: octets })
+
+    expect(config.twoFactorAuthenticationId).toBe(octets)
+    expect(warnings).toEqual([])
+  })
+
   it('warns rather than fails when no cookie is configured', () => {
     const { config, warnings } = resolve({ twoFactorAuthenticationId: undefined })
 
