@@ -165,8 +165,12 @@ class DiagnosticsCollector {
             reasons.push('circuitBreakerOpen');
         }
         if (isEventStreamExpected && ws !== null) {
-            const wsAgeSec = ws.lastEventAgeSec ?? this.#uptimeSec();
-            if (!ws.isConnected && wsAgeSec > WS_DOWN_THRESHOLD_SEC) {
+            // Disconnect duration, not last-event age: a quiet house must not look
+            // like an outage the moment the socket blips for a second.
+            const disconnectAgeSec = ws.disconnectAgeSec;
+            if (!ws.isConnected
+                && disconnectAgeSec !== null
+                && disconnectAgeSec > WS_DOWN_THRESHOLD_SEC) {
                 reasons.push('webSocketDown');
             }
         }

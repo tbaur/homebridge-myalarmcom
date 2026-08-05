@@ -57,6 +57,14 @@ export interface EventStreamStatus {
   isConnecting: boolean
   isClosed: boolean
   lastEventAgeSec: number | null
+  /**
+   * Seconds since the live socket was lost.
+   *
+   * `null` while connected, or before the stream has ever connected. Health
+   * uses this — not {@link lastEventAgeSec} — so a quiet house does not look
+   * like an outage the moment the socket blips.
+   */
+  disconnectAgeSec: number | null
 }
 
 /**
@@ -67,10 +75,21 @@ export interface EventStreamStatus {
  * still agree about whether this attempt still owns the connection.
  */
 interface ConnectAttempt {
-  /** True when a live socket is being kept alive until a new token arrives. */
+  /**
+   * True when a live socket is kept through token fetch *and* the candidate
+   * handshake (make-before-break refresh).
+   */
   readonly shouldDeferDispose: boolean
   /** Whether another connect or a stop took ownership during the token fetch. */
   readonly isSuperseded: () => boolean
+}
+
+/** Predicates shared by the handshake listeners for one open attempt. */
+interface HandshakeContext {
+  readonly isRefreshCandidate: boolean
+  readonly isCurrentGeneration: () => boolean
+  readonly isLiveSocket: () => boolean
+  readonly isCandidateSocket: () => boolean
 }
 
 /** Maintains a live connection to the Alarm.com event stream. */
@@ -82,7 +101,13 @@ export class EventStream {
   readonly #onReconnect: (() => void) | undefined
   readonly #onRecovered: (() => void) | undefined
 
+  /** The socket currently carrying push traffic. */
   #socket: WebSocket | null = null
+  /**
+   * In-flight refresh handshake. Kept separate from {@link #socket} so a
+   * timed-out cutover can be abandoned without killing the live connection.
+   */
+  #candidate: WebSocket | null = null
   #reconnectTimer: NodeJS.Timeout | null = null
   #refreshTimer: NodeJS.Timeout | null = null
   #recoveryTimer: NodeJS.Timeout | null = null
@@ -103,6 +128,15 @@ export class EventStream {
    */
   #giveUpCount = 0
   #lastEventAt: number | null = null
+  /** When the live socket was lost; cleared on the next successful open. */
+  #disconnectedAt: number | null = null
+  /**
+   * Whether this outage episode has already logged an info-level reconnect.
+   *
+   * Cleared after a successful proactive refresh — staying up long enough to
+   * refresh means the episode is over. Until then, further reconnects are debug.
+   */
+  #hasAnnouncedReconnectInEpisode = false
   /** Completes a pending {@link #connect} handshake wait when stop interrupts it. */
   #handshakeSettle: (() => void) | null = null
   /**
@@ -140,6 +174,9 @@ export class EventStream {
       lastEventAgeSec: this.#lastEventAt === null
         ? null
         : Math.round((Date.now() - this.#lastEventAt) / MS_PER_SECOND),
+      disconnectAgeSec: isConnected || this.#disconnectedAt === null
+        ? null
+        : Math.round((Date.now() - this.#disconnectedAt) / MS_PER_SECOND),
     }
   }
 
@@ -152,7 +189,9 @@ export class EventStream {
     // on its first attempt using counters from the previous run.
     this.#consecutiveFailures = 0
     this.#lastReportedReason = null
+    this.#hasAnnouncedReconnectInEpisode = false
     this.#hadConnected = false
+    this.#disconnectedAt = null
     this.#connectReason = 'initial'
     // Idempotent: a second start must not leave a prior reconnect/refresh timer armed.
     this.#clearTimers()
@@ -166,6 +205,7 @@ export class EventStream {
     this.#isConnecting = false
     this.#clearTimers()
     this.#settleHandshake()
+    this.#disposeCandidate()
     this.#disposeSocket()
   }
 
@@ -246,9 +286,10 @@ export class EventStream {
   /**
    * Claim ownership of the next connection and describe the attempt.
    *
-   * On proactive refresh the live socket is kept until a new token is in hand.
-   * Disposing first opened a silent push outage for the whole token/login path,
-   * which can wait on the auth floor for minutes.
+   * On proactive refresh the live socket is kept through token fetch *and* the
+   * candidate handshake (make-before-break). Disposing first opened a silent
+   * push outage for the whole token/login path, and a hung upgrade turned a
+   * routine refresh into a real outage plus a noisy WARN/INFO pair.
    */
   #beginAttempt(): ConnectAttempt {
     const shouldDeferDispose = this.#connectReason === 'refresh' && this.isConnected
@@ -256,6 +297,7 @@ export class EventStream {
 
     if (!shouldDeferDispose) {
       this.#connectGeneration++
+      this.#disposeCandidate()
       this.#disposeSocket()
     }
     this.#settleHandshake()
@@ -294,14 +336,8 @@ export class EventStream {
     return true
   }
 
-  /** Cut over to a new socket and wait for its handshake to settle. */
+  /** Open a socket and wait for its handshake to settle. */
   async #openSocket(attempt: ConnectAttempt, { token, endpoint }: EventStreamToken): Promise<void> {
-    // Invalidate any prior socket's handlers, then open the new one.
-    const generation = attempt.shouldDeferDispose
-      ? ++this.#connectGeneration
-      : this.#connectGeneration
-    this.#disposeSocket()
-
     const target = this.#resolveEndpoint(endpoint)
 
     // The token must be appended raw. It is not an opaque value: it arrives
@@ -314,10 +350,30 @@ export class EventStream {
 
     this.#log.debug(`connecting to the event stream at ${target}`)
 
+    if (attempt.shouldDeferDispose && this.isConnected) {
+      // Make-before-break: open a candidate beside the live socket. Bump
+      // generation so a superseded refresh cannot promote a stale candidate,
+      // but keep the live socket's handlers keyed on socket identity so push
+      // frames keep flowing during the handshake.
+      this.#connectGeneration++
+      this.#disposeCandidate()
+      const candidate = new WebSocket(url)
+      this.#candidate = candidate
+      await this.#awaitHandshake(candidate, {
+        generation: this.#connectGeneration,
+        isRefreshCandidate: true,
+      })
+      return
+    }
+
+    this.#disposeCandidate()
+    this.#disposeSocket()
     const socket = new WebSocket(url)
     this.#socket = socket
-
-    await this.#awaitHandshake(socket, generation)
+    await this.#awaitHandshake(socket, {
+      generation: this.#connectGeneration,
+      isRefreshCandidate: false,
+    })
   }
 
   /**
@@ -327,76 +383,169 @@ export class EventStream {
    * Ready is announced. Reconnects take the same path; there the await merely
    * holds the reconnect timer's callback.
    */
-  #awaitHandshake(socket: WebSocket, generation: number): Promise<void> {
+  #awaitHandshake(
+    socket: WebSocket,
+    options: { generation: number, isRefreshCandidate: boolean },
+  ): Promise<void> {
+    const { generation, isRefreshCandidate } = options
+
     return new Promise<void>((resolve) => {
       let isSettled = false
+      const handshake = { timer: null as NodeJS.Timeout | null }
       const settle = (): void => {
         if (isSettled) {
           return
         }
         isSettled = true
-        clearTimeout(handshakeTimer)
+        if (handshake.timer) {
+          clearTimeout(handshake.timer)
+        }
         this.#handshakeSettle = null
         resolve()
       }
       this.#handshakeSettle = settle
 
-      const isCurrent = (): boolean => generation === this.#connectGeneration
+      const ctx: HandshakeContext = {
+        isRefreshCandidate,
+        isCurrentGeneration: () => generation === this.#connectGeneration,
+        isLiveSocket: () => this.#socket === socket,
+        isCandidateSocket: () => this.#candidate === socket,
+      }
 
       // Do not block platform Ready forever if Alarm.com never completes the
-      // upgrade. Abandon the hung socket, surface a WARN, and reconnect.
-      const handshakeTimer = setTimeout(() => {
-        if (!isCurrent()) {
-          settle()
-          return
-        }
-        this.#isConnecting = false
-        this.#recordFailureReason(
-          `handshake timed out after ${WEBSOCKET_HANDSHAKE_TIMEOUT_MS}ms`,
-        )
-        this.#disposeSocket()
-        settle()
-        if (!this.#isStopped) {
-          this.#scheduleReconnect()
-        }
+      // upgrade. A hung *refresh* candidate is abandoned quietly; a hung
+      // drop/initial socket is an outage and reconnects loudly.
+      handshake.timer = setTimeout(() => {
+        this.#onHandshakeTimeout(ctx, settle)
       }, WEBSOCKET_HANDSHAKE_TIMEOUT_MS)
 
       socket.on('open', () => {
-        if (!isCurrent()) {
-          settle()
-          return
-        }
-        this.#handleOpen()
-        settle()
+        this.#onHandshakeOpen(socket, ctx, settle)
       })
       socket.on('message', (data) => {
-        if (isCurrent()) {
+        // Live socket identity, not generation: during make-before-break the
+        // candidate bumps generation while the live socket must keep delivering.
+        if (ctx.isLiveSocket()) {
           this.#handleMessage(data)
         }
       })
       socket.on('error', (error) => {
-        if (isCurrent()) {
-          this.#recordFailureReason(error.message)
-        }
+        this.#onHandshakeTransportFailure(ctx, error.message)
       })
       socket.on('close', (code) => {
-        if (isCurrent()) {
-          this.#handleClose(code)
-        }
-        settle()
+        this.#onHandshakeClose(ctx, code, settle)
       })
-
       // Emitted when the HTTP upgrade is rejected. The status code is the one
       // piece of information that distinguishes a bad token from a blocked
       // client, and it is not available anywhere else.
       socket.on('unexpected-response', (_request, response) => {
-        if (isCurrent()) {
-          this.#recordFailureReason(
-            `the server refused the connection upgrade with HTTP ${response.statusCode}`,
-          )
-        }
+        this.#onHandshakeTransportFailure(
+          ctx,
+          `the server refused the connection upgrade with HTTP ${response.statusCode}`,
+        )
       })
     })
+  }
+
+  #onHandshakeTimeout(ctx: HandshakeContext, settle: () => void): void {
+    if (!ctx.isCurrentGeneration()) {
+      settle()
+      return
+    }
+    this.#isConnecting = false
+    if (ctx.isRefreshCandidate && ctx.isCandidateSocket() && this.isConnected) {
+      this.#log.debug(
+        `refresh handshake timed out after ${WEBSOCKET_HANDSHAKE_TIMEOUT_MS}ms; `
+          + 'keeping the live socket',
+      )
+      this.#disposeCandidate()
+      settle()
+      if (!this.#isStopped) {
+        this.#scheduleRefreshRetry()
+      }
+      return
+    }
+    if (!ctx.isLiveSocket() && !ctx.isCandidateSocket()) {
+      settle()
+      return
+    }
+    this.#recordFailureReason(
+      `handshake timed out after ${WEBSOCKET_HANDSHAKE_TIMEOUT_MS}ms`,
+    )
+    this.#disposeCandidate()
+    this.#disposeSocket()
+    settle()
+    if (!this.#isStopped) {
+      this.#scheduleReconnect()
+    }
+  }
+
+  #onHandshakeOpen(socket: WebSocket, ctx: HandshakeContext, settle: () => void): void {
+    if (!ctx.isCurrentGeneration()) {
+      settle()
+      return
+    }
+    if (ctx.isRefreshCandidate) {
+      if (!ctx.isCandidateSocket()) {
+        settle()
+        return
+      }
+      // Promote the candidate; only now tear down the previous live socket.
+      const previous = this.#socket
+      this.#candidate = null
+      this.#socket = socket
+      this.#closeSocket(previous)
+      this.#handleOpen()
+      settle()
+      return
+    }
+    if (!ctx.isLiveSocket()) {
+      settle()
+      return
+    }
+    this.#handleOpen()
+    settle()
+  }
+
+  #onHandshakeClose(ctx: HandshakeContext, code: number, settle: () => void): void {
+    if (ctx.isRefreshCandidate && ctx.isCandidateSocket()) {
+      this.#candidate = null
+      this.#isConnecting = false
+      if (this.isConnected && !this.#isStopped) {
+        this.#log.debug(
+          `refresh candidate closed with code ${code}; keeping the live socket`,
+        )
+        this.#scheduleRefreshRetry()
+      } else if (!this.#isStopped && !this.isConnected) {
+        // Live died during the cutover — drop path owns recovery.
+        this.#handleClose(code)
+      }
+      settle()
+      return
+    }
+    // Live close is keyed on socket identity, not generation: a refresh
+    // candidate bumps generation while the live socket must still recover.
+    if (ctx.isLiveSocket()) {
+      this.#disposeCandidate()
+      if (!this.#isStopped) {
+        this.#handleClose(code)
+      }
+    }
+    settle()
+  }
+
+  /** Surface a transport failure, or swallow it when a refresh candidate fails quietly. */
+  #onHandshakeTransportFailure(ctx: HandshakeContext, reason: string): void {
+    if (!ctx.isCurrentGeneration()) {
+      return
+    }
+    if (ctx.isRefreshCandidate && ctx.isCandidateSocket() && this.isConnected) {
+      this.#log.debug(`refresh ${reason}; keeping the live socket`)
+      return
+    }
+    if (ctx.isLiveSocket() || ctx.isCandidateSocket()) {
+      this.#recordFailureReason(reason)
+    }
   }
 
   /**
@@ -438,23 +587,51 @@ export class EventStream {
   }
 
   /**
-   * Close the current socket without scheduling a drop-reconnect.
+   * Close a socket without scheduling a drop-reconnect.
    *
    * Must tolerate every readyState. Aborting a CONNECTING handshake makes `ws`
    * emit `'error'` (via `abortHandshake` / `nextTick`); after
    * `removeAllListeners()` that becomes an uncaught exception and kills the
    * child bridge. Keep a no-op listener through `close()`.
    */
-  #disposeSocket(): void {
-    if (!this.#socket) {
+  #closeSocket(socket: WebSocket | null): void {
+    if (!socket) {
       return
     }
-    const socket = this.#socket
-    this.#socket = null
     socket.removeAllListeners()
     socket.on('error', () => {})
     if (socket.readyState !== WebSocket.CLOSED) {
       socket.close()
+    }
+  }
+
+  /** Drop the live socket and record the disconnect for health. */
+  #disposeSocket(): void {
+    if (!this.#socket) {
+      return
+    }
+    const wasOpen = this.#socket.readyState === WebSocket.OPEN
+    const socket = this.#socket
+    this.#socket = null
+    if (wasOpen || this.#hadConnected) {
+      this.#noteDisconnect()
+    }
+    this.#closeSocket(socket)
+  }
+
+  /** Drop an abandoned refresh candidate without touching the live socket. */
+  #disposeCandidate(): void {
+    if (!this.#candidate) {
+      return
+    }
+    const socket = this.#candidate
+    this.#candidate = null
+    this.#closeSocket(socket)
+  }
+
+  #noteDisconnect(): void {
+    if (this.#disconnectedAt === null) {
+      this.#disconnectedAt = Date.now()
     }
   }
 
@@ -504,6 +681,7 @@ export class EventStream {
     // period of working it is news again and gets reported.
     this.#lastReportedReason = null
     this.#giveUpCount = 0
+    this.#disconnectedAt = null
 
     const reason = this.#connectReason
     this.#connectReason = 'drop'
@@ -512,10 +690,17 @@ export class EventStream {
 
     if (this.#hadConnected) {
       if (reason === 'refresh') {
-        // Scheduled token refresh — routine, not an outage.
+        // Scheduled token refresh — routine, not an outage. Staying up long
+        // enough to refresh also ends a reconnect episode.
         this.#log.debug('Alarm.com event stream refreshed')
+        this.#hasAnnouncedReconnectInEpisode = false
+      } else if (this.#hasAnnouncedReconnectInEpisode) {
+        // Same flaky stretch: the first recovery was already news.
+        this.#log.debug('Alarm.com event stream reconnected')
+        this.#notify('reconnect', this.#onReconnect)
       } else {
         this.#log.info('Alarm.com event stream reconnected')
+        this.#hasAnnouncedReconnectInEpisode = true
         this.#notify('reconnect', this.#onReconnect)
       }
     } else {
@@ -536,8 +721,10 @@ export class EventStream {
    *
    * Must run *before* Alarm.com drops the socket (~5 minutes). Refreshing at or
    * after that mark races the server close; the drop path wins and logs
-   * info-level "reconnected" every cycle. Jitter subtracts from the interval so
-   * refresh always lands early. Multiple instances still desynchronize.
+   * info-level "reconnected" every cycle. Make-before-break keeps the live
+   * socket through the candidate handshake so a hung upgrade is a quiet retry
+   * rather than an outage. Jitter subtracts from the interval so refresh always
+   * lands early. Multiple instances still desynchronize.
    */
   #scheduleRefresh(): void {
     if (this.#refreshTimer) {
@@ -581,6 +768,7 @@ export class EventStream {
       return
     }
     this.#isConnecting = false
+    this.#noteDisconnect()
     this.#log.debug(`event stream closed with code ${code}`)
     // Drop path owns the next connect. Cancel a pending proactive refresh or
     // refresh-retry so neither can race the backoff into a second socket.

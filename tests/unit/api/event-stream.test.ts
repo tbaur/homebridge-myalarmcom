@@ -573,7 +573,7 @@ describe('EventStream', () => {
       expect(messagesAt(log, 'debug')).not.toContain('Alarm.com event stream refreshed')
     })
 
-    it('treats a failed refresh handshake as a reconnect, not a quiet refresh', async () => {
+    it('keeps the live socket when a refresh handshake times out', async () => {
       const onReconnect = jest.fn()
       stream = new EventStream({
         log,
@@ -585,20 +585,65 @@ describe('EventStream', () => {
       jest.spyOn(Math, 'random').mockReturnValue(0)
 
       await startOpen()
+      const live = currentSocket()
 
       await jest.advanceTimersByTimeAsync(WEBSOCKET_REFRESH_INTERVAL_MS)
       await flushConnect()
       expect(MockWebSocket.instances).toHaveLength(2)
+      const candidate = currentSocket()
 
       await jest.advanceTimersByTimeAsync(WEBSOCKET_HANDSHAKE_TIMEOUT_MS)
       await flushConnect()
 
-      await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
+      expect(live.closeCount).toBe(0)
+      expect(stream.isConnected).toBe(true)
+      expect(candidate.closeCount).toBe(1)
+      expect(onReconnect).not.toHaveBeenCalled()
+      expect(messagesAt(log, 'info')).not.toContain('Alarm.com event stream reconnected')
+      expect(messagesAt(log, 'warn').join('\n')).not.toMatch(/handshake timed out/)
+      expect(messagesAt(log, 'debug').join('\n')).toMatch(/refresh handshake timed out/)
+      expect(messagesAt(log, 'debug').join('\n')).toMatch(/keeping the live socket/)
+    })
 
-      expect(onReconnect).toHaveBeenCalled()
+    it('abandons a refresh candidate when the live socket drops mid-handshake', async () => {
+      jest.spyOn(Math, 'random').mockReturnValue(0)
+
+      await startOpen()
+      const live = currentSocket()
+
+      await jest.advanceTimersByTimeAsync(WEBSOCKET_REFRESH_INTERVAL_MS)
+      await flushConnect()
+      expect(MockWebSocket.instances).toHaveLength(2)
+      const candidate = currentSocket()
+
+      live.readyState = MockWebSocket.CLOSED
+      live.emit('close', 1006)
+      await flushConnect()
+
+      expect(candidate.closeCount).toBe(1)
+
+      await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
+      expect(stream.isConnected).toBe(true)
       expect(messagesAt(log, 'info')).toContain('Alarm.com event stream reconnected')
-      expect(messagesAt(log, 'debug').filter((message) => message === 'Alarm.com event stream refreshed'))
-        .toHaveLength(0)
+    })
+
+    it('demotes repeated reconnect announcements within one outage episode', async () => {
+      await startOpen()
+
+      currentSocket().emit('close', 1006)
+      await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
+      expect(messagesAt(log, 'info').filter((message) => (
+        message === 'Alarm.com event stream reconnected'
+      ))).toHaveLength(1)
+
+      currentSocket().emit('close', 1006)
+      await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
+      expect(messagesAt(log, 'info').filter((message) => (
+        message === 'Alarm.com event stream reconnected'
+      ))).toHaveLength(1)
+      expect(messagesAt(log, 'debug').filter((message) => (
+        message === 'Alarm.com event stream reconnected'
+      )).length).toBeGreaterThanOrEqual(1)
     })
 
     it('does not WARN when a deferred refresh token fails while drop reconnect is pending', async () => {

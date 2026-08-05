@@ -58,6 +58,7 @@ describe('DiagnosticsReporter', () => {
         isConnecting: false,
         isClosed: false,
         lastEventAgeSec: 1,
+        disconnectAgeSec: null,
       }),
       devices: () => ({ partitions: 1, sensors: 3, byType: { contact: 3 }, ignored: 0 }),
       pollingCadenceSec: () => 60,
