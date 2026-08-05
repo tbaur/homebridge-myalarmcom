@@ -21,9 +21,12 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 npm test              # Run all tests with coverage
+npm run typecheck     # Typecheck src/ and the test project
 npm run lint          # Check code style
 npm run lint:fix      # Auto-fix style issues
 ```
+
+Node 22 or newer for development, matching what `homebridge` 2.x requires. `nvm use` picks that up from `.nvmrc`. The published plugin still supports Node 20 through Homebridge 1.6, which CI verifies by running the whole toolchain on 20, 22, and 24 — the Node 20 job emits an `EBADENGINE` warning for the dev-only `homebridge` dependency, which is expected and not a failure.
 
 ### Code Style
 
@@ -31,7 +34,9 @@ npm run lint:fix      # Auto-fix style issues
 - Use async/await over raw Promises
 - No semicolons, single quotes, trailing commas in multiline literals — `npm run lint:fix` applies all of this
 - Add JSDoc comments for public functions
-- Keep credentials out of logs — never log the account password, the `twoFactorAuthenticationId` cookie, session cookies, or the anti-CSRF value
+- Comments explain *why*, not *what*. A comment that restates the line below it is noise; a comment recording the defect or the empirical finding that produced the line is the most valuable thing in this repository
+- Keep credentials out of logs — never log the account password, the `twoFactorAuthenticationId` cookie, session cookies, the anti-CSRF value, or the event-stream token. Always take a logger from `createScopedLogger`; the redaction guarantee lives there, not in the components
+- Never throw out of the platform constructor. Homebridge does not guard that call, and a throw takes down every other plugin on the user's bridge
 - Follow existing code patterns
 
 ### Working Against a Live Account
@@ -48,8 +53,8 @@ Probe output lands in `probe-output/`, which is git-ignored and must never be co
    ```
 2. Make your changes
 3. Add/update tests
-4. Ensure all tests pass: `npm test` (coverage must stay >= 80%)
-5. Ensure linting passes: `npm run lint`
+4. Ensure all tests pass: `npm test`. Coverage thresholds are a ratchet set just under actual — raise them when coverage improves, never lower them to make a change pass
+5. Ensure typechecking and linting pass: `npm run typecheck && npm run lint`
 6. Rebuild `dist/`: `npm run build`. It is committed to the repository, and CI fails if it has drifted from `src/`. See [DEVELOPMENT.md](DEVELOPMENT.md#committed-dist).
 7. Commit with a descriptive message, including the `dist/` changes
 

@@ -10,6 +10,10 @@
  * path, or expiry handling, because every request goes to one host and the
  * session lives entirely in memory for minutes at a time. A full cookie library
  * would be more code and more attack surface for no behavioural gain.
+ *
+ * That single-host assumption is enforced rather than assumed: `httpRequest`
+ * refuses to send a `Cookie` header to any origin but Alarm.com, so this jar
+ * cannot leak across hosts even if a future change follows a redirect.
  */
 
 /** Accumulates `Set-Cookie` values across an exchange with Alarm.com. */
@@ -17,9 +21,9 @@ export class CookieJar {
   readonly #cookies = new Map<string, string>()
 
   /** Merge every `Set-Cookie` on a response into the jar. */
-  absorb(response: Response): void {
-    for (const raw of response.headers.getSetCookie()) {
-      const [pair] = raw.split(';')
+  absorb(headers: Headers): void {
+    for (const raw of headers.getSetCookie()) {
+      const pair = raw.split(';')[0] ?? ''
       const separator = pair.indexOf('=')
       if (separator === -1) {
         continue
@@ -39,26 +43,14 @@ export class CookieJar {
     }
   }
 
-  /** Set a cookie directly, for values supplied by configuration. */
-  set(name: string, value: string): void {
-    this.#cookies.set(name, value)
-  }
-
+  /** The value stored under a cookie name, or `undefined` if absent. */
   get(name: string): string | undefined {
     return this.#cookies.get(name)
-  }
-
-  has(name: string): boolean {
-    return this.#cookies.has(name)
   }
 
   /** Cookie names only. Safe to log; the values never are. */
   get names(): string[] {
     return [...this.#cookies.keys()]
-  }
-
-  get size(): number {
-    return this.#cookies.size
   }
 
   /** Serialized value for a `Cookie` request header. */

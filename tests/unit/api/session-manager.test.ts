@@ -10,7 +10,11 @@
 
 import { SessionManager } from '../../../src/api/session-manager'
 import { authenticate, keepAlive, type Session } from '../../../src/api/auth'
-import { AuthenticationError, TwoFactorRequiredError } from '../../../src/errors'
+import {
+  AuthenticationError,
+  LoginThrottledError,
+  TwoFactorRequiredError,
+} from '../../../src/errors'
 import { sleep } from '../../../src/utils/retry'
 import { createRecordingLogger, messagesAt, type RecordingLogger } from '../../helpers/logger'
 
@@ -31,8 +35,8 @@ const CREDENTIALS = {
   twoFactorAuthenticationId: 'a'.repeat(64),
 }
 
-function sessionAt(createdAt = new Date()): Session {
-  return { cookieHeader: 'afg=csrf-value', ajaxKey: 'csrf-value', createdAt }
+function aSession(): Session {
+  return { cookieHeader: 'afg=csrf-value', ajaxKey: 'csrf-value' }
 }
 
 describe('SessionManager', () => {
@@ -46,7 +50,7 @@ describe('SessionManager', () => {
     jest.useFakeTimers()
     log = createRecordingLogger()
     mockedSleep.mockResolvedValue(undefined)
-    mockedAuthenticate.mockImplementation(() => Promise.resolve(sessionAt()))
+    mockedAuthenticate.mockImplementation(() => Promise.resolve(aSession()))
     mockedKeepAlive.mockResolvedValue(true)
   })
 
@@ -60,7 +64,7 @@ describe('SessionManager', () => {
     const session = await manager.getSession()
 
     expect(session.ajaxKey).toBe('csrf-value')
-    expect(mockedAuthenticate).toHaveBeenCalledWith(CREDENTIALS, log)
+    expect(mockedAuthenticate).toHaveBeenCalledWith(CREDENTIALS, log, undefined)
     expect(manager.hasSession).toBe(true)
   })
 
@@ -97,17 +101,38 @@ describe('SessionManager', () => {
     expect(new Set(sessions).size).toBe(1)
   })
 
-  it('waits out the login floor rather than signing in back to back', async () => {
+  /**
+   * The floor can be a whole day. Sleeping through it inside `getSession()`
+   * blocks the poll cycle, and any HomeKit arm or disarm queued behind it, for
+   * exactly that long — so a long remainder is refused instead of waited out.
+   */
+  it('refuses rather than blocks when the login floor has a long way to run', async () => {
     const manager = createManager()
     await manager.getSession()
     manager.invalidate()
 
     jest.advanceTimersByTime(60_000)
+
+    const error = await manager.getSession().then(() => null, (thrown: unknown) => thrown)
+
+    expect(error).toBeInstanceOf(LoginThrottledError)
+    expect((error as LoginThrottledError).retryAfterMs).toBe(10 * 60_000 - 60_000)
+    expect((error as LoginThrottledError).isRetryable).toBe(true)
+    expect(mockedSleep).not.toHaveBeenCalled()
+    expect(mockedAuthenticate).toHaveBeenCalledTimes(1)
+  })
+
+  it('simply waits when only a moment of the floor is left', async () => {
+    const manager = createManager()
+    await manager.getSession()
+    manager.invalidate()
+
+    jest.advanceTimersByTime(10 * 60_000 - 2_000)
     await manager.getSession()
 
     expect(mockedSleep).toHaveBeenCalledTimes(1)
-    expect(mockedSleep).toHaveBeenCalledWith(10 * 60_000 - 60_000)
-    expect(messagesAt(log, 'debug').join('\n')).toMatch(/deferring re-authentication for 540s/)
+    expect(mockedSleep).toHaveBeenCalledWith(2_000, undefined)
+    expect(messagesAt(log, 'debug').join('\n')).toMatch(/deferring re-authentication for 2s/)
   })
 
   it('does not defer a sign-in once the floor has already elapsed', async () => {
@@ -146,28 +171,72 @@ describe('SessionManager', () => {
     expect(log.error).not.toHaveBeenCalled()
   })
 
-  it('lets a later caller try again immediately after a transient sign-in failure', async () => {
+  /**
+   * A transient failure gets a short floor rather than none.
+   *
+   * With no floor at all, a retryable sign-in failure let the very next caller
+   * try again with nothing pacing it — and because sign-in bypasses the request
+   * rate limiter, one API call could become six login attempts. The floor is
+   * kept short so a boot-time blip still recovers on the next poll rather than
+   * waiting out the whole re-authentication interval.
+   */
+  it('paces a retry briefly after a transient sign-in failure, then allows it', async () => {
     const manager = createManager()
     mockedAuthenticate.mockRejectedValueOnce(new Error('socket hang up'))
 
     await expect(manager.getSession()).rejects.toThrow('socket hang up')
     await expect(manager.getSession()).resolves.toBeDefined()
 
-    expect(mockedSleep).not.toHaveBeenCalled()
+    expect(mockedSleep).toHaveBeenCalledTimes(1)
+    expect(mockedSleep).toHaveBeenCalledWith(3_000, undefined)
     expect(mockedAuthenticate).toHaveBeenCalledTimes(2)
   })
 
-  it('starts the login floor after a permanent credential rejection', async () => {
+  /**
+   * The short failure floor must not become the long one. A transient failure
+   * that waited out the full re-authentication interval would leave HomeKit
+   * stale for ten minutes over a dropped packet.
+   */
+  it('does not apply the full re-authentication floor to a transient failure', async () => {
+    const manager = createManager()
+    mockedAuthenticate.mockRejectedValueOnce(new Error('socket hang up'))
+
+    await expect(manager.getSession()).rejects.toThrow('socket hang up')
+    jest.advanceTimersByTime(3_001)
+    await expect(manager.getSession()).resolves.toBeDefined()
+
+    expect(mockedSleep).not.toHaveBeenCalled()
+  })
+
+  /**
+   * A rejected password is not a throttle, and reporting it as one leaves the
+   * user with nothing to act on once the single original error has scrolled
+   * away. The floor still applies; only the diagnosis is preserved.
+   */
+  it('keeps re-raising a credential rejection while the login floor holds', async () => {
     const manager = createManager()
     mockedAuthenticate
       .mockRejectedValueOnce(new AuthenticationError())
-      .mockResolvedValue(sessionAt())
+      .mockResolvedValue(aSession())
 
     await expect(manager.getSession()).rejects.toThrow(AuthenticationError)
-    await expect(manager.getSession()).resolves.toBeDefined()
+    await expect(manager.getSession()).rejects.toThrow(AuthenticationError)
 
-    expect(mockedSleep).toHaveBeenCalledTimes(1)
-    expect(mockedSleep).toHaveBeenCalledWith(10 * 60_000)
+    expect(mockedAuthenticate).toHaveBeenCalledTimes(1)
+    expect(mockedSleep).not.toHaveBeenCalled()
+  })
+
+  it('signs in again once the floor after a credential rejection has elapsed', async () => {
+    const manager = createManager()
+    mockedAuthenticate
+      .mockRejectedValueOnce(new AuthenticationError())
+      .mockResolvedValue(aSession())
+
+    await expect(manager.getSession()).rejects.toThrow(AuthenticationError)
+    jest.advanceTimersByTime(10 * 60_000 + 1)
+
+    await expect(manager.getSession()).resolves.toBeDefined()
+    expect(mockedAuthenticate).toHaveBeenCalledTimes(2)
   })
 
   describe('touch', () => {
@@ -177,13 +246,43 @@ describe('SessionManager', () => {
 
       await expect(manager.touch()).resolves.toBe(true)
 
-      expect(mockedKeepAlive).toHaveBeenCalledWith(session)
+      expect(mockedKeepAlive).toHaveBeenCalledWith(session, undefined)
       expect(mockedAuthenticate).toHaveBeenCalledTimes(1)
     })
 
     it('does nothing when there is no session to hold open', async () => {
       await expect(createManager().touch()).resolves.toBe(false)
       expect(mockedKeepAlive).not.toHaveBeenCalled()
+    })
+
+    /**
+     * The reason the keep-alive exists. Freshness used to be measured from the
+     * login, which the keep-alive never updated, so it re-authenticated on the
+     * auth interval regardless of how healthy the session was — spending a
+     * request every four minutes to prevent nothing.
+     */
+    it('pushes back the next sign-in, which is the whole point of it', async () => {
+      const manager = createManager()
+      await manager.getSession()
+
+      jest.advanceTimersByTime(8 * 60_000)
+      await expect(manager.touch()).resolves.toBe(true)
+
+      jest.advanceTimersByTime(8 * 60_000)
+      await manager.getSession()
+
+      expect(mockedAuthenticate).toHaveBeenCalledTimes(1)
+    })
+
+    it('still re-authenticates once a session goes unverified for too long', async () => {
+      const manager = createManager()
+      await manager.getSession()
+      mockedKeepAlive.mockRejectedValue(new Error('socket hang up'))
+
+      jest.advanceTimersByTime(10 * 60_000 + 1)
+      await manager.getSession()
+
+      expect(mockedAuthenticate).toHaveBeenCalledTimes(2)
     })
 
     it('drops the session when Alarm.com says it is no longer valid', async () => {
@@ -198,6 +297,9 @@ describe('SessionManager', () => {
     it('does not wipe a newer session that replaced the one keep-alive probed', async () => {
       const manager = createManager()
       const first = await manager.getSession()
+      // Step past the login floor so the re-login below is the thing under
+      // test rather than the floor refusing it.
+      jest.advanceTimersByTime(10 * 60_000 + 1)
 
       let finishKeepAlive!: (alive: boolean) => void
       mockedKeepAlive.mockImplementation(() => new Promise((resolve) => {
@@ -206,7 +308,7 @@ describe('SessionManager', () => {
 
       const touchPromise = manager.touch()
       manager.invalidate()
-      mockedAuthenticate.mockImplementation(() => Promise.resolve(sessionAt(new Date())))
+      mockedAuthenticate.mockImplementation(() => Promise.resolve(aSession()))
       const second = await manager.getSession()
 
       finishKeepAlive(false)
@@ -250,6 +352,7 @@ describe('SessionManager', () => {
       manager.invalidate()
 
       expect(manager.hasSession).toBe(false)
+      jest.advanceTimersByTime(10 * 60_000 + 1)
       await manager.getSession()
       expect(mockedAuthenticate).toHaveBeenCalledTimes(2)
     })

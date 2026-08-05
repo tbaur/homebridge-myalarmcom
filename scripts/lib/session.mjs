@@ -16,15 +16,22 @@
  * protocol when the shipping client is the thing that broke.
  */
 
-import { scryptSync } from 'node:crypto'
+import { randomBytes, scryptSync } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 
 /**
- * Fixed salt for {@link previewSecret} fingerprints.
+ * Per-process salt for {@link previewSecret} fingerprints.
  *
- * Not a credential. scrypt satisfies CodeQL's password-hash query for
- * MFA/session values used only as log fingerprints (see plugin sanitizers).
+ * Regenerated on every run, matching the plugin's own sanitizer. A hard-coded
+ * salt in a public repository turns the digest into an offline oracle that can
+ * confirm a guessed secret — and this script's fingerprints are written into
+ * `probe-output/summary.json`, the file whose whole purpose is being safe to
+ * attach to a bug report.
+ *
+ * Fingerprints are therefore comparable within one run but not across runs,
+ * which is all "is this the same value I passed in?" needs.
  */
-const SECRET_PREVIEW_SALT = 'homebridge-myalarmcom:secret-preview'
+const SECRET_PREVIEW_SALT = randomBytes(16)
 
 /** Root of the Alarm.com web application. */
 export const BASE_URL = 'https://www.alarm.com'
@@ -89,8 +96,24 @@ const REQUEST_TIMEOUT_MS = 30_000
  */
 const THROTTLE_MS = 1_500
 
-/** Identifies this tool honestly rather than impersonating a browser. */
-const USER_AGENT = 'homebridge-myalarmcom-probe/0.1.0'
+/**
+ * Identifies this tool honestly rather than impersonating a browser.
+ *
+ * The version is read from `package.json` rather than written here, because a
+ * hardcoded one goes stale silently and then misidentifies which build produced
+ * a capture.
+ */
+const USER_AGENT = `homebridge-myalarmcom-probe/${await readPackageVersion()}`
+
+async function readPackageVersion() {
+  try {
+    const manifestUrl = new URL('../../package.json', import.meta.url)
+    const { version } = JSON.parse(await readFile(manifestUrl, 'utf8'))
+    return version || 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
 
 let lastRequestAt = 0
 
@@ -129,11 +152,22 @@ export async function request(url, init = {}) {
  * diagnostic power a fingerprint does not, and these previews are written to
  * `summary.json` and to a terminal, both of which end up pasted into issue
  * trackers. The secret being described is the two-factor bypass token.
+ *
+ * A size band rather than the exact length, for the same reason: it separates a
+ * real token from a truncated paste without publishing another fact about the
+ * credential.
  */
 export function previewSecret(value) {
   if (!value) {return '(absent)'}
   const fingerprint = scryptSync(value, SECRET_PREVIEW_SALT, 4).toString('hex')
-  return `scrypt:${fingerprint} (${value.length} chars)`
+  return `scrypt:${fingerprint} (${lengthBand(value.length)} chars)`
+}
+
+function lengthBand(length) {
+  if (length < 20) {return 'under 20'}
+  if (length < 50) {return '20-49'}
+  if (length < 100) {return '50-99'}
+  return '100+'
 }
 
 /** Accumulates `Set-Cookie` values across a login exchange. */
@@ -184,7 +218,10 @@ export function scrapeHiddenFields(html) {
   const found = {}
   const missing = []
   for (const name of LOGIN_FORM_FIELDS) {
-    const match = new RegExp(`name="${name}"[\\s\\S]*?value="([^"]*)"`).exec(html)
+    // Scoped to a single tag with `[^>]*`. An unbounded `[\s\S]*?` skips past an
+    // input that has no adjacent `value=` and captures a different field's
+    // value, so a layout change looks like success with the wrong bytes.
+    const match = new RegExp(`name="${name}"[^>]*?value="([^"]*)"`).exec(html)
     if (match) {found[name] = match[1]}
     else {missing.push(name)}
   }
@@ -209,6 +246,20 @@ export function buildLoginBody({ username, password, hiddenFields }) {
     'ctl00$ContentPlaceHolder1$loginform$txtUserName': username,
     txtPassword: password,
   })
+}
+
+/**
+ * The path part of a `Location` header, discarding its query string.
+ *
+ * @returns {string|null} `null` when there was no location to record.
+ */
+function redirectPath(location) {
+  if (!location) {return null}
+  try {
+    return new URL(location, BASE_URL).pathname
+  } catch {
+    return '(unparseable)'
+  }
 }
 
 /**
@@ -258,7 +309,10 @@ export async function login({ username, password, mfaToken }) {
     hiddenFieldsFound: Object.keys(hiddenFields),
     hiddenFieldsMissing: missing,
     loginStatus: loginResponse.status,
-    loginRedirect: loginResponse.headers.get('location') ?? null,
+    // Path only. A post-login redirect query string carries account
+    // identifiers, and this object is written verbatim into `summary.json`,
+    // whose whole purpose is being safe to attach to a bug report.
+    loginRedirect: redirectPath(loginResponse.headers.get('location')),
     cookieNames: jar.names,
     hasAjaxKey: Boolean(ajaxKey),
     // A 200 means the form re-rendered instead of redirecting, which is how a
@@ -343,6 +397,7 @@ export async function authenticatedGet(url, { jar, ajaxKey }) {
     isJson,
     body,
     // Recorded so a redirected API call is distinguishable from a rejected one.
-    location: response.headers.get('location'),
+    // Path only, for the same reason as the login redirect above.
+    location: redirectPath(response.headers.get('location')),
   }
 }

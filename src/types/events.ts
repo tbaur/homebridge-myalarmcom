@@ -7,7 +7,7 @@
  * @fileoverview Alarm.com push event frames, and the narrow subset this plugin decodes.
  */
 
-import type { SensorServiceKind } from '../utils/mappers'
+import type { SensorServiceKind } from './alarm'
 
 /** A single frame from the Alarm.com event stream. */
 export interface AlarmComEvent {
@@ -40,9 +40,9 @@ export const EVENT_TYPE_USER_LOGGED_IN = 55
  * The only event types this plugin interprets.
  *
  * Alarm.com's enumeration runs to several hundred values and is undocumented.
- * These three are decoded because all three were observed on live hardware and
- * their meaning is unambiguous. Everything else is deliberately left alone;
- * see {@link readSensorEventHint}.
+ * `CLOSED` and `OPENED_AND_CLOSED` were observed on live hardware; `OPENED` is
+ * inferred from its pairing with them. Everything else is deliberately left
+ * alone; see {@link readSensorEventHint} and docs/PROTOCOL.md.
  */
 export enum ContactEventType {
   CLOSED = 0,
@@ -59,7 +59,8 @@ export interface ImmediateStateHint {
    * Whether the event already implies a return to rest.
    *
    * True for an open-and-close, where publishing "open" is correct only as a
-   * momentary pulse that the confirming re-read will clear.
+   * momentary pulse. The confirming re-read normally clears it; this flag is
+   * what guarantees the pulse ends even when that read fails.
    */
   isTransient: boolean
 }

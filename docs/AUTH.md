@@ -14,7 +14,9 @@ That cookie is **not** the six-digit code from your authenticator app. It is a l
 
 You do not need to mark the browser as trusted, and you do not need to trust your Homebridge machine. The cookie is scoped to your Alarm.com *account*, not to a device.
 
-The development scripts reject six-digit input for this field on purpose: that is the authenticator code, and it will not work here.
+Copy only that one cookie's value. Not the whole `Cookie` header, and not several cookies joined by semicolons.
+
+The plugin refuses to start — with an error naming the field, and without affecting the rest of your bridge — if this value is a six-digit authenticator code, contains characters that are not valid in a cookie value, or is implausibly long. It warns, but still tries, if the value is shorter than 20 characters, since a real cookie is far longer and a short one is usually a truncated paste. The development scripts apply the same six-digit check.
 
 ## Treat it as a password
 
@@ -24,6 +26,12 @@ Anyone who has the cookie can sign in as you without your password and without a
 - Prefer a dedicated Alarm.com login for Homebridge, with only the permissions you need.
 - If it leaks, rotate the Alarm.com account password — that invalidates outstanding two-factor tokens — then capture a fresh cookie.
 
-When the cookie expires you will see a `TwoFactorRequiredError` in the log. Repeat the steps above.
+## When it expires
+
+You will see a `TwoFactorRequiredError` in the log, together with an `[auth]` line telling you to copy a fresh cookie. The plugin will not keep retrying — repeated attempts against a two-factor challenge are what get Alarm.com accounts locked — so it re-reports the same problem rather than quietly backing off.
+
+Repeat the steps above, then **restart Homebridge**. Configuration is read once at startup, so a new cookie in `config.json` has no effect until then.
+
+How long a cookie lasts is not something the plugin can see; Alarm.com sets no expiry it exposes. In practice they last weeks to months, and they are invalidated early by rotating the account password or ending your Alarm.com sessions.
 
 The security implications of this cookie are covered in [SECURITY.md](../SECURITY.md). The wire protocol around it is in [PROTOCOL.md](PROTOCOL.md).

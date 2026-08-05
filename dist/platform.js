@@ -13,8 +13,10 @@ const client_1 = require("./api/client");
 const event_stream_1 = require("./api/event-stream");
 const session_manager_1 = require("./api/session-manager");
 const collector_1 = require("./diagnostics/collector");
+const reporter_1 = require("./diagnostics/reporter");
 const partition_1 = require("./devices/partition");
 const sensor_1 = require("./devices/sensor");
+const errors_1 = require("./errors");
 const settings_1 = require("./settings");
 const events_1 = require("./types/events");
 const discovery_retry_1 = require("./utils/discovery-retry");
@@ -24,73 +26,113 @@ const mappers_1 = require("./utils/mappers");
 const retry_1 = require("./utils/retry");
 const sanitizers_1 = require("./utils/sanitizers");
 const validators_1 = require("./utils/validators");
+const version_1 = require("./utils/version");
 /**
- * Installed plugin version, used for diagnostics lifecycle reporting.
+ * Stand-in used when the configuration is unusable.
  *
- * Resolved once via `require` rather than a static `import`: `package.json`
- * lives outside the TypeScript `rootDir` (`src/`), so importing it would alter
- * the emitted `dist/` layout. The require resolves correctly from both the
- * compiled `dist/` output and ts-jest.
+ * The platform still constructs its logger and diagnostics so it can explain
+ * itself, but it publishes nothing and starts no timers, so none of these
+ * values is ever acted on. Credentials are empty rather than absent because
+ * there is no sign-in to attempt.
  */
-function readPluginVersion() {
-    try {
-        return require('../package.json').version || 'unknown';
-    }
-    catch {
-        return 'unknown';
-    }
-}
-const PLUGIN_VERSION = readPluginVersion();
-/** Window over which event-triggered refreshes are coalesced. */
-const REFRESH_DEBOUNCE_MS = 750;
+const DISABLED_CONFIG = {
+    username: '',
+    password: '',
+    twoFactorAuthenticationId: '',
+    pollIntervalSeconds: 0,
+    authIntervalMinutes: 0,
+    useEventStream: false,
+    ignoredDeviceIds: new Set(),
+    includeUnmonitoredSensors: false,
+    debug: false,
+    diagnosticsInterval: 0,
+};
 /** Homebridge platform exposing Alarm.com partitions and sensors. */
 class MyAlarmComPlatform {
     Service;
     Characteristic;
     api;
-    client;
+    #rawLog;
     #log;
     #config;
+    #diagnostics;
+    #reporter;
+    #partitionLog;
+    /** Both `null` when the configuration is unusable, so nothing can sign in. */
+    #client;
+    #sessionManager;
     #cachedAccessories = new Map();
     #partitions = new Map();
     #sensors = new Map();
+    /** One logger per sensor kind, reused rather than rebuilt per device. */
+    #sensorLogs = new Map();
+    /** Devices already reported as skipped, so an hourly rediscovery stays quiet. */
+    #reportedSkips = new Set();
     #eventStream = null;
     #pollTimer = null;
     #keepAliveTimer = null;
     #refreshTimer = null;
-    #diagnosticsTimer = null;
     /** Interrupts a pending initial-discovery backoff when Homebridge shuts down. */
     #startupRetryResolve = null;
     #pendingRefreshIds = new Set();
     #systemId = null;
     #isShuttingDown = false;
+    /**
+     * Cancels in-flight network work at shutdown.
+     *
+     * Without it, clearing the timers only stopped *new* work: a request already
+     * in flight ran to its 30-second deadline, then its retries, then their
+     * backoff, all against a platform that was supposed to be gone.
+     */
+    #abortController = new AbortController();
     /** Prevents stacked poll cycles when a refresh outlasts the poll interval. */
     #refreshAllInFlight = false;
     /** When the account was last re-enumerated, driving periodic rediscovery. */
     #lastDiscoveryAt = 0;
-    #diagnostics;
-    #lastDiagnosticsHealth = null;
+    /** Consecutive failures, for escalating a sustained outage and noting recovery. */
+    #consecutiveFailures = 0;
+    #hasWarnedAboutOutage = false;
+    /** Last user-actionable failure reported loudly, so it is not repeated. */
+    #lastReportedError = null;
     constructor(log, config, api) {
         this.api = api;
         this.Service = api.hap.Service;
         this.Characteristic = api.hap.Characteristic;
-        const { config: resolved, warnings } = (0, validators_1.validateConfig)(config);
-        this.#config = resolved;
-        this.#log = (0, logger_1.createScopedLogger)(log, 'platform', resolved.debug);
+        this.#rawLog = log;
+        const { config: resolved, warnings, errors } = (0, validators_1.validateConfig)(config);
+        this.#config = resolved ?? DISABLED_CONFIG;
         // Routed through the scoped logger rather than the raw Homebridge one so
         // the "every line is redacted" guarantee holds without exception. Config
-        // warnings quote user-supplied values, which is precisely where a
+        // messages quote user-supplied values, which is precisely where a
         // mistakenly pasted secret would surface.
+        this.#log = (0, logger_1.createScopedLogger)(log, 'platform', this.#config.debug);
+        this.#partitionLog = (0, logger_1.createScopedLogger)(log, 'partition', this.#config.debug);
         for (const warning of warnings) {
             this.#log.warn(warning);
+        }
+        for (const error of errors) {
+            this.#log.error(error);
         }
         // Counters always accumulate; heartbeats are only emitted when
         // diagnosticsInterval > 0.
         this.#diagnostics = new collector_1.DiagnosticsCollector({
-            pluginVersion: PLUGIN_VERSION,
-            config: resolved,
+            pluginVersion: version_1.PLUGIN_VERSION,
+            config: this.#config,
         });
-        const sessionManager = new session_manager_1.SessionManager({
+        this.#reporter = new reporter_1.DiagnosticsReporter({
+            collector: this.#diagnostics,
+            readers: this.#buildDiagnosticsReaders(),
+            log: (0, logger_1.createScopedLogger)(log, 'diagnostics', this.#config.debug),
+            intervalMs: this.#config.diagnosticsInterval * settings_1.MS_PER_SECOND,
+        });
+        if (!resolved) {
+            this.#log.error(`${settings_1.PLATFORM_NAME} is not starting because its configuration is unusable. `
+                + 'Fix the problems above and restart Homebridge; the rest of your bridge is unaffected.');
+            this.#client = null;
+            this.#sessionManager = null;
+            return;
+        }
+        this.#sessionManager = new session_manager_1.SessionManager({
             credentials: {
                 username: resolved.username,
                 password: resolved.password,
@@ -99,23 +141,51 @@ class MyAlarmComPlatform {
             authIntervalMinutes: resolved.authIntervalMinutes,
             log: (0, logger_1.createScopedLogger)(log, 'auth', resolved.debug),
             onSessionEstablished: () => this.#diagnostics.sessionLogin(),
+            signal: this.#abortController.signal,
         });
-        this.client = new client_1.AlarmComClient({
-            sessionManager,
+        this.#client = new client_1.AlarmComClient({
+            sessionManager: this.#sessionManager,
             log: (0, logger_1.createScopedLogger)(log, 'api', resolved.debug),
-            metrics: (sample) => this.#diagnostics.apiRequest(sample.durationMs, sample.ok, sample.networked),
+            metrics: (sample) => this.#diagnostics.apiRequest(sample.durationMs, sample.isOk, sample.wasNetworked),
             onCircuitOpen: () => this.#diagnostics.breakerTrip(),
             onThrottle: () => this.#diagnostics.throttle(),
             onRetry: () => this.#diagnostics.retry(),
+            signal: this.#abortController.signal,
         });
-        api.on('didFinishLaunching', () => void this.#start(sessionManager));
+        api.on('didFinishLaunching', () => {
+            // Nothing in #start rejects today, but an unhandled rejection here would
+            // terminate the bridge rather than log, so the guarantee is enforced
+            // rather than assumed.
+            this.#start().catch((error) => this.#reportFailure('Startup failed', error));
+        });
         api.on('shutdown', () => this.#shutdown());
+    }
+    /**
+     * The API client, used by accessories to issue commands.
+     *
+     * Only reachable once the configuration is usable: an unusable one publishes
+     * no accessories, so there is nothing to call this.
+     */
+    get client() {
+        if (!this.#client) {
+            throw new errors_1.ConfigurationError(`${settings_1.PLATFORM_NAME} has no usable configuration`);
+        }
+        return this.#client;
     }
     /** Homebridge replays cached accessories here on startup. */
     configureAccessory(accessory) {
         this.#cachedAccessories.set(accessory.UUID, accessory);
     }
-    async #start(sessionManager) {
+    async #start() {
+        const sessionManager = this.#sessionManager;
+        if (!sessionManager) {
+            return;
+        }
+        // Armed before discovery, not after. An operator who enabled diagnostics
+        // specifically to debug a startup failure got nothing at all, because a
+        // permanent discovery failure returned before the reporter ever started —
+        // including the redacted config echo that would show what was parsed.
+        this.#reporter.start();
         if (!(await this.#awaitInitialDiscovery())) {
             return;
         }
@@ -136,7 +206,6 @@ class MyAlarmComPlatform {
             this.#eventStream = null;
             return;
         }
-        this.#startDiagnostics();
         this.#log.info('Platform Ready');
     }
     /**
@@ -156,14 +225,22 @@ class MyAlarmComPlatform {
                 return true;
             }
             catch (error) {
+                // Re-checked here, not only at the top of the loop. Shutdown aborts the
+                // in-flight discovery, which surfaces as a retryable error — so without
+                // this the log ended with "Retrying in 5s" immediately before never
+                // retrying.
+                if (this.#isShuttingDown) {
+                    return false;
+                }
                 const detail = (0, sanitizers_1.sanitizeError)(error);
                 const delayMs = (0, discovery_retry_1.initialDiscoveryRetryDelayMs)(error, attempt + 1);
                 if (delayMs === null) {
-                    this.#log.error(`Initial discovery failed: ${detail}`);
+                    this.#log.error(`Initial discovery failed and will not be retried: ${detail}. `
+                        + 'Correct the problem and restart Homebridge.');
                     return false;
                 }
                 attempt++;
-                this.#log.warn(`Initial discovery failed: ${detail}. Retrying in ${Math.round(delayMs / 1000)}s.`);
+                this.#log.warn(`Initial discovery failed: ${detail}. Retrying in ${Math.round(delayMs / settings_1.MS_PER_SECOND)}s.`);
                 if (!(await this.#sleepUnlessShuttingDown(delayMs))) {
                     return false;
                 }
@@ -176,18 +253,21 @@ class MyAlarmComPlatform {
             return Promise.resolve(false);
         }
         return new Promise((resolve) => {
-            let settled = false;
-            const finish = (continued) => {
-                if (settled) {
+            let isSettled = false;
+            const finish = (hasContinued) => {
+                if (isSettled) {
                     return;
                 }
-                settled = true;
+                isSettled = true;
                 this.#startupRetryResolve = null;
-                resolve(continued);
+                resolve(hasContinued);
             };
             this.#startupRetryResolve = () => finish(false);
-            // Uses the shared sleep helper so tests can skip real wall-clock waits.
-            void (0, retry_1.sleep)(ms).then(() => finish(!this.#isShuttingDown));
+            // The shared sleep helper cancels on abort and unrefs its timer, so a
+            // five-minute discovery backoff cannot hold the process open at shutdown.
+            (0, retry_1.sleep)(ms, this.#abortController.signal)
+                .then(() => finish(!this.#isShuttingDown))
+                .catch(() => finish(false));
         });
     }
     /**
@@ -204,17 +284,10 @@ class MyAlarmComPlatform {
         // hourly. That is the traffic pattern Alarm.com locks accounts for, and it
         // also displaced the ordinary refresh, so HomeKit went stale as well.
         this.#lastDiscoveryAt = Date.now();
-        this.#systemId ??= await this.client.getSystemId();
-        const devices = await this.client.getSystemDevices(this.#systemId);
-        const inventory = `${devices.partitionIds.length} partition(s) and ${devices.sensorIds.length} sensor(s)`;
-        if (options.reason === 'startup') {
-            this.#log.info(`Discovered ${inventory}`);
-        }
-        else {
-            // Routine hourly re-enumeration; real add/remove still logs at info via
-            // Adding… / Removing… below.
-            this.#log.debug(`Rediscovering devices to detect panel add/remove changes: ${inventory}`);
-        }
+        const { reason, signal } = options;
+        this.#systemId ??= await this.client.getSystemId(signal);
+        const devices = await this.client.getSystemDevices(this.#systemId, signal);
+        this.#logInventory(devices, reason);
         // Pruned as soon as the authoritative list is in hand, before the detail
         // reads that can still fail. Leaving it to the end meant a failure part
         // way through discarded what was already known, and a device deleted at
@@ -223,20 +296,58 @@ class MyAlarmComPlatform {
         // Unregister HomeKit accessories for devices deleted at the panel (and for
         // explicitly ignored IDs) immediately, so a later detail-read failure
         // cannot leave ghosts until the next hourly rediscovery.
-        const liveForHomeKit = new Set([...devices.partitionIds, ...devices.sensorIds]
-            .filter((id) => !this.#config.ignoredDeviceIds.has(id)));
-        this.#removeStaleAccessories(liveForHomeKit);
-        const partitions = await this.client.getPartitions(devices.partitionIds.filter((id) => !this.#config.ignoredDeviceIds.has(id)));
-        const sensors = await this.client.getSensors(devices.sensorIds.filter((id) => !this.#config.ignoredDeviceIds.has(id)));
+        const requestedPartitionIds = this.#withoutIgnored(devices.partitionIds);
+        const requestedSensorIds = this.#withoutIgnored(devices.sensorIds);
+        this.#removeStaleAccessories(new Set([...requestedPartitionIds, ...requestedSensorIds]));
+        await this.#publishDevices(requestedPartitionIds, requestedSensorIds, reason, signal);
+    }
+    #withoutIgnored(deviceIds) {
+        return deviceIds.filter((id) => !this.#config.ignoredDeviceIds.has(id));
+    }
+    #logInventory(devices, reason) {
+        const inventory = `${devices.partitionIds.length} partition(s) and ${devices.sensorIds.length} sensor(s)`;
+        if (reason === 'startup') {
+            this.#log.info(`Discovered ${inventory}`);
+            return;
+        }
+        // Routine hourly re-enumeration; real add/remove still logs at info via
+        // Adding… / Removing… below.
+        this.#log.debug(`Rediscovering devices to detect panel add/remove changes: ${inventory}`);
+    }
+    /**
+     * Read device detail and sync each device into HomeKit.
+     *
+     * A device whose detail read came back empty is kept, not unregistered.
+     * Inferring "gone" from "no handler" meant a partial response on the very
+     * first discovery deleted accessories that were still on the account, and
+     * unregistering is not cosmetic — HomeKit loses the room, the name, and
+     * every automation bound to that accessory.
+     */
+    async #publishDevices(partitionIds, sensorIds, reason, signal) {
+        const partitions = await this.client.getPartitions(partitionIds, signal);
+        const sensors = await this.client.getSensors(sensorIds, signal);
+        const read = new Set();
+        /** Read successfully but deliberately not published, by policy. */
+        const skipped = new Set();
         for (const partition of partitions) {
             this.#syncPartition(partition);
+            read.add(partition.id);
         }
         for (const sensor of sensors) {
-            this.#syncSensor(sensor);
+            if (!this.#syncSensor(sensor, reason)) {
+                skipped.add(sensor.id);
+            }
+            read.add(sensor.id);
         }
-        // After sync, prune accessories that are still on the account but were not
-        // published (unsupported types, unmonitored sensors when disabled).
-        this.#removeStaleAccessories();
+        const unreadable = [...partitionIds, ...sensorIds].filter((id) => !read.has(id));
+        if (unreadable.length > 0) {
+            this.#log.warn(`Alarm.com returned no detail for ${unreadable.length} device(s); keeping their HomeKit accessories until it does.`);
+        }
+        // Prune devices that were read but deliberately not published, keeping the
+        // unreadable ones. `skipped` is passed separately so the removal line can
+        // say *why* — "no longer on the account" is false for a device the plugin
+        // simply declined to publish.
+        this.#removeStaleAccessories(new Set([...this.#partitions.keys(), ...this.#sensors.keys(), ...unreadable]), skipped);
     }
     /** Find or create the accessory for a device, restoring from cache if present. */
     #resolveAccessory(deviceId, displayName, context) {
@@ -272,32 +383,56 @@ class MyAlarmComPlatform {
         this.#applyAccessoryInformation(accessory, deviceId, 'Security Panel');
         let handler = this.#partitions.get(deviceId);
         if (!handler) {
-            handler = new partition_1.PartitionAccessory(this, accessory, (0, logger_1.createScopedLogger)(this.#log, 'partition', this.#config.debug));
+            handler = new partition_1.PartitionAccessory(this, accessory, this.#partitionLog);
             this.#partitions.set(deviceId, handler);
         }
         if (isNew) {
-            this.#log.info(`Adding security system "${displayName}"`);
+            this.#log.info(`Adding security system "${displayName}" (${deviceId})`);
             this.api.registerPlatformAccessories(settings_1.PLUGIN_NAME, settings_1.PLATFORM_NAME, [accessory]);
         }
+        handler.updateName(displayName);
         handler.update(resource);
     }
-    #syncSensor(resource) {
+    /**
+     * Publish one sensor, or decline to.
+     *
+     * @returns Whether it was published. A `false` return is a policy decision,
+     *   not a failure.
+     */
+    #syncSensor(resource, reason) {
         const deviceId = resource.id;
         const attributes = resource.attributes;
         const kind = (0, mappers_1.toSensorServiceKind)(attributes.deviceType);
+        // Responses are parsed without runtime validation, so an absent or renamed
+        // `description` arrives as undefined. HAP rejects an accessory with no
+        // name, and on first discovery that throw is what ends startup.
+        const displayName = attributes.description ?? `Sensor ${deviceId}`;
+        // Announced on the first discovery that sees it, then quiet. Discovery runs
+        // hourly, and a panel commonly carries several unsupported or unmonitored
+        // devices, so an unconditional info line was a permanent hourly drip about
+        // a decision that never changes.
+        const announce = (message) => {
+            if (reason === 'startup' || !this.#reportedSkips.has(deviceId)) {
+                this.#reportedSkips.add(deviceId);
+                this.#log.info(message);
+            }
+            else {
+                this.#log.debug(message);
+            }
+        };
         if (!kind) {
-            this.#log.info(`Skipping "${attributes.description}": Alarm.com device type ${attributes.deviceType} is not supported yet.`);
+            announce(`Skipping "${displayName}" (${deviceId}): Alarm.com device type ${String(attributes.deviceType)} is not supported yet.`);
             // Drop a previously published handler so post-sync stale removal can
             // unregister the HomeKit accessory on a live rediscovery.
-            this.#sensors.delete(deviceId);
-            return;
+            this.#forgetSensor(deviceId);
+            return false;
         }
         if (attributes.isMonitoringEnabled === false && !this.#config.includeUnmonitoredSensors) {
-            this.#log.info(`Skipping "${attributes.description}": Alarm.com reports monitoring is disabled. Set "includeUnmonitoredSensors" to expose it anyway.`);
-            this.#sensors.delete(deviceId);
-            return;
+            announce(`Skipping "${displayName}" (${deviceId}): Alarm.com reports monitoring is disabled. Set "includeUnmonitoredSensors" to expose it anyway.`);
+            this.#forgetSensor(deviceId);
+            return false;
         }
-        const displayName = attributes.description;
+        this.#reportedSkips.delete(deviceId);
         const { accessory, isNew } = this.#resolveAccessory(deviceId, displayName, {
             deviceId,
             kind,
@@ -306,14 +441,30 @@ class MyAlarmComPlatform {
         this.#applyAccessoryInformation(accessory, deviceId, attributes.manufacturer ?? `${kind} sensor`);
         let handler = this.#sensors.get(deviceId);
         if (!handler) {
-            handler = new sensor_1.SensorAccessory(this, accessory, kind, (0, logger_1.createScopedLogger)(this.#log, kind, this.#config.debug));
+            handler = new sensor_1.SensorAccessory(this, accessory, kind, this.#sensorLog(kind));
             this.#sensors.set(deviceId, handler);
         }
         if (isNew) {
-            this.#log.info(`Adding ${kind} sensor "${displayName}"`);
+            this.#log.info(`Adding ${kind} sensor "${displayName}" (${deviceId})`);
             this.api.registerPlatformAccessories(settings_1.PLUGIN_NAME, settings_1.PLATFORM_NAME, [accessory]);
         }
+        handler.updateName(displayName);
         handler.update(resource);
+        return true;
+    }
+    #sensorLog(kind) {
+        const existing = this.#sensorLogs.get(kind);
+        if (existing) {
+            return existing;
+        }
+        const created = (0, logger_1.createScopedLogger)(this.#rawLog, kind, this.#config.debug);
+        this.#sensorLogs.set(kind, created);
+        return created;
+    }
+    /** Stop tracking a sensor and cancel any timer it owns. */
+    #forgetSensor(deviceId) {
+        this.#sensors.get(deviceId)?.dispose();
+        this.#sensors.delete(deviceId);
     }
     /**
      * Forget handlers for devices the account no longer reports.
@@ -324,23 +475,34 @@ class MyAlarmComPlatform {
      */
     #reconcileKnownDevices(devices) {
         const reported = new Set([...devices.partitionIds, ...devices.sensorIds]);
-        for (const map of [this.#partitions, this.#sensors]) {
-            for (const deviceId of [...map.keys()]) {
-                if (!reported.has(deviceId)) {
-                    map.delete(deviceId);
-                }
+        for (const deviceId of [...this.#partitions.keys()]) {
+            if (!reported.has(deviceId)) {
+                this.#partitions.delete(deviceId);
+            }
+        }
+        for (const deviceId of [...this.#sensors.keys()]) {
+            if (!reported.has(deviceId)) {
+                this.#forgetSensor(deviceId);
             }
         }
     }
-    /** Unregister accessories for devices that no longer exist on the account. */
-    #removeStaleAccessories(liveIds) {
-        const live = liveIds ?? new Set([...this.#partitions.keys(), ...this.#sensors.keys()]);
+    /**
+     * Unregister accessories the plugin is no longer publishing.
+     *
+     * @param skippedIds Devices still on the account that this plugin declined to
+     *   publish. They are removed too, but saying "no longer on the account" about
+     *   them would be untrue and would send the user looking at their panel.
+     */
+    #removeStaleAccessories(liveIds, skippedIds = new Set()) {
         for (const [uuid, accessory] of this.#cachedAccessories) {
             const deviceId = accessory.context.deviceId;
-            if (deviceId && live.has(deviceId)) {
+            if (deviceId !== undefined && liveIds.has(deviceId)) {
                 continue;
             }
-            this.#log.info(`Removing "${accessory.displayName}", which is no longer on the account`);
+            const reason = deviceId !== undefined && skippedIds.has(deviceId)
+                ? 'which this plugin is not publishing'
+                : 'which is no longer on the account';
+            this.#log.info(`Removing "${accessory.displayName}", ${reason}`);
             this.api.unregisterPlatformAccessories(settings_1.PLUGIN_NAME, settings_1.PLATFORM_NAME, [accessory]);
             this.#cachedAccessories.delete(uuid);
         }
@@ -349,10 +511,14 @@ class MyAlarmComPlatform {
         if (this.#isShuttingDown || this.#pollTimer) {
             return;
         }
-        const intervalMs = this.#config.pollIntervalSeconds * 1_000;
+        const intervalMs = this.#config.pollIntervalSeconds * settings_1.MS_PER_SECOND;
         this.#pollTimer = setInterval(() => {
             void this.#refreshAll();
         }, intervalMs);
+        // Unref'd like every other timer here: they are cleared on shutdown, but if
+        // that event never arrives an interval is what keeps a child bridge alive
+        // looking like a hang.
+        this.#pollTimer.unref?.();
         this.#log.debug(`Polling Alarm.com every ${this.#config.pollIntervalSeconds}s`);
     }
     /**
@@ -366,26 +532,34 @@ class MyAlarmComPlatform {
             return;
         }
         this.#keepAliveTimer = setInterval(() => {
-            void sessionManager.touch().then((isAlive) => {
+            sessionManager.touch()
+                .then((isAlive) => {
                 if (!isAlive) {
                     this.#log.debug('Session keep-alive did not confirm a live session');
                 }
+            })
+                .catch((error) => {
+                this.#log.debug(`Session keep-alive tick failed: ${(0, sanitizers_1.sanitizeError)(error)}`);
             });
         }, settings_1.KEEPALIVE_INTERVAL_MS);
+        this.#keepAliveTimer.unref?.();
     }
     async #startEventStream() {
         if (this.#isShuttingDown) {
             return;
         }
         this.#eventStream = new event_stream_1.EventStream({
-            log: (0, logger_1.createScopedLogger)(this.#log, 'events', this.#config.debug),
+            log: (0, logger_1.createScopedLogger)(this.#rawLog, 'events', this.#config.debug),
             requestToken: () => this.client.getEventStreamToken(),
             onDeviceEvent: (deviceId, event) => this.#handleDeviceEvent(deviceId, event),
             onUnavailable: () => {
                 this.#log.warn('Continuing with polling only; HomeKit updates will be slower.');
             },
             onReconnect: () => this.#diagnostics.wsReconnect(),
-            onRecovered: () => this.#log.debug('Event stream recovery recorded'),
+            // Counted, not logged. The stream itself reports recovery at info in words
+            // that mean something to a user; a second "recovery recorded" line here
+            // said nothing while making the failure/recovery pair look mismatched.
+            onRecovered: () => this.#diagnostics.wsReconnect(),
         });
         await this.#eventStream.start();
     }
@@ -402,7 +576,7 @@ class MyAlarmComPlatform {
         const sensor = this.#sensors.get(deviceId);
         const hint = (0, events_1.readSensorEventHint)(event, sensor?.kind);
         if (hint && sensor) {
-            sensor.applyImmediateState(hint.isTriggered);
+            sensor.applyImmediateState(hint.isTriggered, hint.isTransient);
         }
         this.#diagnostics.externalChange();
         this.requestDeviceRefresh(deviceId);
@@ -418,6 +592,13 @@ class MyAlarmComPlatform {
      * (a door opening) often produces several stream frames.
      */
     requestDeviceRefresh(deviceId) {
+        // Unlike the timer starters, this is reachable from outside: a HomeKit
+        // write or a stream frame delivered mid-teardown would otherwise re-arm a
+        // timer that #shutdown had just cleared, and run a network refresh against
+        // a platform that is supposed to be gone.
+        if (this.#isShuttingDown) {
+            return;
+        }
         this.#pendingRefreshIds.add(deviceId);
         if (this.#refreshTimer) {
             return;
@@ -426,21 +607,52 @@ class MyAlarmComPlatform {
             this.#refreshTimer = null;
             const ids = [...this.#pendingRefreshIds];
             this.#pendingRefreshIds.clear();
-            void this.#refreshDevices(ids).catch((error) => {
-                this.#reportFailure('Targeted refresh failed', error);
+            this.#refreshDevices(ids)
+                // Recovery is noted wherever it happens, not only on the poll cycle: an
+                // event-driven refresh proves Alarm.com is reachable just as well. But
+                // only when it actually read something — a frame for an ignored or
+                // unsupported device issues no request at all, and reporting that as
+                // "reachable again" told the user the opposite of the truth during an
+                // API outage that the stream had survived.
+                .then((refreshed) => {
+                if (refreshed > 0) {
+                    this.#reportSuccess();
+                }
+            })
+                .catch((error) => {
+                this.#reportFailure(`Targeted refresh of ${ids.length} device(s) failed`, error);
             });
-        }, REFRESH_DEBOUNCE_MS);
+        }, settings_1.REFRESH_DEBOUNCE_MS);
+        this.#refreshTimer.unref?.();
     }
-    /** Re-read a specific set of devices and push their state to HomeKit. */
-    async #refreshDevices(deviceIds) {
-        const partitionIds = deviceIds.filter((id) => this.#partitions.has(id));
-        const sensorIds = deviceIds.filter((id) => this.#sensors.has(id));
-        for (const resource of await this.client.getPartitions(partitionIds)) {
+    /**
+     * Re-read a specific set of devices and push their state to HomeKit.
+     *
+     * @returns How many devices were actually read. Zero means no request was
+     *   made, which matters because the caller must not read that as evidence
+     *   that Alarm.com is reachable.
+     */
+    async #refreshDevices(deviceIds, signal) {
+        const partitionIds = [];
+        const sensorIds = [];
+        for (const id of deviceIds) {
+            if (this.#partitions.has(id)) {
+                partitionIds.push(id);
+            }
+            else if (this.#sensors.has(id)) {
+                sensorIds.push(id);
+            }
+        }
+        if (partitionIds.length === 0 && sensorIds.length === 0) {
+            return 0;
+        }
+        for (const resource of await this.client.getPartitions(partitionIds, signal)) {
             this.#partitions.get(resource.id)?.update(resource);
         }
-        for (const resource of await this.client.getSensors(sensorIds)) {
+        for (const resource of await this.client.getSensors(sensorIds, signal)) {
             this.#sensors.get(resource.id)?.update(resource);
         }
+        return partitionIds.length + sensorIds.length;
     }
     /**
      * Re-read every known device, occasionally re-enumerating the account.
@@ -457,25 +669,59 @@ class MyAlarmComPlatform {
         this.#refreshAllInFlight = true;
         const isRediscoveryDue = Date.now() - this.#lastDiscoveryAt >= settings_1.REDISCOVERY_INTERVAL_MS;
         const started = Date.now();
-        let ok = 0;
-        let failed = 0;
+        let devicesRefreshed = 0;
+        let didFail = false;
         try {
-            if (isRediscoveryDue) {
-                await this.#discover({ reason: 'periodic' });
-                ok = this.#partitions.size + this.#sensors.size;
-                return;
+            devicesRefreshed = await this.#withCycleDeadline((signal) => this.#runRefreshCycle(isRediscoveryDue, signal));
+            if (devicesRefreshed > 0) {
+                this.#reportSuccess();
             }
-            const deviceIds = [...this.#partitions.keys(), ...this.#sensors.keys()];
-            await this.#refreshDevices(deviceIds);
-            ok = deviceIds.length;
         }
         catch (error) {
-            failed = 1;
+            didFail = true;
             this.#reportFailure(isRediscoveryDue ? 'Rediscovery failed' : 'Poll failed', error);
         }
         finally {
             this.#refreshAllInFlight = false;
-            this.#diagnostics.pollCycle(ok, failed, Date.now() - started);
+            this.#diagnostics.pollCycle(didFail ? 0 : 1, didFail ? 1 : 0, Date.now() - started);
+        }
+    }
+    async #runRefreshCycle(isRediscoveryDue, signal) {
+        if (isRediscoveryDue) {
+            await this.#discover({ reason: 'periodic', signal });
+            return this.#partitions.size + this.#sensors.size;
+        }
+        return this.#refreshDevices([...this.#partitions.keys(), ...this.#sensors.keys()], signal);
+    }
+    /**
+     * Bound a whole poll cycle, not just the requests inside it.
+     *
+     * `#refreshAllInFlight` is only cleared in a `finally`, so a cycle that never
+     * settles stops all polling for the life of the process — silently, because
+     * the interval keeps firing and keeps returning early. Per-request deadlines
+     * do not cover this: a cycle is many requests plus pacing plus backoff.
+     *
+     * The deadline *cancels* rather than merely stops waiting. Abandoning the
+     * promise cleared the in-flight guard while the original cycle kept issuing
+     * requests, so at the minimum poll interval up to five cycles could overlap —
+     * each one slowing the others through the shared pacing queue, and each one
+     * able to register and unregister accessories underneath a newer cycle.
+     */
+    async #withCycleDeadline(operation) {
+        const cycle = new AbortController();
+        const abortCycle = () => cycle.abort();
+        this.#abortController.signal.addEventListener('abort', abortCycle, { once: true });
+        const timer = setTimeout(abortCycle, settings_1.POLL_CYCLE_DEADLINE_MS);
+        timer.unref?.();
+        try {
+            return await operation(cycle.signal);
+        }
+        finally {
+            clearTimeout(timer);
+            this.#abortController.signal.removeEventListener('abort', abortCycle);
+            // Unconditional: a cycle that returned normally must not leave anything
+            // it spawned still running.
+            cycle.abort();
         }
     }
     /**
@@ -483,54 +729,51 @@ class MyAlarmComPlatform {
      *
      * Transient trouble is logged quietly; a bad password or a stale two-factor
      * cookie is logged loudly, because nothing will improve until it is fixed.
+     *
+     * Repetition is what turns a quiet failure into a loud one. Every retryable
+     * error routes to debug, which is off by default, so a sustained outage used
+     * to produce no output at all while HomeKit silently went stale.
      */
     #reportFailure(context, error) {
-        const message = `${context}: ${(0, sanitizers_1.sanitizeError)(error)}`;
-        const level = (0, failure_log_level_1.failureLogLevel)(error);
-        this.#log[level](message);
-    }
-    #diagnosticsIntervalMs() {
-        const seconds = this.#config.diagnosticsInterval;
-        return seconds > 0 ? seconds * 1_000 : 0;
-    }
-    /**
-     * Starts the diagnostics subsystem: emits the boot snapshot and schedules the
-     * heartbeat. No-op unless diagnosticsInterval > 0.
-     */
-    #startDiagnostics() {
-        const interval = this.#diagnosticsIntervalMs();
-        if (interval <= 0 || this.#isShuttingDown || this.#diagnosticsTimer) {
+        const detail = (0, sanitizers_1.sanitizeError)(error);
+        // User-actionable problems are rare and never self-heal, so they are loud —
+        // but only once per distinct problem. A rejected password re-raises on every
+        // poll cycle without touching the network, which at the default interval was
+        // 1,440 identical error lines a day saying nothing the first did not.
+        if ((0, failure_log_level_1.failureLogLevel)(error) === 'error') {
+            const signature = `${context}: ${detail}`;
+            if (signature !== this.#lastReportedError) {
+                this.#lastReportedError = signature;
+                this.#log.error(signature);
+            }
+            else {
+                this.#log.debug(signature);
+            }
             return;
         }
-        // Diagnostics must never be able to crash the host.
-        try {
-            const startReport = this.#diagnostics.snapshot('diagnostics.start', this.#buildDiagnosticsReaders());
-            this.#lastDiagnosticsHealth = startReport.lifecycle.health;
-            this.#emitDiagnostic('info', startReport);
+        // Counted only for failures that may clear on their own, which is what the
+        // outage summary below is about.
+        this.#consecutiveFailures++;
+        this.#log.debug(`${context}: ${detail}`);
+        // Counted regardless of which error arrived, because the error *type*
+        // changes during a real outage: the first few are network or 5xx failures,
+        // and once the circuit breaker opens they become CircuitBreakerError. A
+        // counter keyed on the message would reset at exactly that point and never
+        // reach the threshold.
+        if (this.#consecutiveFailures >= settings_1.POLL_FAILURE_WARN_THRESHOLD && !this.#hasWarnedAboutOutage) {
+            this.#hasWarnedAboutOutage = true;
+            this.#log.warn(`Alarm.com has failed ${this.#consecutiveFailures} times in a row (most recently: ${detail}). `
+                + 'HomeKit state may be stale until it is reachable again.');
         }
-        catch (error) {
-            this.#log.debug(`Failed to emit diagnostics start snapshot: ${(0, sanitizers_1.sanitizeError)(error)}`);
-        }
-        this.#diagnosticsTimer = setInterval(() => this.#diagnosticsHeartbeat(), interval);
     }
-    #diagnosticsHeartbeat() {
-        try {
-            const report = this.#diagnostics.buildHeartbeat(this.#buildDiagnosticsReaders());
-            this.#emitDiagnostic('info', report);
-            const health = report.lifecycle.health;
-            if (this.#lastDiagnosticsHealth !== null && health !== this.#lastDiagnosticsHealth) {
-                const isDegraded = health === 'degraded';
-                const transition = {
-                    ...report,
-                    msg: isDegraded ? 'health.degraded' : 'health.recovered',
-                };
-                this.#emitDiagnostic(isDegraded ? 'warn' : 'info', transition);
-            }
-            this.#lastDiagnosticsHealth = health;
+    /** Note that the operation is working again, pairing with {@link #reportFailure}. */
+    #reportSuccess() {
+        if (this.#hasWarnedAboutOutage) {
+            this.#log.info('Alarm.com is reachable again; HomeKit state is up to date.');
         }
-        catch (error) {
-            this.#log.debug(`Diagnostics heartbeat failed: ${(0, sanitizers_1.sanitizeError)(error)}`);
-        }
+        this.#consecutiveFailures = 0;
+        this.#hasWarnedAboutOutage = false;
+        this.#lastReportedError = null;
     }
     #buildDiagnosticsReaders() {
         return {
@@ -553,23 +796,6 @@ class MyAlarmComPlatform {
             ignored: this.#config.ignoredDeviceIds.size,
         };
     }
-    /**
-     * Emit a diagnostics report as a human-readable line only.
-     *
-     * Homebridge's logger stringifies any extra arguments onto the same line, so
-     * passing the structured snapshot as a second arg produced the giant JSON
-     * blob users saw after every Health / Diagnostics start line. Keep the full
-     * payload on a separate debug entry when debug logging is enabled.
-     */
-    #emitDiagnostic(level, report) {
-        this.#log[level](formatDiagnosticLine(report));
-        const { lifecycle, msg, ...groups } = report;
-        this.#log.debug('Diagnostics snapshot', {
-            msg,
-            ...groups,
-            ...lifecycle,
-        });
-    }
     #shutdown() {
         if (this.#isShuttingDown) {
             return;
@@ -578,57 +804,29 @@ class MyAlarmComPlatform {
         const resolveStartupRetry = this.#startupRetryResolve;
         this.#startupRetryResolve = null;
         resolveStartupRetry?.();
-        // Clear the heartbeat before emitting stop so a re-entrant shutdown cannot
-        // print Diagnostics stop twice from the same instance.
-        const diagnosticsTimer = this.#diagnosticsTimer;
-        this.#diagnosticsTimer = null;
-        if (diagnosticsTimer) {
-            clearInterval(diagnosticsTimer);
-            try {
-                this.#emitDiagnostic('info', this.#diagnostics.snapshot('diagnostics.stop', this.#buildDiagnosticsReaders()));
-            }
-            catch (error) {
-                this.#log.debug(`Failed to emit diagnostics stop snapshot: ${(0, sanitizers_1.sanitizeError)(error)}`);
-            }
+        // Cancel in-flight work before clearing timers, so a request that is
+        // already out cannot outlive the platform by its full retry budget.
+        this.#abortController.abort();
+        this.#reporter.stop();
+        if (this.#pollTimer) {
+            clearInterval(this.#pollTimer);
+            this.#pollTimer = null;
         }
-        for (const timer of [this.#pollTimer, this.#keepAliveTimer, this.#refreshTimer]) {
-            if (timer) {
-                clearTimeout(timer);
-                clearInterval(timer);
-            }
+        if (this.#keepAliveTimer) {
+            clearInterval(this.#keepAliveTimer);
+            this.#keepAliveTimer = null;
         }
-        this.#pollTimer = null;
-        this.#keepAliveTimer = null;
-        this.#refreshTimer = null;
+        if (this.#refreshTimer) {
+            clearTimeout(this.#refreshTimer);
+            this.#refreshTimer = null;
+        }
+        this.#pendingRefreshIds.clear();
+        for (const sensor of this.#sensors.values()) {
+            sensor.dispose();
+        }
         this.#eventStream?.stop();
         this.#eventStream = null;
     }
 }
 exports.MyAlarmComPlatform = MyAlarmComPlatform;
-/** Human-readable label for a diagnostics channel. */
-function diagnosticLabel(msg) {
-    switch (msg) {
-        case 'health':
-            return 'Health';
-        case 'diagnostics.start':
-            return 'Diagnostics start';
-        case 'diagnostics.stop':
-            return 'Diagnostics stop';
-        case 'health.degraded':
-            return 'Health degraded';
-        case 'health.recovered':
-            return 'Health recovered';
-        default:
-            return msg;
-    }
-}
-/** Concise human-readable summary line for a diagnostics report. */
-function formatDiagnosticLine(report) {
-    const { lifecycle, devices, websocket, api } = report;
-    const reasonText = lifecycle.reasons.length > 0 ? ` [${lifecycle.reasons.join(', ')}]` : '';
-    return (`${diagnosticLabel(report.msg)}: ${lifecycle.health}${reasonText} | `
-        + `devices ${devices.partitions}p/${devices.sensors}s | `
-        + `ws ${websocket.state} | `
-        + `api p50 ${api.p50Ms}ms p95 ${api.p95Ms}ms (req ${api.requests}, err ${api.errors})`);
-}
 //# sourceMappingURL=platform.js.map

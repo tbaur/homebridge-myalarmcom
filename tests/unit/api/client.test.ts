@@ -11,10 +11,14 @@
 
 import nock from 'nock'
 import { CircuitBreaker } from '../../../src/api/circuit-breaker'
-import { AlarmComClient, chunkIds } from '../../../src/api/client'
+import { AlarmComClient } from '../../../src/api/client'
 import { RateLimiter } from '../../../src/api/rate-limiter'
 import type { SessionManager } from '../../../src/api/session-manager'
-import { ApiParseError, ConfigurationError, ForbiddenError } from '../../../src/errors'
+import {
+  ApiParseError,
+  ForbiddenError,
+  SystemUnavailableError,
+} from '../../../src/errors'
 import { BASE_URL, MAX_IDS_PER_REQUEST } from '../../../src/settings'
 import type { PartitionAttributes, Resource } from '../../../src/types/alarm'
 import * as retry from '../../../src/utils/retry'
@@ -24,6 +28,7 @@ import identitiesFixture from '../../fixtures/identities.json'
 import partitionsFixture from '../../fixtures/partitions.json'
 import sensorsFixture from '../../fixtures/sensors.json'
 import systemFixture from '../../fixtures/system.json'
+import { fixtureAt } from '../../helpers/fixtures'
 
 const SESSION = {
   cookieHeader: 'ASP.NET_SessionId=session-value; afg=csrf-value',
@@ -57,32 +62,6 @@ function idRange(count: number): string[] {
   return Array.from({ length: count }, (_, index) => `1234567-${index + 1}`)
 }
 
-describe('chunkIds', () => {
-  it('batches at the fifty-id ceiling Alarm.com enforces with a 404', () => {
-    const chunks = chunkIds(idRange(120))
-
-    expect(chunks.map((chunk) => chunk.length)).toEqual([50, 50, 20])
-    expect(MAX_IDS_PER_REQUEST).toBe(50)
-  })
-
-  it('leaves a list that already fits in one batch', () => {
-    expect(chunkIds(idRange(50))).toHaveLength(1)
-    expect(chunkIds(idRange(51))).toHaveLength(2)
-  })
-
-  it('produces nothing for an empty list', () => {
-    expect(chunkIds([])).toEqual([])
-  })
-
-  it('honours a caller-supplied batch size', () => {
-    expect(chunkIds(idRange(5), 2).map((chunk) => chunk.length)).toEqual([2, 2, 1])
-  })
-
-  it('keeps every id, in order', () => {
-    expect(chunkIds(idRange(120)).flat()).toEqual(idRange(120))
-  })
-})
-
 describe('AlarmComClient', () => {
   describe('getSystemId', () => {
     it('reads the selected system from the identity', async () => {
@@ -105,18 +84,89 @@ describe('AlarmComClient', () => {
       await expect(client.getSystemId()).resolves.toBe('7654321')
     })
 
-    it('complains when the account reports no selected system', async () => {
+    /**
+     * Not a ConfigurationError: that means the *user's* config is wrong, which
+     * ends startup permanently. Alarm.com omitting a system is either an
+     * account problem or a partial response, and telling someone to fix a
+     * setting they do not have is worse than retrying.
+     */
+    it('reports a retryable failure when the account has no selected system', async () => {
       const { client } = createClient()
       nock(BASE_URL).get('/web/api/identities').reply(200, { data: [{ id: '1', relationships: {} }] })
 
-      await expect(client.getSystemId()).rejects.toThrow(ConfigurationError)
+      const error = await captureRejection(client.getSystemId())
+
+      expect(error).toBeInstanceOf(SystemUnavailableError)
+      expect((error as SystemUnavailableError).isRetryable).toBe(true)
     })
 
-    it('complains when the identity list is empty', async () => {
+    it('reports a retryable failure when the identity list is empty', async () => {
       const { client } = createClient()
       nock(BASE_URL).get('/web/api/identities').reply(200, { data: [] })
 
-      await expect(client.getSystemId()).rejects.toThrow(ConfigurationError)
+      await expect(client.getSystemId()).rejects.toThrow(SystemUnavailableError)
+    })
+
+    it('rejects a linkage carrying no usable id rather than querying for one', async () => {
+      const { client } = createClient()
+      nock(BASE_URL).get('/web/api/identities').reply(200, {
+        data: [{ id: '1', relationships: { selectedSystem: { data: { type: 'systems/system' } } } }],
+      })
+
+      await expect(client.getSystemId()).rejects.toThrow(SystemUnavailableError)
+    })
+  })
+
+  /**
+   * A poll cycle is several requests and it runs every interval, so a log holds
+   * thousands of near-identical lines a day. Without a tag there is no way to
+   * tell which retry, which session recovery, and which failure belong together.
+   */
+  describe('request correlation', () => {
+    it('tags a failure with an id and how long it took', async () => {
+      const { client } = createClient()
+      nock(BASE_URL).get('/web/api/identities').times(3).reply(500, 'boom')
+
+      const error = await captureRejection(client.getSystemId())
+
+      expect(error.message).toMatch(/\[[0-9a-f]{6}, \d+ms\]$/)
+    })
+
+    it('reuses the same tag across every retry of one request', async () => {
+      const log = createRecordingLogger()
+      const client = new AlarmComClient({
+        sessionManager: {
+          getSession: jest.fn().mockResolvedValue(SESSION),
+          invalidate: jest.fn(),
+          hasSession: true,
+        } as unknown as SessionManager,
+        log,
+        rateLimiter: new RateLimiter({ minIntervalMs: 0, maxRequests: 10_000, windowMs: 1_000 }),
+      })
+      nock(BASE_URL).get('/web/api/identities').times(2).reply(500, 'boom')
+      nock(BASE_URL).get('/web/api/identities').reply(200, identitiesFixture)
+
+      await expect(client.getSystemId()).resolves.toBe('7654321')
+
+      const tags = messagesAt(log, 'debug')
+        .filter((line) => line.startsWith('retrying '))
+        .map((line) => /\[([0-9a-f]{6})\]/.exec(line)?.[1])
+
+      expect(tags).toHaveLength(2)
+      expect(new Set(tags).size).toBe(1)
+    })
+
+    it('gives separate requests separate tags', async () => {
+      const { client } = createClient()
+      nock(BASE_URL).get('/web/api/identities').times(2).reply(500, 'boom')
+      nock(BASE_URL).get('/web/api/identities').reply(500, 'boom')
+      const first = await captureRejection(client.getSystemId())
+
+      nock(BASE_URL).get('/web/api/identities').times(3).reply(500, 'boom')
+      const second = await captureRejection(client.getSystemId())
+
+      const tagOf = (message: string): string => /\[([0-9a-f]{6})/.exec(message)?.[1] ?? ''
+      expect(tagOf(first.message)).not.toBe(tagOf(second.message))
     })
   })
 
@@ -180,6 +230,28 @@ describe('AlarmComClient', () => {
       expect(batches.flat()).toEqual(idRange(120))
     })
 
+    /** Alarm.com answers an oversized query string with a 404, not a useful error. */
+    it.each([
+      [MAX_IDS_PER_REQUEST, 1],
+      [MAX_IDS_PER_REQUEST + 1, 2],
+    ])('sends %i ids as %i request(s)', async (idCount, requestCount) => {
+      const { client } = createClient()
+      let seen = 0
+
+      nock(BASE_URL)
+        .get('/web/api/devices/sensors')
+        .query(true)
+        .times(requestCount)
+        .reply(200, () => {
+          seen++
+          return { data: [] }
+        })
+
+      await client.getSensors(idRange(idCount))
+
+      expect(seen).toBe(requestCount)
+    })
+
     it('joins the batched responses into one list', async () => {
       const { client } = createClient()
       nock(BASE_URL)
@@ -190,7 +262,7 @@ describe('AlarmComClient', () => {
       const sensors = await client.getSensors(['1234567-1', '1234567-2'])
 
       expect(sensors).toHaveLength(6)
-      expect(sensors[0].attributes.description).toBe('Front Door')
+      expect(fixtureAt(sensors, 0, 'sensors').attributes.description).toBe('Front Door')
     })
 
     it('makes no request at all for an empty id list', async () => {
@@ -216,13 +288,13 @@ describe('AlarmComClient', () => {
       const partitions = await client.getPartitions(['1234567-127'])
 
       expect(partitions).toHaveLength(1)
-      expect(partitions[0].attributes.hasPermissionToChangeState).toBe(false)
+      expect(fixtureAt(partitions, 0, 'partitions').attributes.hasPermissionToChangeState).toBe(false)
     })
   })
 
   describe('commandPartition', () => {
     const partitionId = '1234567-127'
-    const partitionResponse = { data: partitionsFixture.data[0] }
+    const partitionResponse = { data: fixtureAt(partitionsFixture.data, 0, 'partitions') }
 
     // Alarm.com negotiates on application/vnd.api+json, which nock does not
     // recognise as JSON, so the request body arrives as raw text.
@@ -314,18 +386,19 @@ describe('AlarmComClient', () => {
     it('includes nightArming and forceBypass when they were', async () => {
       const body = await captureCommandBody(
         (client) => client.commandPartition(partitionId, 'armStay', {
-          noEntryDelay: true,
-          silentArming: true,
           nightArming: true,
           forceBypass: true,
         }),
         'armStay',
       )
 
+      // The two arming modifiers HomeKit can express are conditional; the two it
+      // cannot are always present and always false, which is what the observed
+      // protocol expects.
       expect(body).toEqual({
         statePollOnly: false,
-        noEntryDelay: true,
-        silentArming: true,
+        noEntryDelay: false,
+        silentArming: false,
         nightArming: true,
         forceBypass: true,
       })
@@ -349,11 +422,11 @@ describe('AlarmComClient', () => {
       await expect(client.commandPartition(partitionId, 'armAway')).rejects.toThrow(ForbiddenError)
     })
 
-    it('re-authenticates once when a command gets an HTML login page', async () => {
+    it('re-authenticates once when a command is rejected with a 401', async () => {
       const { client, sessionManager } = createClient()
       nock(BASE_URL)
         .post(`/web/api/devices/partitions/${partitionId}/disarm`)
-        .reply(200, '<!DOCTYPE html><html><body>Sign in to Alarm.com</body></html>')
+        .reply(401, '{"errors":["Unauthorized"]}')
       nock(BASE_URL)
         .post(`/web/api/devices/partitions/${partitionId}/disarm`)
         .reply(200, partitionResponse)
@@ -364,18 +437,42 @@ describe('AlarmComClient', () => {
       expect(sessionManager.invalidate).toHaveBeenCalledTimes(1)
     })
 
+    /**
+     * A command is not idempotent, and an unparseable body is not a rejection.
+     *
+     * `ApiParseError` is only ever raised after `response.ok`, so an HTML
+     * interstitial on a command means the panel very likely *accepted* it. A read
+     * may safely replay on that signal; replaying a command would send a second
+     * arm — a second exit-delay countdown for the user, or a second siren.
+     */
+    it('does not replay a command whose response was merely unparseable', async () => {
+      const { client, sessionManager } = createClient()
+      const interceptor = nock(BASE_URL)
+        .post(`/web/api/devices/partitions/${partitionId}/armStay`)
+        .reply(200, '<!DOCTYPE html><html><body>Sign in to Alarm.com</body></html>')
+
+      const error = await captureRejection(client.commandPartition(partitionId, 'armStay'))
+
+      expect(error).toBeInstanceOf(ApiParseError)
+      expect(error.message).toMatch(/the session may have expired/)
+      expect(error.message).not.toContain('?')
+      expect(sessionManager.invalidate).not.toHaveBeenCalled()
+      expect(interceptor.isDone()).toBe(true)
+      expect(nock.pendingMocks()).toEqual([])
+    })
+
     it('surfaces a parse failure when re-authentication still returns HTML', async () => {
       const { client, sessionManager } = createClient()
       nock(BASE_URL)
         .post(`/web/api/devices/partitions/${partitionId}/disarm`)
-        .times(2)
+        .reply(401, '{"errors":["Unauthorized"]}')
+      nock(BASE_URL)
+        .post(`/web/api/devices/partitions/${partitionId}/disarm`)
         .reply(200, '<!DOCTYPE html><html><body>Sign in to Alarm.com</body></html>')
 
       const error = await captureRejection(client.commandPartition(partitionId, 'disarm'))
 
       expect(error).toBeInstanceOf(ApiParseError)
-      expect(error.message).toMatch(/the session may have expired/)
-      expect(error.message).not.toContain('?')
       expect(sessionManager.invalidate).toHaveBeenCalledTimes(1)
     })
   })
@@ -475,7 +572,7 @@ describe('AlarmComClient', () => {
       nock(BASE_URL).get('/web/api/identities').reply(200, identitiesFixture)
 
       await expect(client.getSystemId()).resolves.toBe('7654321')
-      expect(wait).toHaveBeenCalledWith(7_000)
+      expect(wait).toHaveBeenCalledWith(7_000, undefined)
     })
   })
 
@@ -502,8 +599,13 @@ describe('AlarmComClient', () => {
       const breaker = new CircuitBreaker({
         failureThreshold: 2,
         resetTimeoutMs: 1_000,
-        halfOpenMax: 1,
+        successesToClose: 1,
+        halfOpenProbes: 1,
         failureWindowMs: 60_000,
+        // Off, so this test's back-to-back retries count individually. Coalescing
+        // is what stops one failing request being read as several, and it is
+        // asserted in the breaker's own suite.
+        failureCoalesceMs: 0,
       })
       const sessionManager: SessionManagerStub = {
         getSession: jest.fn().mockResolvedValue(SESSION),
@@ -521,17 +623,29 @@ describe('AlarmComClient', () => {
 
       await expect(client.getSystemId()).rejects.toThrow()
 
-      expect(messagesAt(log, 'warn')).toContain('Circuit breaker CLOSED -> OPEN')
+      expect(messagesAt(log, 'warn')).toContain(
+        'Circuit breaker CLOSED -> OPEN; Alarm.com is being treated as unavailable',
+      )
     })
 
-    it('logs recovery through HALF_OPEN back to CLOSED', async () => {
+    /**
+     * Only the edges into and out of "unavailable" are loud.
+     *
+     * During an outage the breaker necessarily flaps OPEN -> HALF_OPEN -> OPEN
+     * once per poll cycle as the cooldown elapses and the probe fails. Logging
+     * each of those at info and warn was 2,880 lines a day, arriving in the log an
+     * operator is reading to understand the outage.
+     */
+    it('reports the outage and the recovery, and keeps the probe churn quiet', async () => {
       jest.useFakeTimers()
       const log = createRecordingLogger()
       const breaker = new CircuitBreaker({
         failureThreshold: 2,
         resetTimeoutMs: 1_000,
-        halfOpenMax: 1,
+        successesToClose: 1,
+        halfOpenProbes: 1,
         failureWindowMs: 60_000,
+        failureCoalesceMs: 0,
       })
       const sessionManager: SessionManagerStub = {
         getSession: jest.fn().mockResolvedValue(SESSION),
@@ -547,14 +661,30 @@ describe('AlarmComClient', () => {
 
       breaker.recordFailure()
       breaker.recordFailure()
-      expect(messagesAt(log, 'warn')).toContain('Circuit breaker CLOSED -> OPEN')
+      expect(messagesAt(log, 'warn')).toEqual([
+        'Circuit breaker CLOSED -> OPEN; Alarm.com is being treated as unavailable',
+      ])
+
+      // Two failed probe cycles: each moves OPEN -> HALF_OPEN -> OPEN, and neither
+      // says anything the first warning did not.
+      for (let cycle = 0; cycle < 2; cycle++) {
+        jest.advanceTimersByTime(1_000)
+        expect(breaker.canRequest()).toBe(true)
+        await expect(breaker.execute(() => Promise.reject(new Error('still down'))))
+          .rejects.toThrow('still down')
+      }
+
+      expect(messagesAt(log, 'warn')).toHaveLength(1)
+      expect(messagesAt(log, 'info')).toEqual([])
+      expect(messagesAt(log, 'debug').join('\n')).toContain('Circuit breaker OPEN -> HALF_OPEN')
 
       jest.advanceTimersByTime(1_000)
       expect(breaker.canRequest()).toBe(true)
-      expect(messagesAt(log, 'info')).toContain('Circuit breaker OPEN -> HALF_OPEN')
+      await expect(breaker.execute(() => Promise.resolve('ok'))).resolves.toBe('ok')
 
-      await expect(breaker.execute(async () => 'ok')).resolves.toBe('ok')
-      expect(messagesAt(log, 'info')).toContain('Circuit breaker HALF_OPEN -> CLOSED')
+      expect(messagesAt(log, 'info')).toEqual([
+        'Circuit breaker HALF_OPEN -> CLOSED; Alarm.com is reachable again',
+      ])
 
       jest.useRealTimers()
     })

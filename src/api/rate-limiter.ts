@@ -17,6 +17,8 @@
  * sustained trickle still cannot add up to abusive volume).
  */
 
+import { RequestPacingError } from '../errors'
+import { MS_PER_MINUTE, MS_PER_SECOND } from '../settings'
 import { sleep } from '../utils/retry'
 
 export interface RateLimiterConfig {
@@ -39,18 +41,22 @@ export interface RateLimiterConfig {
  * exactly when it should.
  */
 export const DEFAULT_RATE_LIMITER_CONFIG: RateLimiterConfig = {
-  minIntervalMs: 1_000,
+  minIntervalMs: MS_PER_SECOND,
   maxRequests: 60,
-  windowMs: 60_000,
-  maxWaitMs: 30_000,
+  windowMs: MS_PER_MINUTE,
+  maxWaitMs: 30 * MS_PER_SECOND,
 }
 
 /** Snapshot of limiter state, for diagnostics. */
+/**
+ * Snapshot of pacing state, for diagnostics.
+ *
+ * Trimmed to what is consumed. `msUntilNextSlot` in particular cost a full wait
+ * computation on every diagnostics heartbeat and was read by nothing.
+ */
 export interface RateLimiterStatus {
-  requestsInWindow: number
-  maxRequests: number
+  /** Slots left in the current window. */
   remaining: number
-  msUntilNextSlot: number
 }
 
 /** Paces outbound requests to Alarm.com. */
@@ -76,33 +82,31 @@ export class RateLimiter {
     this.#timestamps = this.#timestamps.filter((ts) => now - ts < this.#windowMs)
   }
 
-  /** How long the caller must wait before a request is permissible. */
+  /**
+   * How long the caller must wait before a request is permissible.
+   *
+   * Assumes the window has already been pruned for `now`, so callers that
+   * pruned to make a decision of their own do not pay for a second pass.
+   */
   #computeWaitMs(now: number): number {
-    this.#prune(now)
-
     const last = this.#timestamps[this.#timestamps.length - 1]
     const spacingWait = last === undefined
       ? 0
       : Math.max(0, this.#minIntervalMs - (now - last))
 
-    if (this.#timestamps.length < this.#maxRequests) {
+    const oldest = this.#timestamps[0]
+    if (this.#timestamps.length < this.#maxRequests || oldest === undefined) {
       return spacingWait
     }
 
     // Window is full: wait for the oldest entry to age out.
-    const windowWait = this.#windowMs - (now - this.#timestamps[0])
-    return Math.max(spacingWait, windowWait)
+    return Math.max(spacingWait, this.#windowMs - (now - oldest))
   }
 
+  /** Snapshot of limiter state, for diagnostics. */
   getStatus(): RateLimiterStatus {
-    const now = Date.now()
-    this.#prune(now)
-    return {
-      requestsInWindow: this.#timestamps.length,
-      maxRequests: this.#maxRequests,
-      remaining: Math.max(0, this.#maxRequests - this.#timestamps.length),
-      msUntilNextSlot: this.#computeWaitMs(now),
-    }
+    this.#prune(Date.now())
+    return { remaining: Math.max(0, this.#maxRequests - this.#timestamps.length) }
   }
 
   /**
@@ -111,20 +115,22 @@ export class RateLimiter {
    * Callers are served in arrival order rather than racing, so a burst of
    * concurrent requests is spread evenly instead of clumping.
    *
-   * @throws {Error} The required wait exceeds `maxWaitMs`.
+   * @param signal Abandons a pending wait on shutdown.
+   * @throws {RequestPacingError} The required wait exceeds `maxWaitMs`.
+   * @throws {OperationAbortedError} The signal aborted during the wait.
    */
-  async acquire(): Promise<void> {
+  async acquire(signal?: AbortSignal): Promise<void> {
     const claim = this.#tail.then(async () => {
-      const waitMs = this.#computeWaitMs(Date.now())
+      const now = Date.now()
+      this.#prune(now)
+      const waitMs = this.#computeWaitMs(now)
 
       if (waitMs > this.#maxWaitMs) {
-        throw new Error(
-          `Request pacing would require waiting ${waitMs}ms, exceeding the ${this.#maxWaitMs}ms limit`,
-        )
+        throw new RequestPacingError(waitMs, this.#maxWaitMs)
       }
 
       if (waitMs > 0) {
-        await sleep(waitMs)
+        await sleep(waitMs, signal)
       }
 
       this.#timestamps.push(Date.now())
@@ -138,13 +144,9 @@ export class RateLimiter {
   }
 
   /** Run an operation once a slot is available. */
-  async execute<T>(operation: () => Promise<T>): Promise<T> {
-    await this.acquire()
+  async execute<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    await this.acquire(signal)
     return operation()
   }
 
-  reset(): void {
-    this.#timestamps = []
-    this.#tail = Promise.resolve()
-  }
 }

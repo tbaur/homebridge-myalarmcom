@@ -25,8 +25,6 @@ export interface Session {
     cookieHeader: string;
     /** Anti-CSRF value for the `ajaxrequestuniquekey` header. */
     ajaxKey: string;
-    /** When this session was established. */
-    createdAt: Date;
 }
 /** Result of scraping the login page. */
 interface HiddenFields {
@@ -59,11 +57,12 @@ export declare function buildLoginBody(username: string, password: string, hidde
  * challenge, while the login-response set alone was accepted. This is the one
  * non-obvious detail that makes the whole flow work.
  *
+ * @param signal Cancels both requests when the platform shuts down.
  * @throws {LoginFormError} The login page could not be parsed.
  * @throws {TwoFactorRequiredError} Alarm.com demanded two-factor verification.
  * @throws {AuthenticationError} The credentials were rejected.
  */
-export declare function authenticate(credentials: Credentials, log: Logger): Promise<Session>;
+export declare function authenticate(credentials: Credentials, log: Logger, signal?: AbortSignal): Promise<Session>;
 /**
  * Touch the session so Alarm.com keeps it alive.
  *
@@ -71,8 +70,9 @@ export declare function authenticate(credentials: Credentials, log: Logger): Pro
  * polices for abuse, so refreshing an existing session avoids the operation
  * most likely to lock the account.
  *
+ * @param signal Cancels the probe when the platform shuts down.
  * @returns Whether the session is still valid.
  */
-export declare function keepAlive(session: Session): Promise<boolean>;
+export declare function keepAlive(session: Session, signal?: AbortSignal): Promise<boolean>;
 export {};
 //# sourceMappingURL=auth.d.ts.map

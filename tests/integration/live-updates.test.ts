@@ -29,6 +29,7 @@ import partitionsFixture from '../fixtures/partitions.json'
 import sensorsFixture from '../fixtures/sensors.json'
 import systemFixture from '../fixtures/system.json'
 import eventsFixture from '../fixtures/events.json'
+import { fixtureAt } from '../helpers/fixtures'
 
 jest.mock('../../src/utils/retry', () => {
   const actual = jest.requireActual<typeof import('../../src/utils/retry')>('../../src/utils/retry')
@@ -59,6 +60,11 @@ jest.mock('ws', () => {
 
 const MockWebSocket = WebSocket as unknown as { instances: (EventEmitter & { url: string })[] }
 
+/** The socket the stream most recently opened, failing loudly if there is none. */
+function latestSocket(): EventEmitter & { url: string } {
+  return fixtureAt(MockWebSocket.instances, MockWebSocket.instances.length - 1, 'opened sockets')
+}
+
 const CONFIG: MyAlarmComPlatformConfig = {
   platform: 'MyAlarmCom',
   username: 'user@example.com',
@@ -86,7 +92,9 @@ const DOOR_OPENED: AlarmComEvent = {
   DeviceType: 1,
 }
 
-const [signInEvent, openAndClosedEvent] = eventsFixture.events as AlarmComEvent[]
+const fixtureEvents = eventsFixture.events as AlarmComEvent[]
+const signInEvent = fixtureAt(fixtureEvents, 0, 'events')
+const openAndClosedEvent = fixtureAt(fixtureEvents, 1, 'events')
 
 /** Fake only the poll interval, so the requests it triggers still run for real. */
 function useOnlyPollTimer(): void {
@@ -148,7 +156,7 @@ describe('staying up to date after discovery', () => {
     new MyAlarmComPlatform(log, CONFIG, api.asApi())
     api.emit('didFinishLaunching')
     await waitFor(() => MockWebSocket.instances.length > 0, { description: 'the event stream socket' })
-    MockWebSocket.instances[MockWebSocket.instances.length - 1].emit('open')
+    latestSocket().emit('open')
     await waitFor(
       () => log.infoMessages.some((message) => message.includes('Ready')),
       { description: 'discovery to finish' },
@@ -161,7 +169,7 @@ describe('staying up to date after discovery', () => {
 
   /** Deliver a frame the way the socket would. */
   function pushEvent(event: AlarmComEvent): void {
-    const socket = MockWebSocket.instances[MockWebSocket.instances.length - 1]
+    const socket = latestSocket()
     if (!socket) {
       throw new Error('The platform never opened a socket')
     }
@@ -241,27 +249,49 @@ describe('staying up to date after discovery', () => {
     expect(targetedReadsOf(KITCHEN_WINDOW)).toHaveLength(1)
   })
 
+  /**
+   * Proven by ordering rather than by elapsed time.
+   *
+   * Waiting a fixed second and asserting "nothing happened" had about 10ms of
+   * margin: a regressed frame schedules a 750ms debounce and then waits out the
+   * 1,000ms pacing gap left by discovery's last request, landing at ~990ms. On a
+   * loaded machine the test passed while the behaviour it names was broken.
+   * Pushing a frame that *must* produce a read and waiting for that read instead
+   * gives a definite point after which the ignored frame's read cannot still be
+   * pending.
+   */
   it('ignores a sign-in frame, which says nothing about any device', async () => {
     await launch()
     await waitForSocket()
-    const readsAfterDiscovery = sensorReads.length
 
     pushEvent(signInEvent)
-    await settle()
+    pushEvent(DOOR_OPENED)
 
-    expect(sensorReads).toHaveLength(readsAfterDiscovery)
+    await waitFor(() => targetedReadsOf(FRONT_DOOR).length > 0, {
+      description: 'the re-read for the door frame that followed it',
+      timeoutMs: 5_000,
+    })
+
+    // The sign-in frame names device 1234567-127. Had it enqueued a refresh, it
+    // would have been coalesced into the read above rather than disappearing.
+    expect(targetedReadsOf(FRONT_DOOR)).toEqual([[FRONT_DOOR]])
+    expect(sensorReads.some((ids) => ids.includes('1234567-127'))).toBe(false)
   })
 
   it('discards a frame it cannot parse without falling over', async () => {
     await launch()
     await waitForSocket()
-    const readsAfterDiscovery = sensorReads.length
 
-    const socket = MockWebSocket.instances[MockWebSocket.instances.length - 1]
+    const socket = latestSocket()
     socket?.emit('message', Buffer.from('<html>not a frame</html>'))
-    await settle()
+    pushEvent(DOOR_OPENED)
 
-    expect(sensorReads).toHaveLength(readsAfterDiscovery)
+    await waitFor(() => targetedReadsOf(FRONT_DOOR).length > 0, {
+      description: 'the re-read for the valid frame that followed it',
+      timeoutMs: 5_000,
+    })
+
+    expect(targetedReadsOf(FRONT_DOOR)).toEqual([[FRONT_DOOR]])
     expect(log.errors).toEqual([])
   })
 
@@ -289,4 +319,5 @@ describe('staying up to date after discovery', () => {
 
     expect(sensorReads).toEqual([])
   })
+
 })

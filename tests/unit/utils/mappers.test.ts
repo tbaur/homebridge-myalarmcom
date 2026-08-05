@@ -22,7 +22,6 @@ import {
   toHomeKitSensorState,
   toImmediateSensorLabel,
   toPartitionAction,
-  toPartitionState,
   toSecurityStateLabel,
   toSensorServiceKind,
 } from '../../../src/utils/mappers'
@@ -34,9 +33,10 @@ import {
 } from '../../../src/types/alarm'
 import partitionsFixture from '../../fixtures/partitions.json'
 import sensorsFixture from '../../fixtures/sensors.json'
+import { fixtureAt } from '../../helpers/fixtures'
 
 const sensors = sensorsFixture.data as unknown as Resource<SensorAttributes>[]
-const livePanel = partitionsFixture.data[0].attributes as PartitionAttributes
+const livePanel = fixtureAt(partitionsFixture.data, 0, 'partitions').attributes as PartitionAttributes
 
 function sensorNamed(description: string): SensorAttributes {
   const match = sensors.find((sensor) => sensor.attributes.description === description)
@@ -86,19 +86,6 @@ describe('toHomeKitSecurityState', () => {
   it('returns undefined rather than disarmed for an unrecognised state', () => {
     expect(toHomeKitSecurityState(PartitionState.UNKNOWN)).toBeUndefined()
     expect(toHomeKitSecurityState(99)).toBeUndefined()
-  })
-})
-
-describe('toPartitionState', () => {
-  it('maps each HomeKit target back to the Alarm.com state it requests', () => {
-    expect(toPartitionState(HomeKitSecurityTarget.STAY_ARM)).toBe(PartitionState.ARMED_STAY)
-    expect(toPartitionState(HomeKitSecurityTarget.AWAY_ARM)).toBe(PartitionState.ARMED_AWAY)
-    expect(toPartitionState(HomeKitSecurityTarget.NIGHT_ARM)).toBe(PartitionState.ARMED_NIGHT)
-    expect(toPartitionState(HomeKitSecurityTarget.DISARM)).toBe(PartitionState.DISARMED)
-  })
-
-  it('returns undefined for a target HomeKit should never send', () => {
-    expect(toPartitionState(7)).toBeUndefined()
   })
 })
 

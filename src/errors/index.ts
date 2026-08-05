@@ -7,36 +7,55 @@
  * @fileoverview Structured error hierarchy for predictable error handling.
  */
 
+import { MS_PER_SECOND } from '../settings'
+
+/**
+ * Every machine-readable error code the plugin can produce.
+ *
+ * A closed union rather than `string` so a comparison against a code that no
+ * longer exists is a compile error instead of a branch that silently stops
+ * matching.
+ */
+export type ErrorCode =
+  | 'CONFIG_ERROR'
+  | 'AUTH_ERROR'
+  | 'TWO_FACTOR_REQUIRED'
+  | 'LOGIN_FORM_ERROR'
+  | 'LOGIN_THROTTLED'
+  | 'SESSION_EXPIRED'
+  | 'FORBIDDEN_ERROR'
+  | 'READ_ONLY_PARTITION'
+  | 'SYSTEM_UNAVAILABLE'
+  | 'NETWORK_ERROR'
+  | 'TIMEOUT_ERROR'
+  | 'RATE_LIMIT_ERROR'
+  | 'REQUEST_PACING'
+  | 'API_RESPONSE_ERROR'
+  | 'API_PARSE_ERROR'
+  | 'CIRCUIT_OPEN'
+  | 'OPERATION_ABORTED'
+
 /**
  * Base class for all plugin errors.
  *
  * Carries a stable machine-readable `code` and an `isRetryable` hint so callers
  * can make retry decisions without string-matching messages — which matters
  * here because Alarm.com's own error text is inconsistent and unversioned.
+ *
+ * `isRetryable` means "this may clear on its own, so a later attempt is
+ * worthwhile". It does *not* mean "safe for {@link withRetry} to hammer": some
+ * retryable failures have a dedicated recovery path instead, and the client
+ * excludes those explicitly rather than reinterpreting this flag.
  */
 export abstract class AlarmComError extends Error {
-  abstract readonly code: string
+  abstract readonly code: ErrorCode
   abstract readonly isRetryable: boolean
-  readonly httpStatus?: number
-  readonly timestamp: Date
 
   constructor(message: string, options?: { cause?: Error }) {
     super(message, options)
     this.name = this.constructor.name
-    this.timestamp = new Date()
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, this.constructor)
-    }
-  }
-
-  toJSON(): Record<string, unknown> {
-    return {
-      name: this.name,
-      code: this.code,
-      message: this.message,
-      isRetryable: this.isRetryable,
-      httpStatus: this.httpStatus,
-      timestamp: this.timestamp.toISOString(),
     }
   }
 }
@@ -49,7 +68,7 @@ export class ConfigurationError extends AlarmComError {
 
 /** Credentials were rejected. Retrying with the same credentials cannot help. */
 export class AuthenticationError extends AlarmComError {
-  readonly code: string = 'AUTH_ERROR'
+  readonly code: ErrorCode = 'AUTH_ERROR'
   readonly isRetryable = false
 
   constructor(message = 'Authentication failed', options?: { cause?: Error }) {
@@ -66,7 +85,7 @@ export class AuthenticationError extends AlarmComError {
  * challenge are exactly what gets an Alarm.com account locked.
  */
 export class TwoFactorRequiredError extends AuthenticationError {
-  override readonly code: string = 'TWO_FACTOR_REQUIRED'
+  override readonly code: ErrorCode = 'TWO_FACTOR_REQUIRED'
 
   constructor(
     message = 'Alarm.com requires two-factor verification; the configured twoFactorAuthenticationId cookie is missing or no longer valid',
@@ -106,11 +125,63 @@ export class SessionExpiredError extends AlarmComError {
   readonly isRetryable = true
 }
 
+/**
+ * A re-login was needed but the re-authentication floor has not elapsed.
+ *
+ * Signing in is the request Alarm.com polices hardest, so the session manager
+ * refuses to do it more often than the configured interval. Waiting out that
+ * floor inline would block the poll cycle — and any HomeKit arm/disarm queued
+ * behind it — for up to a day, so the caller is told to come back instead.
+ */
+export class LoginThrottledError extends AlarmComError {
+  readonly code = 'LOGIN_THROTTLED'
+  readonly isRetryable = true
+  /** Milliseconds remaining before a login would be permitted. */
+  readonly retryAfterMs: number
+
+  constructor(retryAfterMs: number, options?: { cause?: Error }) {
+    super(
+      `Re-authentication is deferred for another ${Math.round(retryAfterMs / MS_PER_SECOND)}s to stay within the Alarm.com login floor`,
+      options,
+    )
+    this.retryAfterMs = retryAfterMs
+  }
+}
+
+/**
+ * Client-side pacing refused the request: the required wait was too long.
+ *
+ * Self-inflicted and self-healing, so it is neither a network failure nor an
+ * Alarm.com error. It has its own type because the client has to tell it apart
+ * from a real failure to keep latency percentiles and throttle counts honest,
+ * and matching on the message text is exactly what this hierarchy exists to
+ * avoid.
+ */
+export class RequestPacingError extends AlarmComError {
+  readonly code = 'REQUEST_PACING'
+  readonly isRetryable = false
+  constructor(requiredWaitMs: number, maxWaitMs: number, options?: { cause?: Error }) {
+    super(
+      `Request pacing would require waiting ${requiredWaitMs}ms, exceeding the ${maxWaitMs}ms limit`,
+      options,
+    )
+  }
+}
+
+/** A wait or in-flight operation was cancelled, normally because of shutdown. */
+export class OperationAbortedError extends AlarmComError {
+  readonly code = 'OPERATION_ABORTED'
+  readonly isRetryable = false
+
+  constructor(message = 'Operation aborted', options?: { cause?: Error }) {
+    super(message, options)
+  }
+}
+
 /** Authenticated but not permitted (403). Re-authenticating cannot fix it. */
 export class ForbiddenError extends AlarmComError {
   readonly code = 'FORBIDDEN_ERROR'
   readonly isRetryable = false
-  override readonly httpStatus = 403
 }
 
 /**
@@ -131,6 +202,21 @@ export class ReadOnlyPartitionError extends AlarmComError {
   }
 }
 
+/**
+ * Alarm.com did not report a usable system for this account.
+ *
+ * Usually an account provisioning problem, but the same shape arrives from a
+ * truncated or partial response, so it is treated as something that may clear
+ * rather than as a permanent end to startup. Deliberately not a
+ * {@link ConfigurationError}: that means the *user's* config is wrong, and
+ * telling someone to fix a setting they do not have is worse than saying
+ * nothing.
+ */
+export class SystemUnavailableError extends AlarmComError {
+  readonly code = 'SYSTEM_UNAVAILABLE'
+  readonly isRetryable = true
+}
+
 /** Network-level failure (DNS, connection reset, etc.). Safe to retry. */
 export class NetworkError extends AlarmComError {
   readonly code = 'NETWORK_ERROR'
@@ -147,9 +233,8 @@ export class TimeoutError extends AlarmComError {
 export class RateLimitError extends AlarmComError {
   readonly code = 'RATE_LIMIT_ERROR'
   readonly isRetryable = true
-  override readonly httpStatus = 429
   /** Server-suggested wait from `Retry-After`, when present. */
-  readonly retryAfterMs?: number
+  readonly retryAfterMs: number | undefined
 
   constructor(message: string, options?: { cause?: Error; retryAfterMs?: number }) {
     super(message, options?.cause ? { cause: options.cause } : undefined)
@@ -161,11 +246,12 @@ export class RateLimitError extends AlarmComError {
 export class ApiResponseError extends AlarmComError {
   readonly code = 'API_RESPONSE_ERROR'
   readonly isRetryable: boolean
-  override readonly httpStatus: number
+  /** The status Alarm.com returned, for the retry classification below. */
+  readonly status: number
 
   constructor(status: number, message: string, options?: { cause?: Error }) {
     super(message, options)
-    this.httpStatus = status
+    this.status = status
     this.isRetryable = status >= 500
   }
 }
@@ -211,6 +297,11 @@ const TWO_FACTOR_MARKER = 'twofactorauthenticationrequired'
  *
  * Accepts either a delay in seconds or an HTTP-date. Invalid values are ignored
  * so callers fall back to computed backoff.
+ *
+ * Deliberately unbounded: this reports what the server said, nothing more. The
+ * value is remote-controlled and an HTTP-date is subject to clock skew, so
+ * callers must both floor it (a skewed date can parse to `0`) and cap it
+ * (`Retry-After: 86400` is a day) before sleeping on it.
  */
 export function parseRetryAfterMs(header: string | null | undefined): number | undefined {
   if (!header) {
@@ -224,7 +315,7 @@ export function parseRetryAfterMs(header: string | null | undefined): number | u
 
   const asSeconds = Number(trimmed)
   if (Number.isFinite(asSeconds) && asSeconds >= 0) {
-    return Math.round(asSeconds * 1_000)
+    return Math.round(asSeconds * MS_PER_SECOND)
   }
 
   const asDate = Date.parse(trimmed)
@@ -259,8 +350,8 @@ export function createApiError(
   }
   if (status === 429) {
     return new RateLimitError(message, {
-      cause: options?.cause,
-      retryAfterMs: options?.retryAfterMs,
+      ...cause,
+      ...(options?.retryAfterMs === undefined ? {} : { retryAfterMs: options.retryAfterMs }),
     })
   }
   return new ApiResponseError(status, message, cause)

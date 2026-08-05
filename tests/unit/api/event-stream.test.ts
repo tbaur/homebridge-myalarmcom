@@ -22,6 +22,7 @@ import {
 } from '../../../src/settings'
 import { createRecordingLogger, messagesAt, type RecordingLogger } from '../../helpers/logger'
 import eventsFixture from '../../fixtures/events.json'
+import { fixtureAt } from '../../helpers/fixtures'
 
 jest.mock('ws', () => {
   const { EventEmitter: NodeEventEmitter } = jest.requireActual<typeof import('node:events')>('node:events')
@@ -72,7 +73,9 @@ const MockWebSocket = WebSocket as unknown as {
   instances: MockSocket[]
 }
 
-const [signInEvent, deviceEvent] = eventsFixture.events as AlarmComEvent[]
+const fixtureEvents = eventsFixture.events as AlarmComEvent[]
+const signInEvent = fixtureAt(fixtureEvents, 0, 'events')
+const deviceEvent = fixtureAt(fixtureEvents, 1, 'events')
 
 describe('EventStream', () => {
   let log: RecordingLogger
@@ -84,9 +87,9 @@ describe('EventStream', () => {
   function createStream(): EventStream {
     return new EventStream({
       log,
-      requestToken: requestToken as unknown as () => Promise<{ token: string, endpoint?: string }>,
-      onDeviceEvent: onDeviceEvent as unknown as (id: string, event: AlarmComEvent) => void,
-      onUnavailable: onUnavailable as unknown as () => void,
+      requestToken: requestToken,
+      onDeviceEvent: onDeviceEvent,
+      onUnavailable: onUnavailable,
     })
   }
 
@@ -392,18 +395,40 @@ describe('EventStream', () => {
       expect(stream.isConnected).toBe(true)
     })
 
-    it('explains the first failure loudly and the rest quietly', async () => {
+    /**
+     * Keyed on the reason rather than "have I complained yet".
+     *
+     * A multi-hour Alarm.com outage retries every 15 minutes, and resetting the
+     * flag on each recovery cycle meant one warn per cycle repeating a reason
+     * that had not changed. Repeats are now quiet.
+     */
+    it('repeats an unchanged failure reason quietly', async () => {
       const { pending, socket } = await startPending()
 
       socket.emit('error', new Error('socket hang up'))
-      socket.emit('error', new Error('socket hang up again'))
+      socket.emit('error', new Error('socket hang up'))
       socket.emit('close', 1006)
       await pending
 
       expect(messagesAt(log, 'warn')).toEqual([
         'Alarm.com event stream could not connect: socket hang up',
       ])
-      expect(messagesAt(log, 'debug').join('\n')).toContain('socket hang up again')
+      expect(messagesAt(log, 'debug').join('\n')).toContain('event stream: socket hang up')
+    })
+
+    /** A reason that changes is news, and the second reason is often the useful one. */
+    it('still speaks up when the reason changes', async () => {
+      const { pending, socket } = await startPending()
+
+      socket.emit('error', new Error('socket hang up'))
+      socket.emit('error', new Error('certificate has expired'))
+      socket.emit('close', 1006)
+      await pending
+
+      expect(messagesAt(log, 'warn')).toEqual([
+        'Alarm.com event stream could not connect: socket hang up',
+        'Alarm.com event stream could not connect: certificate has expired',
+      ])
     })
 
     it('reports the status code when the upgrade itself is refused', async () => {
@@ -438,7 +463,7 @@ describe('EventStream', () => {
       await openAfterReconnect(WEBSOCKET_REFRESH_INTERVAL_MS)
 
       expect(requestToken).toHaveBeenCalledTimes(2)
-      expect(MockWebSocket.instances[0].closeCount).toBe(1)
+      expect(fixtureAt(MockWebSocket.instances, 0, 'sockets').closeCount).toBe(1)
       expect(messagesAt(log, 'debug')).toContain('Alarm.com event stream refreshed')
       expect(messagesAt(log, 'info')).not.toContain('Alarm.com event stream reconnected')
     })
@@ -505,7 +530,7 @@ describe('EventStream', () => {
       await flushConnect()
 
       expect(messagesAt(log, 'warn')).toEqual([
-        'Alarm.com event stream could not connect: could not obtain a stream token: Error: still no token',
+        'Alarm.com event stream could not connect: could not obtain a stream token: still no token',
       ])
     })
 
@@ -552,10 +577,10 @@ describe('EventStream', () => {
       const onReconnect = jest.fn()
       stream = new EventStream({
         log,
-        requestToken: requestToken as unknown as () => Promise<{ token: string, endpoint?: string }>,
-        onDeviceEvent: onDeviceEvent as unknown as (id: string, event: AlarmComEvent) => void,
-        onUnavailable: onUnavailable as unknown as () => void,
-        onReconnect: onReconnect as unknown as () => void,
+        requestToken: requestToken,
+        onDeviceEvent: onDeviceEvent,
+        onUnavailable: onUnavailable,
+        onReconnect: onReconnect,
       })
       jest.spyOn(Math, 'random').mockReturnValue(0)
 
@@ -676,7 +701,7 @@ describe('EventStream', () => {
       stream.stop()
 
       expect(jest.getTimerCount()).toBe(0)
-      expect(MockWebSocket.instances[0].closeCount).toBe(1)
+      expect(fixtureAt(MockWebSocket.instances, 0, 'sockets').closeCount).toBe(1)
     })
 
     it('cancels a pending reconnect', async () => {

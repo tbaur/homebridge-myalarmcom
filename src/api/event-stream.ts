@@ -16,7 +16,10 @@
 
 import WebSocket from 'ws'
 import {
+  ALARM_COM_APEX_HOST,
   DEFAULT_WEBSOCKET_ENDPOINT,
+  MS_PER_MINUTE,
+  MS_PER_SECOND,
   WEBSOCKET_HANDSHAKE_TIMEOUT_MS,
   WEBSOCKET_HOST_SUFFIX,
   WEBSOCKET_MAX_FAILURES,
@@ -26,10 +29,11 @@ import {
   WEBSOCKET_REFRESH_INTERVAL_MS,
   WEBSOCKET_REFRESH_JITTER_MS,
 } from '../settings'
+import type { EventStreamToken } from '../types/alarm'
 import { EVENT_TYPE_USER_LOGGED_IN, type AlarmComEvent } from '../types/events'
 import type { Logger } from '../utils/logger'
 import { computeBackoffMs } from '../utils/retry'
-import type { EventStreamToken } from './client'
+import { sanitizeError } from '../utils/sanitizers'
 
 export type { AlarmComEvent }
 
@@ -55,14 +59,28 @@ export interface EventStreamStatus {
   lastEventAgeSec: number | null
 }
 
+/**
+ * One in-flight {@link EventStream.connect} attempt.
+ *
+ * Carried explicitly rather than as loose locals so the token fetch, the
+ * socket cutover, and the error taxonomy can each be read on their own and
+ * still agree about whether this attempt still owns the connection.
+ */
+interface ConnectAttempt {
+  /** True when a live socket is being kept alive until a new token arrives. */
+  readonly shouldDeferDispose: boolean
+  /** Whether another connect or a stop took ownership during the token fetch. */
+  readonly isSuperseded: () => boolean
+}
+
 /** Maintains a live connection to the Alarm.com event stream. */
 export class EventStream {
   readonly #log: Logger
   readonly #requestToken: () => Promise<EventStreamToken>
   readonly #onDeviceEvent: (deviceResourceId: string, event: AlarmComEvent) => void
   readonly #onUnavailable: () => void
-  readonly #onReconnect?: () => void
-  readonly #onRecovered?: () => void
+  readonly #onReconnect: (() => void) | undefined
+  readonly #onRecovered: (() => void) | undefined
 
   #socket: WebSocket | null = null
   #reconnectTimer: NodeJS.Timeout | null = null
@@ -70,12 +88,20 @@ export class EventStream {
   #recoveryTimer: NodeJS.Timeout | null = null
   #consecutiveFailures = 0
   #isStopped = false
-  /** Whether a failure reason has already been surfaced at warn level. */
-  #hasReportedFailure = false
+  /** The reason last surfaced at warn level, so it is not repeated verbatim. */
+  #lastReportedReason: string | null = null
   #isConnecting = false
   #hadConnected = false
   /** True after giving up until a recovery attempt succeeds. */
   #hasGivenUp = false
+  /**
+   * Give-up cycles since the last successful connection.
+   *
+   * Each recovery cycle resets the failure counters, so without this a
+   * prolonged Alarm.com outage re-emitted the whole "gave up, falling back to
+   * polling" warning set every recovery interval, forever.
+   */
+  #giveUpCount = 0
   #lastEventAt: number | null = null
   /** Completes a pending {@link #connect} handshake wait when stop interrupts it. */
   #handshakeSettle: (() => void) | null = null
@@ -113,7 +139,7 @@ export class EventStream {
       isClosed: this.#isStopped || this.#socket?.readyState === WebSocket.CLOSED,
       lastEventAgeSec: this.#lastEventAt === null
         ? null
-        : Math.round((Date.now() - this.#lastEventAt) / 1000),
+        : Math.round((Date.now() - this.#lastEventAt) / MS_PER_SECOND),
     }
   }
 
@@ -121,6 +147,12 @@ export class EventStream {
   async start(): Promise<void> {
     this.#isStopped = false
     this.#hasGivenUp = false
+    this.#giveUpCount = 0
+    // Reset with the rest, or a restart after a give-up would abandon the stream
+    // on its first attempt using counters from the previous run.
+    this.#consecutiveFailures = 0
+    this.#lastReportedReason = null
+    this.#hadConnected = false
     this.#connectReason = 'initial'
     // Idempotent: a second start must not leave a prior reconnect/refresh timer armed.
     this.#clearTimers()
@@ -175,7 +207,7 @@ export class EventStream {
 
     try {
       const { protocol, hostname } = new URL(endpoint)
-      const isAlarmComHost = hostname === WEBSOCKET_HOST_SUFFIX.slice(1)
+      const isAlarmComHost = hostname === ALARM_COM_APEX_HOST
         || hostname.endsWith(WEBSOCKET_HOST_SUFFIX)
 
       if (protocol === 'wss:' && isAlarmComHost) {
@@ -198,169 +230,211 @@ export class EventStream {
       return
     }
 
-    // On proactive refresh, keep the live socket until a new token is in hand.
-    // Disposing first opened a silent push outage for the whole token/login path
-    // (which can wait on the auth floor for minutes).
-    const deferDispose = this.#connectReason === 'refresh' && this.isConnected
+    const attempt = this.#beginAttempt()
+
+    try {
+      const token = await this.#requestToken()
+      if (!this.#stillOwnsConnection(attempt)) {
+        return
+      }
+      await this.#openSocket(attempt, token)
+    } catch (error) {
+      this.#handleConnectFailure(attempt, error)
+    }
+  }
+
+  /**
+   * Claim ownership of the next connection and describe the attempt.
+   *
+   * On proactive refresh the live socket is kept until a new token is in hand.
+   * Disposing first opened a silent push outage for the whole token/login path,
+   * which can wait on the auth floor for minutes.
+   */
+  #beginAttempt(): ConnectAttempt {
+    const shouldDeferDispose = this.#connectReason === 'refresh' && this.isConnected
     const generationBeforeFetch = this.#connectGeneration
 
-    if (!deferDispose) {
+    if (!shouldDeferDispose) {
       this.#connectGeneration++
       this.#disposeSocket()
     }
     this.#settleHandshake()
     this.#isConnecting = true
 
-    /** Whether another connect/stop superseded this attempt during the token fetch. */
-    const isSuperseded = (): boolean => (
-      deferDispose
-        ? generationBeforeFetch !== this.#connectGeneration
-        : generationBeforeFetch + 1 !== this.#connectGeneration
-    )
+    return {
+      shouldDeferDispose,
+      isSuperseded: () => (
+        shouldDeferDispose
+          ? generationBeforeFetch !== this.#connectGeneration
+          : generationBeforeFetch + 1 !== this.#connectGeneration
+      ),
+    }
+  }
 
-    try {
-      const { token, endpoint } = await this.#requestToken()
-      if (this.#isStopped) {
-        if (!isSuperseded()) {
-          this.#isConnecting = false
-        }
-        return
+  /** Whether this attempt should still cut a socket over after its token fetch. */
+  #stillOwnsConnection(attempt: ConnectAttempt): boolean {
+    if (this.#isStopped) {
+      if (!attempt.isSuperseded()) {
+        this.#isConnecting = false
       }
+      return false
+    }
 
-      if (isSuperseded()) {
-        // A concurrent connect (usually the drop path) owns the socket now.
-        return
-      }
+    if (attempt.isSuperseded()) {
+      // A concurrent connect (usually the drop path) owns the socket now.
+      return false
+    }
 
-      if (deferDispose) {
-        // A drop during the token fetch owns recovery; abandon this cutover.
-        if (this.#reconnectTimer || !this.isConnected) {
-          this.#isConnecting = false
+    if (attempt.shouldDeferDispose && (this.#reconnectTimer || !this.isConnected)) {
+      // A drop during the token fetch owns recovery; abandon this cutover.
+      this.#isConnecting = false
+      return false
+    }
+
+    return true
+  }
+
+  /** Cut over to a new socket and wait for its handshake to settle. */
+  async #openSocket(attempt: ConnectAttempt, { token, endpoint }: EventStreamToken): Promise<void> {
+    // Invalidate any prior socket's handlers, then open the new one.
+    const generation = attempt.shouldDeferDispose
+      ? ++this.#connectGeneration
+      : this.#connectGeneration
+    this.#disposeSocket()
+
+    const target = this.#resolveEndpoint(endpoint)
+
+    // The token must be appended raw. It is not an opaque value: it arrives
+    // already percent-escaped and containing structural `&` and `=`, so it
+    // expands into several query parameters rather than one. Encoding it
+    // turns those separators into literals and the upgrade is refused with
+    // HTTP 401. Verified against a live account with both this client and
+    // Node's built-in one.
+    const url = `${target}?auth=${token}`
+
+    this.#log.debug(`connecting to the event stream at ${target}`)
+
+    const socket = new WebSocket(url)
+    this.#socket = socket
+
+    await this.#awaitHandshake(socket, generation)
+  }
+
+  /**
+   * Wait for the first open or close on a freshly opened socket.
+   *
+   * Callers at startup need their "connected" or failure line to land before
+   * Ready is announced. Reconnects take the same path; there the await merely
+   * holds the reconnect timer's callback.
+   */
+  #awaitHandshake(socket: WebSocket, generation: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      let isSettled = false
+      const settle = (): void => {
+        if (isSettled) {
           return
         }
+        isSettled = true
+        clearTimeout(handshakeTimer)
+        this.#handshakeSettle = null
+        resolve()
       }
+      this.#handshakeSettle = settle
 
-      // Cut over: invalidate any prior socket handlers, then open the new one.
-      const generation = deferDispose ? ++this.#connectGeneration : this.#connectGeneration
-      this.#disposeSocket()
+      const isCurrent = (): boolean => generation === this.#connectGeneration
 
-      const target = this.#resolveEndpoint(endpoint)
-
-      // The token must be appended raw. It is not an opaque value: it arrives
-      // already percent-escaped and containing structural `&` and `=`, so it
-      // expands into several query parameters rather than one. Encoding it
-      // turns those separators into literals and the upgrade is refused with
-      // HTTP 401. Verified against a live account with both this client and
-      // Node's built-in one.
-      const url = `${target}?auth=${token}`
-
-      this.#log.debug(`connecting to the event stream at ${target}`)
-
-      const socket = new WebSocket(url)
-      this.#socket = socket
-
-      // Wait for the first open or close so callers (startup) can finish their
-      // "connected" / failure log before announcing Ready. Reconnects use the
-      // same path; the await just holds the reconnect timer callback.
-      await new Promise<void>((resolve) => {
-        let settled = false
-        const settle = (): void => {
-          if (settled) {
-            return
-          }
-          settled = true
-          clearTimeout(handshakeTimer)
-          this.#handshakeSettle = null
-          resolve()
+      // Do not block platform Ready forever if Alarm.com never completes the
+      // upgrade. Abandon the hung socket, surface a WARN, and reconnect.
+      const handshakeTimer = setTimeout(() => {
+        if (!isCurrent()) {
+          settle()
+          return
         }
-        this.#handshakeSettle = settle
-
-        const isCurrent = (): boolean => generation === this.#connectGeneration
-
-        // Do not block platform Ready forever if Alarm.com never completes the
-        // upgrade. Abandon the hung socket, surface a WARN, and reconnect.
-        const handshakeTimer = setTimeout(() => {
-          if (!isCurrent()) {
-            settle()
-            return
-          }
-          this.#isConnecting = false
-          this.#recordFailureReason(
-            `handshake timed out after ${WEBSOCKET_HANDSHAKE_TIMEOUT_MS}ms`,
-          )
-          this.#disposeSocket()
-          settle()
-          if (!this.#isStopped) {
-            this.#scheduleReconnect()
-          }
-        }, WEBSOCKET_HANDSHAKE_TIMEOUT_MS)
-
-        socket.on('open', () => {
-          if (!isCurrent()) {
-            settle()
-            return
-          }
-          this.#handleOpen()
-          settle()
-        })
-        socket.on('message', (data) => {
-          if (isCurrent()) {
-            this.#handleMessage(data)
-          }
-        })
-        socket.on('error', (error) => {
-          if (isCurrent()) {
-            this.#recordFailureReason(error.message)
-          }
-        })
-        socket.on('close', (code) => {
-          if (isCurrent()) {
-            this.#handleClose(code)
-          }
-          settle()
-        })
-
-        // Emitted when the HTTP upgrade is rejected. The status code is the one
-        // piece of information that distinguishes a bad token from a blocked
-        // client, and it is not available anywhere else.
-        socket.on('unexpected-response', (_request, response) => {
-          if (isCurrent()) {
-            this.#recordFailureReason(
-              `the server refused the connection upgrade with HTTP ${response.statusCode}`,
-            )
-          }
-        })
-      })
-    } catch (error) {
-      if (this.#isStopped || isSuperseded()) {
-        return
-      }
-
-      // Drop already owns recovery. Do not WARN about the abandoned refresh
-      // token fetch — that would set #hasReportedFailure and mask the next
-      // real connect failure reason.
-      if (deferDispose && (this.#reconnectTimer || !this.isConnected)) {
         this.#isConnecting = false
-        this.#log.debug(`abandoned refresh token fetch after drop: ${String(error)}`)
-        return
-      }
-
-      this.#isConnecting = false
-
-      // Refresh failed but the old socket is still healthy — keep it and retry
-      // the cutover soon. Log at debug only; a WARN would set #hasReportedFailure
-      // and mask a later real outage reason while push updates are still flowing.
-      if (deferDispose && this.isConnected) {
-        this.#log.debug(
-          `refresh token fetch failed; keeping the live socket: ${String(error)}`,
+        this.#recordFailureReason(
+          `handshake timed out after ${WEBSOCKET_HANDSHAKE_TIMEOUT_MS}ms`,
         )
-        this.#scheduleRefreshRetry()
-        return
-      }
+        this.#disposeSocket()
+        settle()
+        if (!this.#isStopped) {
+          this.#scheduleReconnect()
+        }
+      }, WEBSOCKET_HANDSHAKE_TIMEOUT_MS)
 
-      this.#recordFailureReason(`could not obtain a stream token: ${String(error)}`)
-      this.#scheduleReconnect()
+      socket.on('open', () => {
+        if (!isCurrent()) {
+          settle()
+          return
+        }
+        this.#handleOpen()
+        settle()
+      })
+      socket.on('message', (data) => {
+        if (isCurrent()) {
+          this.#handleMessage(data)
+        }
+      })
+      socket.on('error', (error) => {
+        if (isCurrent()) {
+          this.#recordFailureReason(error.message)
+        }
+      })
+      socket.on('close', (code) => {
+        if (isCurrent()) {
+          this.#handleClose(code)
+        }
+        settle()
+      })
+
+      // Emitted when the HTTP upgrade is rejected. The status code is the one
+      // piece of information that distinguishes a bad token from a blocked
+      // client, and it is not available anywhere else.
+      socket.on('unexpected-response', (_request, response) => {
+        if (isCurrent()) {
+          this.#recordFailureReason(
+            `the server refused the connection upgrade with HTTP ${response.statusCode}`,
+          )
+        }
+      })
+    })
+  }
+
+  /**
+   * Decide what a failed connect attempt means.
+   *
+   * Four outcomes, and telling them apart is the whole job: the stream was
+   * stopped, another attempt took over, a refresh failed while the old socket
+   * is still carrying traffic, or push updates are genuinely down.
+   */
+  #handleConnectFailure(attempt: ConnectAttempt, error: unknown): void {
+    if (this.#isStopped || attempt.isSuperseded()) {
+      return
     }
+
+    // Drop already owns recovery. Do not WARN about the abandoned refresh
+    // token fetch — that would set #hasReportedFailure and mask the next
+    // real connect failure reason.
+    if (attempt.shouldDeferDispose && (this.#reconnectTimer || !this.isConnected)) {
+      this.#isConnecting = false
+      this.#log.debug(`abandoned refresh token fetch after drop: ${sanitizeError(error)}`)
+      return
+    }
+
+    this.#isConnecting = false
+
+    // Refresh failed but the old socket is still healthy — keep it and retry
+    // the cutover soon. Log at debug only; a WARN would set #hasReportedFailure
+    // and mask a later real outage reason while push updates are still flowing.
+    if (attempt.shouldDeferDispose && this.isConnected) {
+      this.#log.debug(
+        `refresh token fetch failed; keeping the live socket: ${sanitizeError(error)}`,
+      )
+      this.#scheduleRefreshRetry()
+      return
+    }
+
+    this.#recordFailureReason(`could not obtain a stream token: ${sanitizeError(error)}`)
+    this.#scheduleReconnect()
   }
 
   /**
@@ -387,25 +461,49 @@ export class EventStream {
   /**
    * Report why the stream failed.
    *
-   * The first reason is surfaced at warn level and the rest at debug. Logging
-   * every attempt loudly would be noise, but logging none of them loudly means
-   * a user sees the stream give up with no indication of why, which is a
-   * genuinely unhelpful place to leave someone.
+   * Loud once per distinct reason, then debug. Logging every attempt loudly
+   * would be noise, but logging none of them loudly means a user sees the
+   * stream give up with no indication of why, which is a genuinely unhelpful
+   * place to leave someone.
+   *
+   * Keyed on the reason rather than reset per recovery cycle: resetting meant a
+   * multi-hour Alarm.com outage produced one warn every 15 minutes forever,
+   * repeating a reason that had not changed. A reason that *does* change is
+   * news, so it is still surfaced.
    */
   #recordFailureReason(reason: string): void {
-    if (this.#hasReportedFailure) {
+    if (this.#lastReportedReason === reason) {
       this.#log.debug(`event stream: ${reason}`)
       return
     }
 
-    this.#hasReportedFailure = true
+    this.#lastReportedReason = reason
     this.#log.warn(`Alarm.com event stream could not connect: ${reason}`)
+  }
+
+  /**
+   * Run a caller-supplied callback without letting it reach the event loop.
+   *
+   * These fire inside `ws` listeners, where an uncaught exception is not a
+   * logged error but a dead child bridge — the same failure mode
+   * {@link #disposeSocket} already guards against on the error channel.
+   */
+  #notify(name: string | (() => string), callback: (() => void) | undefined): void {
+    try {
+      callback?.()
+    } catch (error) {
+      const label = typeof name === 'string' ? name : name()
+      this.#log.warn(`event stream ${label} handler failed: ${sanitizeError(error)}`)
+    }
   }
 
   #handleOpen(): void {
     this.#isConnecting = false
     this.#consecutiveFailures = 0
-    this.#hasReportedFailure = false
+    // Cleared on a successful connect, so if the same failure recurs after a
+    // period of working it is news again and gets reported.
+    this.#lastReportedReason = null
+    this.#giveUpCount = 0
 
     const reason = this.#connectReason
     this.#connectReason = 'drop'
@@ -418,7 +516,7 @@ export class EventStream {
         this.#log.debug('Alarm.com event stream refreshed')
       } else {
         this.#log.info('Alarm.com event stream reconnected')
-        this.#onReconnect?.()
+        this.#notify('reconnect', this.#onReconnect)
       }
     } else {
       this.#log.info('Alarm.com event stream connected')
@@ -427,7 +525,7 @@ export class EventStream {
 
     if (wasGivenUp) {
       this.#log.info('Alarm.com event stream recovered; push updates resumed')
-      this.#onRecovered?.()
+      this.#notify('recovered', this.#onRecovered)
     }
 
     this.#scheduleRefresh()
@@ -452,9 +550,13 @@ export class EventStream {
       WEBSOCKET_REFRESH_INTERVAL_MS - jitter,
     )
     this.#refreshTimer = setTimeout(() => {
+      // Cleared like every other timer callback here. Leaving a fired handle in
+      // place makes any future `if (this.#refreshTimer)` guard read a lie.
+      this.#refreshTimer = null
       this.#log.debug('refreshing the event stream connection')
       this.#reconnect('refresh')
     }, delayMs)
+    this.#refreshTimer.unref?.()
   }
 
   /** Retry a failed refresh cutover without disposing the live socket. */
@@ -464,13 +566,14 @@ export class EventStream {
     }
 
     this.#log.debug(
-      `retrying event stream refresh in ${Math.round(WEBSOCKET_RECONNECT_BASE_MS / 1000)}s; keeping the live socket`,
+      `retrying event stream refresh in ${Math.round(WEBSOCKET_RECONNECT_BASE_MS / MS_PER_SECOND)}s; keeping the live socket`,
     )
     this.#connectReason = 'refresh'
     this.#reconnectTimer = setTimeout(() => {
       this.#reconnectTimer = null
       this.#reconnect('refresh')
     }, WEBSOCKET_RECONNECT_BASE_MS)
+    this.#reconnectTimer.unref?.()
   }
 
   #handleClose(code: number): void {
@@ -513,11 +616,21 @@ export class EventStream {
 
     if (this.#consecutiveFailures > WEBSOCKET_MAX_FAILURES) {
       this.#hasGivenUp = true
-      this.#log.warn(
-        `The Alarm.com event stream failed ${this.#consecutiveFailures} times; `
-          + `falling back to polling. Will retry in ${Math.round(WEBSOCKET_RECOVERY_INTERVAL_MS / 60_000)} minutes.`,
-      )
-      this.#onUnavailable()
+      this.#giveUpCount++
+
+      const summary = `The Alarm.com event stream failed ${this.#consecutiveFailures} times; `
+        + `falling back to polling. Will retry in ${Math.round(WEBSOCKET_RECOVERY_INTERVAL_MS / MS_PER_MINUTE)} minutes.`
+
+      // Loud once. A multi-hour Alarm.com outage would otherwise repeat this
+      // whole warning set every recovery cycle for as long as it lasted, which
+      // tells the user nothing they were not told the first time.
+      if (this.#giveUpCount === 1) {
+        this.#log.warn(summary)
+        this.#notify('unavailable', this.#onUnavailable)
+      } else {
+        this.#log.debug(summary)
+      }
+
       this.#scheduleRecovery()
       return
     }
@@ -528,7 +641,7 @@ export class EventStream {
       WEBSOCKET_RECONNECT_MAX_MS,
     )
 
-    this.#log.debug(`reconnecting to the event stream in ${Math.round(delayMs / 1000)}s`)
+    this.#log.debug(`reconnecting to the event stream in ${Math.round(delayMs / MS_PER_SECOND)}s`)
 
     // Failure reconnects are outages, not proactive refreshes — even when the
     // attempt that failed began as a refresh cutover.
@@ -537,6 +650,9 @@ export class EventStream {
       this.#reconnectTimer = null
       void this.#connect()
     }, delayMs)
+    // Unref'd: a 15-minute recovery timer is exactly what holds a child bridge
+    // open and looks like a hang when shutdown does not arrive.
+    this.#reconnectTimer.unref?.()
   }
 
   /** After give-up, periodically try to restore push updates. */
@@ -550,25 +666,30 @@ export class EventStream {
       if (this.#isStopped) {
         return
       }
-      this.#log.info('Retrying the Alarm.com event stream after a prior give-up')
+      const message = 'Retrying the Alarm.com event stream after a prior give-up'
+      if (this.#giveUpCount <= 1) {
+        this.#log.info(message)
+      } else {
+        this.#log.debug(message)
+      }
       this.#consecutiveFailures = 0
-      this.#hasReportedFailure = false
       this.#connectReason = 'drop'
       void this.#connect()
     }, WEBSOCKET_RECOVERY_INTERVAL_MS)
+    this.#recoveryTimer.unref?.()
   }
 
   #handleMessage(data: WebSocket.RawData): void {
     let event: AlarmComEvent
 
     try {
-      event = JSON.parse(data.toString()) as AlarmComEvent
+      event = JSON.parse(decodeFrame(data)) as AlarmComEvent
     } catch {
       this.#log.debug('discarding an unparseable event stream frame')
       return
     }
 
-    if (typeof event?.UnitId !== 'number' || typeof event?.DeviceId !== 'number') {
+    if (!isUsableEvent(event)) {
       return
     }
 
@@ -582,10 +703,51 @@ export class EventStream {
 
     this.#lastEventAt = Date.now()
 
-    this.#log.debug(
-      `event type ${event.EventType} for device ${deviceResourceId}`,
-    )
+    // Guarded: this runs once per pushed frame, and the template is built before
+    // the call whether or not the line is ever written. `isDebugEnabled` exists
+    // for exactly this, and the hottest path was the one place not using it.
+    if (this.#log.isDebugEnabled) {
+      this.#log.debug(`event type ${event.EventType} for device ${deviceResourceId}`)
+    }
 
-    this.#onDeviceEvent(deviceResourceId, event)
+    this.#notify(
+      () => `device event for ${deviceResourceId}`,
+      () => this.#onDeviceEvent(deviceResourceId, event),
+    )
   }
+}
+
+/**
+ * Decode a WebSocket frame to text.
+ *
+ * `RawData` is `Buffer | ArrayBuffer | Buffer[]`, and `toString()` is only
+ * correct for the first: on an `ArrayBuffer` it yields `[object ArrayBuffer]`,
+ * and on a fragment array it comma-joins the pieces. The default `binaryType`
+ * means the plugin sees a `Buffer` today, so this is about the two shapes the
+ * type permits rather than one observed — but silently parsing
+ * `[object ArrayBuffer]` is a bad way to find that out.
+ */
+function decodeFrame(data: WebSocket.RawData): string {
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString('utf8')
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(data).toString('utf8')
+  }
+  return data.toString('utf8')
+}
+
+/**
+ * Whether a parsed frame carries the three fields the plugin actually reads.
+ *
+ * `AlarmComEvent` declares eight required fields on a value that came from
+ * `JSON.parse`, so the type is an assertion rather than a guarantee. `EventType`
+ * is checked alongside the two identifiers because it is compared numerically
+ * and then drives a `switch` — a string there fell through to `undefined`, which
+ * was safe by luck rather than by construction.
+ */
+function isUsableEvent(event: AlarmComEvent): boolean {
+  return typeof event?.UnitId === 'number'
+    && typeof event?.DeviceId === 'number'
+    && typeof event?.EventType === 'number'
 }

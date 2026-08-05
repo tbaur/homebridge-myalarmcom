@@ -37,7 +37,6 @@ describe('createApiError', () => {
 
     expect(error).toBeInstanceOf(ForbiddenError)
     expect(error.isRetryable).toBe(false)
-    expect(error.httpStatus).toBe(403)
   })
 
   it('maps 429 to a rate limit that is worth retrying', () => {
@@ -45,7 +44,6 @@ describe('createApiError', () => {
 
     expect(error).toBeInstanceOf(RateLimitError)
     expect(error.isRetryable).toBe(true)
-    expect(error.httpStatus).toBe(429)
   })
 
   it('carries Retry-After on a 429 when the caller parsed one', () => {
@@ -61,7 +59,7 @@ describe('createApiError', () => {
 
       expect(error).toBeInstanceOf(ApiResponseError)
       expect(error.isRetryable).toBe(true)
-      expect(error.httpStatus).toBe(status)
+      expect((error as ApiResponseError).status).toBe(status)
     }
   })
 
@@ -108,18 +106,13 @@ describe('createApiError', () => {
 })
 
 describe('AlarmComError', () => {
-  it('serialises to something structured enough to log', () => {
+  it('carries the code, class name, and retry classification consumers switch on', () => {
     const error = createApiError(503, 'Alarm.com returned 503')
-    const json = error.toJSON()
 
-    expect(json).toMatchObject({
-      name: 'ApiResponseError',
-      code: 'API_RESPONSE_ERROR',
-      message: 'Alarm.com returned 503',
-      isRetryable: true,
-      httpStatus: 503,
-    })
-    expect(typeof json.timestamp).toBe('string')
+    expect(error.name).toBe('ApiResponseError')
+    expect(error.code).toBe('API_RESPONSE_ERROR')
+    expect(error.message).toBe('Alarm.com returned 503')
+    expect(error.isRetryable).toBe(true)
   })
 
   it('names itself after its own class', () => {

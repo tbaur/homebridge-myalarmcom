@@ -2,9 +2,10 @@
 
 ## Supported Versions
 
-| Version | Supported         |
-| ------- | ----------------- |
-| 0.1.x   | ✅ Active support |
+| Version          | Supported                         |
+| ---------------- | --------------------------------- |
+| Latest release   | ✅ Active support                 |
+| Anything earlier | ❌ Upgrade to the latest release  |
 
 While the plugin is pre-1.0, only the most recent release is supported. Fixes are shipped forward rather than backported.
 
@@ -13,7 +14,7 @@ While the plugin is pre-1.0, only the most recent release is supported. Fixes ar
 If you discover a security vulnerability, please report it responsibly:
 
 1. **Do NOT open a public issue**
-2. Email the maintainer directly or use GitHub's [private vulnerability reporting](https://github.com/tbaur/homebridge-myalarmcom/security/advisories/new)
+2. Use GitHub's [private vulnerability reporting](https://github.com/tbaur/homebridge-myalarmcom/security/advisories/new), which reaches the maintainer without disclosing anything publicly
 3. Include:
    - Description of the vulnerability
    - Steps to reproduce
@@ -43,17 +44,38 @@ This plugin implements:
 - **No credential transmission beyond Alarm.com** - Credentials are sent only to Alarm.com's own login endpoint; nothing is reported to any third party
 - **Session reuse over re-authentication** - An established session is held open with lightweight keepalive requests instead of logging in repeatedly, because re-authentication is the operation Alarm.com polices most aggressively
 - **Anti-CSRF header handling** - The `afg` cookie value is echoed in the `ajaxrequestuniquekey` header on every API request, matching what Alarm.com's own web app does
-- **Secret redaction in logs** - Passwords, session cookies, the two-factor cookie, and the anti-CSRF value are never written to logs; errors are sanitized before logging
-- **Input validation** - All configuration inputs are validated at startup; invalid config fails fast with a clear message
-- **Request timeouts** - Every request has a bounded timeout so a stalled connection cannot wedge the poll loop
-- **No retry on rejected credentials** - Authentication failures and two-factor challenges are never retried, since repeated login attempts are what get accounts locked
-- **Dependency auditing** - `npm audit` runs in CI on every push and pull request, and OSV-Scanner runs on pull requests and weekly
+- **Secret redaction in logs** - Passwords, session cookies, the two-factor cookie, the anti-CSRF value, the event-stream token, and any `Authorization` header (with or without a scheme) are redacted from every line, including values passed as log parameters and including a secret that itself contains an escaped quote. Redaction is idempotent, so a line that passes through twice does not degrade. Cookies are redacted by *exception*: a cookie name the plugin has never seen is redacted, so a new one Alarm.com invents is covered by default rather than leaked by default. Any JSON key whose *name* looks like a credential is redacted by shape, covering fields no release has seen yet
+- **Cookies pinned to one origin** - The transport refuses to send a `Cookie` header anywhere but `https://www.alarm.com`, whatever case the header name is written in, and refuses outright to follow redirects on a request carrying one — so no server response can steer a live session cookie to another host
+- **The event-stream token goes only to Alarm.com** - The stream endpoint arrives inside a server response and the token is appended to it, so the endpoint is checked to be `wss:` on an `alarm.com` host before the token is sent; anything else falls back to the known-good default
+- **Input validation** - All configuration is validated at startup, with numeric bounds enforced and string lengths capped. Invalid configuration is reported at error level and leaves this platform inert; it never throws out of the constructor, because Homebridge does not guard that call and a throw terminates the whole process along with every other plugin
+- **Request timeouts** - Every request has a bounded deadline covering the response *body*, not only its headers, so a stalled body read cannot wedge the poll loop. In-flight work is cancelled on shutdown
+- **Bounded backoff** - A server-supplied `Retry-After` is respected but capped, and floored against the computed backoff, so neither an implausible value nor clock skew can park a poll cycle or remove the delay entirely. The plugin's own computed backoff is clamped *after* jitter, so it cannot exceed the same ceiling
+- **No retry on rejected credentials** - Authentication failures and two-factor challenges are never retried, since repeated login attempts are what get accounts locked. Every *other* sign-in failure is paced by a short floor as well, so a retry loop cannot turn one API call into a burst of logins
+- **No replay of a command that may have been accepted** - A read may be retried after an unparseable response, because that usually means the session lapsed. An arming command may not: the plugin only raises that error after a `2xx`, so the panel very likely accepted the command, and a replay would arm twice
+- **No shell, no dynamic code, no writes to disk** - The plugin never spawns a process, never writes a file, and contains no `eval`. The only file it reads is its own `package.json`, for the version it reports in the `User-Agent` and in diagnostics. It has one runtime dependency (`ws`) and no install lifecycle scripts
+- **Dependency auditing** - `npm audit --omit=dev` runs on every push to `main` and every pull request; OSV-Scanner runs on pull requests, merge queues, pushes to `main`, and weekly. Every GitHub Action is pinned to a full commit SHA
 
 ## Credential Handling
 
 - The Alarm.com username, password, and `twoFactorAuthenticationId` cookie are read from the Homebridge platform config. Homebridge stores that config in plain text on the host, so **host hardening is the primary mitigation** for all three.
-- The plugin holds session cookies in memory only; they are not persisted.
-- No credentials, cookies, or personally identifying information are written to logs.
+- The plugin holds session cookies in memory only; they are not persisted, and nothing is written to disk.
+- No credentials or cookies are written to logs, at any level. Where a line needs to refer to a secret it prints a non-reversible scrypt fingerprint and a coarse length band, never any part of the value.
+- **Device names and Alarm.com identifiers are logged.** They are what makes a log diagnosable, so this is deliberate — but it means a log describes your home: `Master Bedroom Window: Open` is a labelled floor plan with live occupancy. Review any log before sharing it, and note that `debug: true` adds considerably more of it.
+
+## What Leaves Your Network
+
+Two destinations, both Alarm.com, both TLS:
+
+| Destination | Purpose |
+| --- | --- |
+| `https://www.alarm.com` | Sign-in, session keep-alive, device discovery, state reads, arming commands, event-stream token |
+| `wss://webskt.alarm.com:8443` | Push event stream |
+
+Every request identifies itself as `homebridge-myalarmcom/<version>` in its `User-Agent`, deliberately and honestly, rather than impersonating a browser.
+
+Nothing else: no telemetry, no analytics, no crash reporting, no third party.
+
+Outbound traffic is paced at **one request per second and 60 per minute**, with a 30-second ceiling on how long a caller will be made to wait before the request is refused outright. A circuit breaker opens after 5 failing *requests* within 5 minutes — one failing request counts once however many times it retried — and then refuses requests locally for 30 seconds at a time.
 
 ## Account Lockout
 
@@ -63,6 +85,10 @@ This is an availability risk rather than a confidentiality one, but it is the fa
 
 - `npm run probe` talks to a live account. Capability discovery issues `GET` requests only, so nothing in it can arm, disarm, or unlock a device. See [scripts/README.md](scripts/README.md).
 - Probe output is written to `probe-output/`, which is git-ignored. Payloads are scrubbed before they are written, but the scrubber is best-effort: read any file before sharing it or promoting it into `tests/fixtures/`.
+- Every script routes plugin log output through the same redaction the plugin itself uses, so a script cannot print something the plugin would have hidden. Terminal output still names your devices; the files written on exit are scrubbed.
+- `npm run verify -- --arm` and `--arm-cycle` are the only script paths that command the panel. Both require a typed confirmation. `--arm-cycle` always attempts a disarm on its way out, including after an interrupt, and keeps its interrupt handler installed *through* that disarm so a second Ctrl-C cannot kill the process mid-disarm. `--arm` deliberately leaves the panel where it put it, and says so.
+- Secret fingerprints in script output use a per-run random salt, matching the plugin. A fixed salt committed to a public repository would turn a fingerprint in a shared `probe-output/` file into an offline oracle for confirming a guessed secret.
+- Prefer the interactive prompts over inline `ADC_PASSWORD=…` assignments: inline assignments land in your shell history and are visible to other local users in `ps` output.
 
 ## Best Practices for Users
 
@@ -75,10 +101,10 @@ This is an availability risk rather than a confidentiality one, but it is the fa
 
 ## Response Timeline
 
-- **Acknowledgment**: Within 48 hours
-- **Initial assessment**: Within 1 week
-- **Fix timeline**: Depends on severity
-  - Critical: 24-48 hours
-  - High: 1 week
-  - Medium: 2 weeks
-  - Low: Next release
+This is a single-maintainer, pre-1.0 project, so these are best-effort targets rather than commitments:
+
+- **Acknowledgment**: within a few days
+- **Initial assessment**: within about a week
+- **Fix**: prioritised by severity, with anything critical taken first and shipped as soon as it is ready
+
+If a report has had no response after a week, please follow up on the advisory thread.

@@ -19,6 +19,8 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RateLimiter = exports.DEFAULT_RATE_LIMITER_CONFIG = void 0;
+const errors_1 = require("../errors");
+const settings_1 = require("../settings");
 const retry_1 = require("../utils/retry");
 /**
  * Defaults chosen to be unmistakably polite.
@@ -29,10 +31,10 @@ const retry_1 = require("../utils/retry");
  * exactly when it should.
  */
 exports.DEFAULT_RATE_LIMITER_CONFIG = {
-    minIntervalMs: 1_000,
+    minIntervalMs: settings_1.MS_PER_SECOND,
     maxRequests: 60,
-    windowMs: 60_000,
-    maxWaitMs: 30_000,
+    windowMs: settings_1.MS_PER_MINUTE,
+    maxWaitMs: 30 * settings_1.MS_PER_SECOND,
 };
 /** Paces outbound requests to Alarm.com. */
 class RateLimiter {
@@ -53,29 +55,28 @@ class RateLimiter {
     #prune(now) {
         this.#timestamps = this.#timestamps.filter((ts) => now - ts < this.#windowMs);
     }
-    /** How long the caller must wait before a request is permissible. */
+    /**
+     * How long the caller must wait before a request is permissible.
+     *
+     * Assumes the window has already been pruned for `now`, so callers that
+     * pruned to make a decision of their own do not pay for a second pass.
+     */
     #computeWaitMs(now) {
-        this.#prune(now);
         const last = this.#timestamps[this.#timestamps.length - 1];
         const spacingWait = last === undefined
             ? 0
             : Math.max(0, this.#minIntervalMs - (now - last));
-        if (this.#timestamps.length < this.#maxRequests) {
+        const oldest = this.#timestamps[0];
+        if (this.#timestamps.length < this.#maxRequests || oldest === undefined) {
             return spacingWait;
         }
         // Window is full: wait for the oldest entry to age out.
-        const windowWait = this.#windowMs - (now - this.#timestamps[0]);
-        return Math.max(spacingWait, windowWait);
+        return Math.max(spacingWait, this.#windowMs - (now - oldest));
     }
+    /** Snapshot of limiter state, for diagnostics. */
     getStatus() {
-        const now = Date.now();
-        this.#prune(now);
-        return {
-            requestsInWindow: this.#timestamps.length,
-            maxRequests: this.#maxRequests,
-            remaining: Math.max(0, this.#maxRequests - this.#timestamps.length),
-            msUntilNextSlot: this.#computeWaitMs(now),
-        };
+        this.#prune(Date.now());
+        return { remaining: Math.max(0, this.#maxRequests - this.#timestamps.length) };
     }
     /**
      * Wait until a request slot is available, then claim it.
@@ -83,16 +84,20 @@ class RateLimiter {
      * Callers are served in arrival order rather than racing, so a burst of
      * concurrent requests is spread evenly instead of clumping.
      *
-     * @throws {Error} The required wait exceeds `maxWaitMs`.
+     * @param signal Abandons a pending wait on shutdown.
+     * @throws {RequestPacingError} The required wait exceeds `maxWaitMs`.
+     * @throws {OperationAbortedError} The signal aborted during the wait.
      */
-    async acquire() {
+    async acquire(signal) {
         const claim = this.#tail.then(async () => {
-            const waitMs = this.#computeWaitMs(Date.now());
+            const now = Date.now();
+            this.#prune(now);
+            const waitMs = this.#computeWaitMs(now);
             if (waitMs > this.#maxWaitMs) {
-                throw new Error(`Request pacing would require waiting ${waitMs}ms, exceeding the ${this.#maxWaitMs}ms limit`);
+                throw new errors_1.RequestPacingError(waitMs, this.#maxWaitMs);
             }
             if (waitMs > 0) {
-                await (0, retry_1.sleep)(waitMs);
+                await (0, retry_1.sleep)(waitMs, signal);
             }
             this.#timestamps.push(Date.now());
         });
@@ -102,13 +107,9 @@ class RateLimiter {
         return claim;
     }
     /** Run an operation once a slot is available. */
-    async execute(operation) {
-        await this.acquire();
+    async execute(operation, signal) {
+        await this.acquire(signal);
         return operation();
-    }
-    reset() {
-        this.#timestamps = [];
-        this.#tail = Promise.resolve();
     }
 }
 exports.RateLimiter = RateLimiter;

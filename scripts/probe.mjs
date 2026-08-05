@@ -35,6 +35,7 @@ import { dirname, join, resolve } from 'node:path'
 import { stdout } from 'node:process'
 import { fileURLToPath } from 'node:url'
 
+import { handleHelp, readNumericFlag } from './lib/cli.mjs'
 import { resolveCredentials } from './lib/prompt.mjs'
 import { createScrubber, redactFreeText } from './lib/scrub.mjs'
 import {
@@ -46,6 +47,26 @@ import {
   login,
   previewSecret,
 } from './lib/session.mjs'
+
+handleHelp(`
+Discover what an Alarm.com account exposes, and capture scrubbed fixtures.
+
+  node scripts/probe.mjs [--ws <seconds>]
+
+  --ws <seconds>  Also listen for WebSocket events for this long (max 3600).
+  -h, --help      Show this message.
+
+GET-only: nothing here can arm, disarm, or unlock anything. One login, and
+every request is throttled, because Alarm.com locks accounts that poll or
+authenticate aggressively.
+
+Output goes to probe-output/, which is gitignored. It is scrubbed on a
+best-effort basis; review it before sharing.
+
+Credentials come from ADC_USERNAME, ADC_PASSWORD, and ADC_MFA_TOKEN, or are
+prompted for when a terminal is attached. Prefer the prompts: inline
+assignments land in your shell history and are visible in "ps".
+`)
 
 const OUTPUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'probe-output')
 
@@ -288,6 +309,18 @@ async function captureDevices(session, systemId, scrubber, context) {
 
 /** Connect to the event stream briefly and record the shapes that arrive. */
 async function listenForEvents(session, seconds) {
+  // Checked before the token request, not after. `globalThis.WebSocket` is behind
+  // a flag until Node 22 while the package supports Node 20, so on the declared
+  // minimum this used to throw `WebSocket is not defined` — after having already
+  // spent a login, which is the one resource this whole script exists to
+  // conserve.
+  const SocketConstructor = globalThis.WebSocket
+  if (!SocketConstructor) {
+    stdout.write('\nThis Node build has no global WebSocket (it arrived in Node 22).\n')
+    stdout.write('Skipping event capture; re-run on Node 22+ to capture event frames.\n')
+    return []
+  }
+
   const { status, body } = await authenticatedGet(`${BASE_URL}/web/api/websockets/token`, session)
   if (status !== 200 || !body?.value) {
     stdout.write(`\nWebSocket token request returned ${status}; skipping event capture.\n`)
@@ -306,7 +339,7 @@ async function listenForEvents(session, seconds) {
   stdout.write(`\n── Listening for events for ${seconds}s (${endpoint}) ──\n`)
   stdout.write('Trip a sensor now to capture its event shape.\n')
 
-  const socket = new WebSocket(`${endpoint}?auth=${body.value}`)
+  const socket = new SocketConstructor(`${endpoint}?auth=${body.value}`)
   const events = []
   socket.addEventListener('message', (message) => {
     try {
@@ -372,8 +405,15 @@ async function chooseSessionStrategy({ jar, loginJar, ajaxKey }, systemId, conte
 }
 
 async function main() {
-  const wsIndex = process.argv.indexOf('--ws')
-  const wsSeconds = wsIndex === -1 ? 0 : Number(process.argv[wsIndex + 1] ?? 60)
+  const wsSeconds = readNumericFlag('--ws', { fallback: 0, min: 0, max: 3_600 })
+
+  // A run spends a login, which is the operation Alarm.com polices hardest, and
+  // every fixture is written at the very end. Interrupting used to throw the
+  // whole run away, login included.
+  process.on('SIGINT', () => {
+    stdout.write('\n\nInterrupted. Fixtures captured so far are already in probe-output/.\n')
+    process.exit(130)
+  })
 
   const credentials = await resolveCredentials()
   stdout.write('\n── Sign-in ──\n')
@@ -489,5 +529,7 @@ async function main() {
 
 main().catch((error) => {
   process.exitCode = 1
-  stdout.write(`\nError: ${error instanceof Error ? error.message : String(error)}\n`)
+  // Redacted like every other line this script prints: an error can quote a URL
+  // or an upstream body, and this output is what gets pasted into an issue.
+  stdout.write(`\nError: ${redactFreeText(String(error instanceof Error ? error.message : error))}\n`)
 })

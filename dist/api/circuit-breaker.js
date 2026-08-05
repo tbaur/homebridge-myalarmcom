@@ -15,6 +15,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CircuitBreaker = exports.DEFAULT_CIRCUIT_BREAKER_CONFIG = exports.CircuitState = void 0;
 const errors_1 = require("../errors");
+const settings_1 = require("../settings");
 /** Circuit breaker states. */
 var CircuitState;
 (function (CircuitState) {
@@ -27,16 +28,35 @@ var CircuitState;
 })(CircuitState || (exports.CircuitState = CircuitState = {}));
 exports.DEFAULT_CIRCUIT_BREAKER_CONFIG = {
     failureThreshold: 5,
-    resetTimeoutMs: 30_000,
-    halfOpenMax: 3,
-    failureWindowMs: 60_000,
+    resetTimeoutMs: 30 * settings_1.MS_PER_SECOND,
+    successesToClose: 3,
+    halfOpenProbes: 3,
+    /**
+     * Deliberately several poll intervals wide.
+     *
+     * A poll cycle contributes one coalesced failure per failing request. With a
+     * window equal to the default 60-second poll interval, a cycle's failures
+     * always aged out before the next tick, so the breaker could never reach its
+     * threshold and a total Alarm.com outage produced no `CLOSED -> OPEN` warning
+     * at all — the one line a polling-only deployment would otherwise see.
+     */
+    failureWindowMs: 5 * settings_1.MS_PER_MINUTE,
+    /**
+     * Comfortably longer than one request's full retry budget.
+     *
+     * `MAX_API_RETRY_ATTEMPTS` attempts with jittered backoff from 1s, plus the
+     * 1s pacing gap between them, fits well inside this.
+     */
+    failureCoalesceMs: 15 * settings_1.MS_PER_SECOND,
 };
 /** Circuit breaker guarding calls to Alarm.com. */
 class CircuitBreaker {
     #failureThreshold;
     #resetTimeoutMs;
-    #halfOpenMax;
+    #successesToClose;
+    #halfOpenProbes;
     #failureWindowMs;
+    #failureCoalesceMs;
     #onStateChange;
     #state = CircuitState.CLOSED;
     #successes = 0;
@@ -47,8 +67,10 @@ class CircuitBreaker {
         const merged = { ...exports.DEFAULT_CIRCUIT_BREAKER_CONFIG, ...config };
         this.#failureThreshold = merged.failureThreshold;
         this.#resetTimeoutMs = merged.resetTimeoutMs;
-        this.#halfOpenMax = merged.halfOpenMax;
+        this.#successesToClose = merged.successesToClose;
+        this.#halfOpenProbes = merged.halfOpenProbes;
         this.#failureWindowMs = merged.failureWindowMs;
+        this.#failureCoalesceMs = merged.failureCoalesceMs;
         this.#onStateChange = merged.onStateChange;
     }
     /**
@@ -62,9 +84,7 @@ class CircuitBreaker {
             handler(from, to);
         };
     }
-    get state() {
-        return this.#state;
-    }
+    /** Whether the breaker is currently rejecting requests outright. */
     get isOpen() {
         return this.#state === CircuitState.OPEN;
     }
@@ -98,22 +118,36 @@ class CircuitBreaker {
             }
             return false;
         }
-        return this.#halfOpenRequests < this.#halfOpenMax;
+        return this.#halfOpenRequests < this.#halfOpenProbes;
     }
+    /** Note that a guarded call succeeded, closing the circuit once enough have. */
     recordSuccess() {
         if (this.#state === CircuitState.HALF_OPEN) {
             this.#successes++;
-            if (this.#successes >= this.#halfOpenMax) {
+            if (this.#successes >= this.#successesToClose) {
                 this.reset();
             }
             return;
         }
         this.#pruneFailures();
     }
+    /**
+     * Note that a guarded call failed, opening the circuit once enough have.
+     *
+     * Deduplicated within `#failureCoalesceMs`. One logical request is up to
+     * `MAX_API_RETRY_ATTEMPTS` guarded calls landing within a few seconds, so
+     * counting each separately meant two isolated flaky requests anywhere in the
+     * window tripped a breaker configured for five failures — however many
+     * hundreds of requests had succeeded in between.
+     */
     recordFailure() {
         const now = Date.now();
+        const previous = this.#failureTimestamps[this.#failureTimestamps.length - 1];
+        const isSameBurst = previous !== undefined && now - previous < this.#failureCoalesceMs;
         this.#lastFailureTime = now;
-        this.#failureTimestamps.push(now);
+        if (!isSameBurst) {
+            this.#failureTimestamps.push(now);
+        }
         if (this.#state === CircuitState.HALF_OPEN) {
             // Any failure while probing means the service is still unwell.
             this.#halfOpenRequests = 0;
@@ -128,6 +162,7 @@ class CircuitBreaker {
             }
         }
     }
+    /** Return to the closed state and forget all recorded failures. */
     reset() {
         this.#successes = 0;
         this.#lastFailureTime = null;
@@ -135,17 +170,19 @@ class CircuitBreaker {
         this.#failureTimestamps = [];
         this.#transitionTo(CircuitState.CLOSED);
     }
-    getStatus() {
-        this.#pruneFailures();
-        const remainingResetTimeMs = this.#state === CircuitState.OPEN && this.#lastFailureTime !== null
+    /** How long until the breaker will admit a probe, or `null` if it already will. */
+    #remainingResetTimeMs() {
+        return this.#state === CircuitState.OPEN && this.#lastFailureTime !== null
             ? Math.max(0, this.#resetTimeoutMs - (Date.now() - this.#lastFailureTime))
             : null;
+    }
+    /** Snapshot of breaker state, for diagnostics. */
+    getStatus() {
+        this.#pruneFailures();
+        const remainingResetTimeMs = this.#remainingResetTimeMs();
         return {
             state: this.#state,
             failures: this.#failureTimestamps.length,
-            successes: this.#successes,
-            lastFailureTime: this.#lastFailureTime,
-            isOpen: this.isOpen,
             remainingResetTimeMs,
         };
     }
@@ -156,9 +193,10 @@ class CircuitBreaker {
      */
     async execute(operation) {
         if (!this.canRequest()) {
-            throw new errors_1.CircuitBreakerError(this.getStatus().remainingResetTimeMs ?? this.#resetTimeoutMs);
+            throw new errors_1.CircuitBreakerError(this.#remainingResetTimeMs() ?? this.#resetTimeoutMs);
         }
-        if (this.#state === CircuitState.HALF_OPEN) {
+        const isProbe = this.#state === CircuitState.HALF_OPEN;
+        if (isProbe) {
             this.#halfOpenRequests++;
         }
         try {
@@ -169,6 +207,16 @@ class CircuitBreaker {
         catch (error) {
             this.recordFailure();
             throw error;
+        }
+        finally {
+            // Released here rather than only in recordSuccess/recordFailure. Those
+            // require the probe to settle, so a probe that never did left the counter
+            // at its ceiling: canRequest() then refused every request forever, and
+            // because the state was HALF_OPEN rather than OPEN the cooldown that
+            // would have rescued it was never re-checked.
+            if (isProbe) {
+                this.#halfOpenRequests = Math.max(0, this.#halfOpenRequests - 1);
+            }
         }
     }
 }

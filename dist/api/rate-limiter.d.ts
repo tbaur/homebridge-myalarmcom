@@ -36,16 +36,21 @@ export interface RateLimiterConfig {
  */
 export declare const DEFAULT_RATE_LIMITER_CONFIG: RateLimiterConfig;
 /** Snapshot of limiter state, for diagnostics. */
+/**
+ * Snapshot of pacing state, for diagnostics.
+ *
+ * Trimmed to what is consumed. `msUntilNextSlot` in particular cost a full wait
+ * computation on every diagnostics heartbeat and was read by nothing.
+ */
 export interface RateLimiterStatus {
-    requestsInWindow: number;
-    maxRequests: number;
+    /** Slots left in the current window. */
     remaining: number;
-    msUntilNextSlot: number;
 }
 /** Paces outbound requests to Alarm.com. */
 export declare class RateLimiter {
     #private;
     constructor(config?: Partial<RateLimiterConfig>);
+    /** Snapshot of limiter state, for diagnostics. */
     getStatus(): RateLimiterStatus;
     /**
      * Wait until a request slot is available, then claim it.
@@ -53,11 +58,12 @@ export declare class RateLimiter {
      * Callers are served in arrival order rather than racing, so a burst of
      * concurrent requests is spread evenly instead of clumping.
      *
-     * @throws {Error} The required wait exceeds `maxWaitMs`.
+     * @param signal Abandons a pending wait on shutdown.
+     * @throws {RequestPacingError} The required wait exceeds `maxWaitMs`.
+     * @throws {OperationAbortedError} The signal aborted during the wait.
      */
-    acquire(): Promise<void>;
+    acquire(signal?: AbortSignal): Promise<void>;
     /** Run an operation once a slot is available. */
-    execute<T>(operation: () => Promise<T>): Promise<T>;
-    reset(): void;
+    execute<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T>;
 }
 //# sourceMappingURL=rate-limiter.d.ts.map

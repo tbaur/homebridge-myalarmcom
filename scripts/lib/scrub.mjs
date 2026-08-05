@@ -111,13 +111,34 @@ function scrubQueryString(value) {
  * The anchored versions only match a value that is nothing but an identifier.
  * Error messages quote them mid-sentence.
  */
-const EMAIL_IN_TEXT = /[^\s@"'<>]+@[^\s@"'<>]+\.[a-z]{2,}/gi
+/**
+ * Every quantifier is bounded, and the dot is excluded from the label classes.
+ *
+ * Both matter, and only the second was done first. Excluding `.` stops the
+ * label class overlapping the following literal `\.`; but with the repetition
+ * still unbounded, a long run of matching characters costs O(n) per start
+ * position and O(n²) overall — measurably, at 1.7 seconds for a 32 KB input.
+ * These patterns are applied to error bodies quoted verbatim from Alarm.com,
+ * so the bound is what makes the cost independent of what the server sends.
+ *
+ * The limits are the real ones: 64 characters of local part, 63 per DNS label,
+ * and a handful of labels, so no legitimate address is missed.
+ */
+const EMAIL_IN_TEXT = /[^\s@"'<>]{1,64}@[^\s@"'<>.]{1,63}(?:\.[^\s@"'<>.]{1,63}){0,4}\.[a-z]{2,24}/gi
 /** The same address percent-encoded, which is how it arrives in query strings. */
-const ENCODED_EMAIL_IN_TEXT = /[^\s@"'<>&=]+%40[^\s@"'<>&=]+\.[a-z]{2,}/gi
+const ENCODED_EMAIL_IN_TEXT
+  = /[^\s@"'<>&=]{1,64}%40[^\s@"'<>&=.]{1,63}(?:\.[^\s@"'<>&=.]{1,63}){0,4}\.[a-z]{2,24}/gi
 const PHONE_IN_TEXT = /\+?\d[\d\s().-]{7,16}\d/g
 /** Below this many digits a run is a date or a version, not a phone number. */
 const PHONE_MIN_DIGITS = 10
 const PREFIXED_ID_IN_TEXT = /\b[A-Z]{2,10}-\d{4,}\b/g
+/**
+ * Ceiling on text handed to {@link redactFreeText}.
+ *
+ * Generous for an error message and small enough that the scan cost cannot be
+ * chosen by the far end. Matches the plugin sanitizer's own cap.
+ */
+const MAX_FREE_TEXT_LENGTH = 8 * 1024
 /**
  * A device identifier in prose.
  *
@@ -141,9 +162,16 @@ const BARE_ID_IN_TEXT = /\b\d{7,}\b/g
 export function redactFreeText(value) {
   if (typeof value !== 'string') {return value}
 
+  // Bounded before scanning, matching the plugin's own sanitizer. The input is a
+  // response body chosen by a remote service, and the cost of the scan should
+  // not be either.
+  const bounded = value.length > MAX_FREE_TEXT_LENGTH
+    ? `${value.slice(0, MAX_FREE_TEXT_LENGTH)}… (${value.length} chars truncated)`
+    : value
+
   // Identifiers before phone numbers: a bare identifier is a run of digits and
   // would otherwise be claimed by the phone pattern and mislabelled.
-  return value
+  return bounded
     .replace(EMAIL_IN_TEXT, 'user@example.com')
     .replace(ENCODED_EMAIL_IN_TEXT, 'user%40example.com')
     .replace(PREFIXED_ID_IN_TEXT, '<id>')
@@ -198,9 +226,14 @@ export function createScrubber() {
   }
 
   const scrubValue = (key, value) => {
+    // Key before type. The known-sensitive keys are checked first because a
+    // phone number serialised as a JSON *number* used to slip straight past the
+    // string guard and into the fixture — the exact case REDACTED_VALUES exists
+    // for. `Object.hasOwn`, not `in`: `in` walks the prototype chain, so a key
+    // of `toString` or `constructor` returned a function.
+    if (Object.hasOwn(REDACTED_VALUES, key)) {return REDACTED_VALUES[key]}
     if (typeof value !== 'string') {return value}
     if (key === 'QstringForExtraData') {return scrubQueryString(value)}
-    if (key in REDACTED_VALUES) {return REDACTED_VALUES[key]}
     if (NAME_KEYS.has(key)) {return pseudonymizeName(value)}
     if (ID_KEYS.has(key)
       && (DEVICE_ID_PATTERN.test(value) || BARE_ID_PATTERN.test(value) || PREFIXED_ID_PATTERN.test(value))) {

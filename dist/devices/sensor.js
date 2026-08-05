@@ -13,7 +13,10 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SensorAccessory = void 0;
+const settings_1 = require("../settings");
 const mappers_1 = require("../utils/mappers");
+const change_log_1 = require("./change-log");
+const status_fault_1 = require("./status-fault");
 /** A HomeKit accessory backed by one Alarm.com sensor. */
 class SensorAccessory {
     #platform;
@@ -21,13 +24,22 @@ class SensorAccessory {
     #log;
     #kind;
     #service;
-    /** Last logged state label; used to emit info only when the reading changes. */
-    #lastLabel = null;
+    /** Reports a reading at info only when it differs from the previous one. */
+    #logChange;
+    /** Latest name Alarm.com reported, so push and poll lines agree. */
+    #name;
+    /** Whether an unresolvable reading has already been reported for this sensor. */
+    #hasReportedUnsupportedType = false;
+    #hasReportedAmbiguity = false;
+    /** Clears a momentary event pulse if the confirming read never arrives. */
+    #transientResetTimer = null;
     constructor(platform, accessory, kind, log) {
         this.#platform = platform;
         this.#accessory = accessory;
         this.#kind = kind;
         this.#log = log;
+        this.#logChange = (0, change_log_1.createChangeLogger)(log);
+        this.#name = accessory.context.displayName;
         this.#service = this.#resolveService();
     }
     get deviceId() {
@@ -36,6 +48,25 @@ class SensorAccessory {
     /** The device type established at discovery, which push frames misreport. */
     get kind() {
         return this.#kind;
+    }
+    /**
+     * Republish the name when Alarm.com reports a different one.
+     *
+     * The constructor sets it once and does not re-run for an existing handler, so
+     * a sensor renamed at the panel kept its old HomeKit name until Homebridge
+     * restarted. Tracking it here also keeps the push and poll log lines using the
+     * same name — they previously read from different sources and could disagree.
+     */
+    updateName(displayName) {
+        this.#name = displayName;
+        const { Characteristic } = this.#platform;
+        if (this.#service.getCharacteristic(Characteristic.Name).value !== displayName) {
+            this.#service.updateCharacteristic(Characteristic.Name, displayName);
+        }
+    }
+    /** Release any timer this accessory owns, so shutdown is clean. */
+    dispose() {
+        this.#clearTransientReset();
     }
     /** Find or create the HomeKit service matching this sensor's kind. */
     #resolveService() {
@@ -47,7 +78,7 @@ class SensorAccessory {
                 : HapService.SmokeSensor;
         const service = this.#accessory.getService(serviceType)
             ?? this.#accessory.addService(serviceType);
-        service.setCharacteristic(Characteristic.Name, this.#accessory.context.displayName);
+        service.setCharacteristic(Characteristic.Name, this.#name);
         return service;
     }
     /** The characteristic carrying this sensor's primary reading. */
@@ -68,52 +99,80 @@ class SensorAccessory {
      * registers in HomeKit. The re-read that follows is authoritative and will
      * correct this value, so the cost of being wrong here is a brief flicker
      * rather than a persistently wrong state.
+     *
+     * @param isTransient The event already implies a return to rest, so the pulse
+     *   is cleared on a timer if the confirming read never lands. Without that,
+     *   a failed re-read leaves a door that has already shut showing open until
+     *   the next poll — up to a day at the maximum poll interval.
      */
-    applyImmediateState(isTriggered) {
+    applyImmediateState(isTriggered, isTransient = false) {
+        this.#clearTransientReset();
         this.#service.updateCharacteristic(this.#primaryCharacteristic(), (0, mappers_1.toCharacteristicValue)(this.#kind, isTriggered));
-        const label = (0, mappers_1.toImmediateSensorLabel)(this.#kind, isTriggered);
-        this.#logStateChange(this.#accessory.context.displayName, label);
+        this.#logChange(this.#name, (0, mappers_1.toImmediateSensorLabel)(this.#kind, isTriggered));
+        if (isTransient && isTriggered) {
+            this.#transientResetTimer = setTimeout(() => {
+                this.#transientResetTimer = null;
+                this.#log.debug(`${this.#name}: clearing a momentary event that was never confirmed by a read`);
+                this.applyImmediateState(false);
+            }, settings_1.TRANSIENT_HINT_RESET_MS);
+            this.#transientResetTimer.unref?.();
+        }
+    }
+    #clearTransientReset() {
+        if (this.#transientResetTimer) {
+            clearTimeout(this.#transientResetTimer);
+            this.#transientResetTimer = null;
+        }
     }
     /**
      * Push a fresh Alarm.com reading into HomeKit.
      *
-     * An unmappable reading leaves the previous value in place rather than
+     * An unmappable device type leaves the previous value in place rather than
      * substituting a default, so a sensor never quietly reports "all clear"
-     * because its state was unrecognised.
+     * because its type was unrecognised.
      */
     update(resource) {
+        // An authoritative read supersedes any momentary event pulse.
+        this.#clearTransientReset();
         const attributes = resource.attributes;
+        const name = this.#name;
         const mapped = (0, mappers_1.toHomeKitSensorState)(attributes);
         if (!mapped) {
-            this.#log.warn(`Sensor "${attributes.description}" reported an unsupported device type ${attributes.deviceType}; leaving its state unchanged.`);
+            // Warned once per process, not once per poll. This runs for every sensor
+            // on every cycle, so an unconditional warning is 1,440 identical lines a
+            // day at the minimum poll interval.
+            if (!this.#hasReportedUnsupportedType) {
+                this.#hasReportedUnsupportedType = true;
+                this.#log.warn(`Sensor "${name}" reported an unsupported device type ${String(attributes.deviceType)}; leaving its state unchanged.`);
+            }
             return;
         }
-        if (mapped.isAmbiguous) {
-            this.#log.warn(`Sensor "${attributes.description}" reported state ${attributes.state} with openClosedStatus ${String(attributes.openClosedStatus)}, which this plugin does not recognise as a matched pair. Treating it as "${mapped.label}"; please report this.`);
+        // The service was chosen from the device type at construction and does not
+        // change afterwards. If Alarm.com reports a different type for this id — a
+        // reassigned device — writing the new reading to the old service would put a
+        // motion value on a contact characteristic. Leave the state alone instead.
+        if (mapped.kind !== this.#kind) {
+            if (!this.#hasReportedUnsupportedType) {
+                this.#hasReportedUnsupportedType = true;
+                this.#log.warn(`Sensor "${name}" is now reporting as a ${mapped.kind} sensor but was published as ${this.#kind}; `
+                    + 'leaving its state unchanged. Restart Homebridge to republish it.');
+            }
+            return;
+        }
+        if (mapped.isAmbiguous && !this.#hasReportedAmbiguity) {
+            this.#hasReportedAmbiguity = true;
+            this.#log.warn(`Sensor "${name}" reported state ${String(attributes.state)} with openClosedStatus ${String(attributes.openClosedStatus)}, which this plugin does not recognise as a matched pair. Treating it as "${mapped.label}"; please report this.`);
+        }
+        else if (!mapped.isAmbiguous) {
+            this.#hasReportedAmbiguity = false;
         }
         this.#service.updateCharacteristic(this.#primaryCharacteristic(), mapped.value);
         const { Characteristic } = this.#platform;
         // StatusActive is how HomeKit expresses "this sensor exists but is not
         // currently supervised", which is exactly what disabled monitoring means.
         this.#service.updateCharacteristic(Characteristic.StatusActive, attributes.isMonitoringEnabled !== false);
-        this.#service.updateCharacteristic(Characteristic.StatusFault, attributes.isMalfunctioning === true
-            ? Characteristic.StatusFault.GENERAL_FAULT
-            : Characteristic.StatusFault.NO_FAULT);
-        this.#logStateChange(attributes.description ?? this.deviceId, mapped.label);
-    }
-    /** Info on change; debug on the first reading and unchanged repeats. */
-    #logStateChange(name, label) {
-        if (this.#lastLabel === label) {
-            this.#log.debug(`${name}: ${label}`);
-            return;
-        }
-        if (this.#lastLabel !== null) {
-            this.#log.info(`${name}: ${label}`);
-        }
-        else {
-            this.#log.debug(`${name}: ${label}`);
-        }
-        this.#lastLabel = label;
+        (0, status_fault_1.applyStatusFault)(this.#service, Characteristic, attributes.isMalfunctioning);
+        this.#logChange(name, mapped.label);
     }
 }
 exports.SensorAccessory = SensorAccessory;

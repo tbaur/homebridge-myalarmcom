@@ -11,6 +11,7 @@
 
 import { Characteristic, Service } from '@homebridge/hap-nodejs'
 import { SensorAccessory, type SensorAccessoryContext } from '../../../src/devices/sensor'
+import { TRANSIENT_HINT_RESET_MS } from '../../../src/settings'
 import type { Resource, SensorAttributes } from '../../../src/types/alarm'
 import type { SensorServiceKind } from '../../../src/utils/mappers'
 import {
@@ -21,6 +22,7 @@ import {
 } from '../../helpers/homekit'
 import { createRecordingLogger, messagesAt, type RecordingLogger } from '../../helpers/logger'
 import sensorsFixture from '../../fixtures/sensors.json'
+import { fixtureAt } from '../../helpers/fixtures'
 
 const sensors = sensorsFixture.data as unknown as Resource<SensorAttributes>[]
 
@@ -39,6 +41,16 @@ function withAttributes(
   return { ...resource, attributes: { ...resource.attributes, ...overrides } }
 }
 
+/** Drop an optional attribute entirely, as a payload that omits it would. */
+function withoutAttributes(
+  resource: Resource<SensorAttributes>,
+  key: keyof SensorAttributes,
+): Resource<SensorAttributes> {
+  const attributes = { ...resource.attributes }
+  delete attributes[key]
+  return { ...resource, attributes }
+}
+
 describe('SensorAccessory', () => {
   let log: RecordingLogger
   let bed: PlatformTestBed
@@ -54,7 +66,7 @@ describe('SensorAccessory', () => {
   }
 
   function service(): Service {
-    return servicesOf(bed.accessory)[0]
+    return fixtureAt(servicesOf(bed.accessory), 0, 'published services')
   }
 
   function valueOf(target: { UUID: string }): unknown {
@@ -162,7 +174,7 @@ describe('SensorAccessory', () => {
       const resource = sensorNamed('Front Door')
       const accessory = mount(resource, 'contact')
 
-      accessory.update(withAttributes(resource, { isMonitoringEnabled: undefined }))
+      accessory.update(withoutAttributes(resource, 'isMonitoringEnabled'))
 
       expect(valueOf(Characteristic.StatusActive)).toBe(true)
     })
@@ -216,6 +228,45 @@ describe('SensorAccessory', () => {
       accessory.update(sensorNamed('Front Door'))
 
       expect(log.warn).not.toHaveBeenCalled()
+    })
+
+    /**
+     * `update` runs for every sensor on every poll cycle, so an unconditional
+     * warning is 1,440 identical lines a day at the minimum poll interval —
+     * indefinitely, since neither condition clears on its own.
+     */
+    describe('warning about a condition that will not clear', () => {
+      it('reports an unresolvable reading once, not once per poll', () => {
+        const resource = withAttributes(sensorNamed('Front Door'), { state: 1, openClosedStatus: 3 })
+        const accessory = mount(resource, 'contact')
+
+        accessory.update(resource)
+        accessory.update(resource)
+        accessory.update(resource)
+
+        expect(messagesAt(log, 'warn')).toHaveLength(1)
+      })
+
+      it('reports an unsupported device type once, not once per poll', () => {
+        const resource = withAttributes(sensorNamed('Front Door'), { deviceType: 6 })
+        const accessory = mount(resource, 'contact')
+
+        accessory.update(resource)
+        accessory.update(resource)
+
+        expect(messagesAt(log, 'warn')).toHaveLength(1)
+      })
+
+      it('speaks up again if the ambiguity clears and then returns', () => {
+        const ambiguous = withAttributes(sensorNamed('Front Door'), { state: 1, openClosedStatus: 3 })
+        const accessory = mount(ambiguous, 'contact')
+
+        accessory.update(ambiguous)
+        accessory.update(sensorNamed('Front Door'))
+        accessory.update(ambiguous)
+
+        expect(messagesAt(log, 'warn')).toHaveLength(2)
+      })
     })
 
     it('logs the first reading at debug and later changes at info', () => {
@@ -289,6 +340,65 @@ describe('SensorAccessory', () => {
 
       expect(valueOf(Characteristic.ContactSensorState))
         .toBe(Characteristic.ContactSensorState.CONTACT_DETECTED)
+    })
+
+    /**
+     * An open-and-close frame means the door has *already* shut. The confirming
+     * read normally clears the pulse within a couple of seconds; if that read
+     * fails, this timer is what stops a shut door showing open until the next
+     * poll — up to a day at the maximum poll interval.
+     */
+    describe('a momentary pulse the confirming read never clears', () => {
+      beforeEach(() => {
+        jest.useFakeTimers()
+      })
+
+      afterEach(() => {
+        jest.useRealTimers()
+      })
+
+      it('returns to rest on its own', () => {
+        const accessory = mount(sensorNamed('Front Door'), 'contact')
+
+        accessory.applyImmediateState(true, true)
+        expect(valueOf(Characteristic.ContactSensorState))
+          .toBe(Characteristic.ContactSensorState.CONTACT_NOT_DETECTED)
+
+        jest.advanceTimersByTime(TRANSIENT_HINT_RESET_MS)
+
+        expect(valueOf(Characteristic.ContactSensorState))
+          .toBe(Characteristic.ContactSensorState.CONTACT_DETECTED)
+      })
+
+      it('defers to a real reading rather than fighting it', () => {
+        const resource = withAttributes(sensorNamed('Front Door'), { state: 2, openClosedStatus: 3 })
+        const accessory = mount(resource, 'contact')
+
+        accessory.applyImmediateState(true, true)
+        accessory.update(resource)
+        jest.advanceTimersByTime(TRANSIENT_HINT_RESET_MS)
+
+        expect(valueOf(Characteristic.ContactSensorState))
+          .toBe(Characteristic.ContactSensorState.CONTACT_NOT_DETECTED)
+      })
+
+      it('leaves no timer behind once disposed', () => {
+        const accessory = mount(sensorNamed('Front Door'), 'contact')
+        accessory.applyImmediateState(true, true)
+        expect(jest.getTimerCount()).toBe(1)
+
+        accessory.dispose()
+
+        expect(jest.getTimerCount()).toBe(0)
+      })
+
+      it('does not arm a timer for a sustained open', () => {
+        const accessory = mount(sensorNamed('Front Door'), 'contact')
+
+        accessory.applyImmediateState(true, false)
+
+        expect(jest.getTimerCount()).toBe(0)
+      })
     })
 
     it('triggers a motion sensor', () => {

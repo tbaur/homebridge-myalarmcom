@@ -18,8 +18,8 @@ module.exports = {
 
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
-      // Tests compile under the same strict settings as production
-      // (see tsconfig.test.json) so type errors are caught consistently.
+      // Production strictness with `noUnusedLocals` and `noUnusedParameters`
+      // relaxed, so an arranged-but-unused fixture is not a compile error.
       tsconfig: 'tsconfig.test.json',
     }],
   },
@@ -30,26 +30,43 @@ module.exports = {
   resetMocks: true,
   restoreMocks: true,
 
+  // Serial. Several suites drive module-level singletons (the `ws` mock's
+  // instance list, nock's interceptor registry) and the integration suites wait
+  // out real intervals, so parallel workers interleave into flakes.
   maxWorkers: 1,
 
   collectCoverage: true,
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
+  // Set just below the current numbers rather than at a round 80: a threshold
+  // far under actual coverage cannot notice a regression. A per-file floor for
+  // platform.ts as well, since a global-only gate lets the largest and most
+  // lifecycle-heavy file rot while the aggregate holds.
   coverageThreshold: {
     global: {
-      branches: 80,
+      branches: 87,
+      functions: 93,
+      lines: 95,
+      statements: 95,
+    },
+    // A ratchet set just under the current figures, not an aspiration. What is
+    // still uncovered is the disabled-config construction path and a handful of
+    // one-line collaborator callbacks; the ones that carry a message a user would
+    // see — the keep-alive tick and the stream-unavailable warning — are covered
+    // by tests/unit/platform.callbacks.test.ts. Raise these as that improves;
+    // never lower them to make a change pass.
+    './src/platform.ts': {
+      branches: 82,
       functions: 80,
-      lines: 80,
-      statements: 80,
+      lines: 90,
+      statements: 90,
     },
   },
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',
-    // Only the entry point, not every index.ts. The glob form also caught
-    // `src/errors/index.ts`, which is the error hierarchy rather than a
-    // barrel, so `createApiError` and the retry hints it sets were tested but
-    // never counted against the threshold.
+    // Entry point only. `src/errors/index.ts` is the error hierarchy, not a
+    // barrel, and must stay counted.
     '!src/index.ts',
     '!src/settings.ts', // Constants only
   ],
@@ -75,6 +92,8 @@ module.exports = {
   // forceExit guarantees a clean shutdown after the suite. detectOpenHandles is
   // intentionally left off the standing config: it is a debugging aid (run via
   // `jest --detectOpenHandles` when chasing a hang) that reports false positives
-  // for nock 14's mock sockets, which are not real leaks.
+  // for nock 14's mock sockets, which are not real leaks. Timer cleanup is
+  // asserted directly instead — see the platform shutdown tests — so forceExit
+  // is not standing in for that.
   forceExit: true,
 }

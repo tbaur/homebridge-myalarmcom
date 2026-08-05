@@ -3,7 +3,18 @@
   "compilerOptions": {
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "types": ["jest", "node"]
+    "types": ["jest", "node"],
+    // Tests live outside the production `rootDir` and are never emitted, so
+    // this project widens the root and turns emit off rather than fighting the
+    // output layout the published package depends on.
+    "rootDir": ".",
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
   },
-  "include": ["src/**/*", "tests/**/*"]
+  "include": ["src/**/*", "tests/**/*"],
+  // The base config excludes `tests`, which would leave every test file out of
+  // this project and so out of type-aware linting.
+  "exclude": ["node_modules", "dist", "coverage"]
 }

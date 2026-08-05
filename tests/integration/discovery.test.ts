@@ -132,7 +132,7 @@ describe('discovering an Alarm.com account', () => {
       'Hallway Motion',
       'Basement Motion',
     ])
-    expect(log.infoMessages.some((message) => message.startsWith('Discovered '))).toBe(true)
+    expect(log.infoMessages.some((message) => message.includes('Discovered '))).toBe(true)
   })
 
   it('skips a device type it does not support yet', async () => {
@@ -262,9 +262,43 @@ describe('discovering an Alarm.com account', () => {
     expect(api.registered.length).toBeGreaterThan(0)
   })
 
-  it('refuses to start at all when the credentials are missing', () => {
-    expect(() => new MyAlarmComPlatform(log, { platform: 'MyAlarmCom' }, api.asApi()))
-      .toThrow(/"username" is required/)
+  /**
+   * Homebridge does not guard a platform constructor: a throw escapes
+   * `loadPlatforms()`, rejects `Server.start()`, and SIGTERMs the process. One
+   * typo in this plugin's block used to take down every other plugin and every
+   * accessory in the house, leaving a raw stack trace as the only explanation.
+   */
+  describe('when the configuration is unusable', () => {
+    function launchWithoutCredentials(): MyAlarmComPlatform {
+      const platform = new MyAlarmComPlatform(log, { platform: 'MyAlarmCom' }, api.asApi())
+      api.emit('didFinishLaunching')
+      return platform
+    }
+
+    it('reports what to fix instead of taking the bridge down', () => {
+      expect(launchWithoutCredentials).not.toThrow()
+
+      expect(log.errors.join('\n')).toMatch(/"username" is required/)
+      expect(log.errors.join('\n')).toMatch(/"password" is required/)
+      expect(log.errors.join('\n')).toMatch(/rest of your bridge is unaffected/)
+    })
+
+    it('publishes nothing and signs in to nothing', async () => {
+      launchWithoutCredentials()
+      await Promise.resolve()
+
+      expect(api.registered).toEqual([])
+      expect(log.infoMessages.join('\n')).not.toMatch(/Ready/)
+      // Every interceptor is still unused: no login was even attempted.
+      expect(nock.pendingMocks().length).toBeGreaterThan(0)
+    })
+
+    it('refuses a device refresh rather than reaching for a client it has none of', () => {
+      const platform = launchWithoutCredentials()
+
+      expect(() => platform.client).toThrow(/no usable configuration/)
+      expect(() => platform.requestDeviceRefresh('1234567-1')).not.toThrow()
+    })
   })
 
   it('passes the configuration warnings on to the user', () => {

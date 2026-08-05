@@ -15,16 +15,19 @@
     "sourceMap": true,
     "moduleResolution": "node",
     "types": ["node"],
+    // Suppresses TS5107 for moduleResolution=node10, which stops working in
+    // TypeScript 7. Migrating to node16 means handling homebridge being ESM
+    // while this package is CommonJS, so it is a deliberate follow-up rather
+    // than a silent deferral. Pin `typescript` below 7 until it is done.
     "ignoreDeprecations": "6.0",
     "allowSyntheticDefaultImports": true,
-    "noImplicitAny": true,
-    "strictNullChecks": true,
-    "strictFunctionTypes": true,
     "noImplicitReturns": true,
+    "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "exactOptionalPropertyTypes": false,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
     "noPropertyAccessFromIndexSignature": false
   },
   "include": ["src/**/*"],

@@ -30,11 +30,24 @@ What actually happened.
 
 ## Logs
 
+The most useful log comes from setting both of these in the plugin config, restarting, and reproducing the problem:
+
+```json
+{ "debug": true, "diagnosticsInterval": 300 }
+
+DEBUG lines also require Homebridge Debug Mode (the -D flag, or
+Settings -> Homebridge Debug Mode in the UI). Both changes need a restart.
+```
+
+Then include the `Health:` lines and the surrounding output. Each line is prefixed with the component that produced it — `[auth]`, `[api]`, `[events]`, `[platform]`, and so on.
+
+**Read it before pasting.** Credentials and cookies are redacted automatically, but device names and Alarm.com identifiers are not, so a log describes your home's layout and activity.
+
 <details>
 <summary>Click to expand logs</summary>
 
 ```
-Paste relevant logs here (redact any sensitive info: your Alarm.com username and password, the twoFactorAuthenticationId cookie, session cookies, and system/device IDs)
+Paste logs here, after redacting device names and system/device IDs if you would rather not share them
 ```
 
 </details>

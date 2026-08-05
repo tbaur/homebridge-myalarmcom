@@ -6,29 +6,37 @@
  *
  * @fileoverview Typed client for the Alarm.com JSON:API surface.
  *
- * Every outbound call passes through pacing, then the circuit breaker, then
- * retry. That order is deliberate: pacing shapes normal traffic, the breaker
- * stops a failing service being hammered, and retry only ever runs inside those
- * two guards so it cannot amplify a problem.
+ * Every attempt passes through pacing and then the circuit breaker. Retry wraps
+ * the whole thing, so a retried attempt is re-paced and re-checked against the
+ * breaker rather than bypassing them — which is what stops retry amplifying a
+ * problem. Session establishment sits outside all three: it has its own floor,
+ * and counting a login as request latency made the reported percentiles
+ * meaningless.
  */
-import type { PartitionAttributes, Resource, SensorAttributes } from '../types/alarm';
+import type { EventStreamToken, PartitionAction, PartitionAttributes, Resource, SensorAttributes } from '../types/alarm';
 import type { Logger } from '../utils/logger';
-import { CircuitBreaker } from './circuit-breaker';
+import { CircuitBreaker, CircuitState } from './circuit-breaker';
 import { RateLimiter } from './rate-limiter';
 import type { SessionManager } from './session-manager';
+export type { EventStreamToken, PartitionAction };
 /** One timed API call outcome for diagnostics. */
 export interface ApiRequestMetric {
     durationMs: number;
-    ok: boolean;
+    isOk: boolean;
     /** False when the call never reached the network (breaker open, rate limited). */
-    networked: boolean;
+    wasNetworked: boolean;
 }
-/** Arming commands Alarm.com accepts on a partition. */
-export type PartitionAction = 'armStay' | 'armAway' | 'disarm';
-/** Modifiers that may accompany an arming command. */
+/**
+ * Modifiers that may accompany an arming command.
+ *
+ * Only the two HomeKit can actually express. `noEntryDelay` and `silentArming`
+ * were also declared here and read into the request body, but nothing could ever
+ * set them — HomeKit has no vocabulary for either, so the plugin would have been
+ * choosing them on the user's behalf. They are still sent as `false`, because
+ * that is what the observed protocol expects, but they are no longer pretended
+ * to be options.
+ */
 export interface PartitionCommandOptions {
-    noEntryDelay?: boolean;
-    silentArming?: boolean;
     nightArming?: boolean;
     forceBypass?: boolean;
 }
@@ -37,11 +45,15 @@ export interface SystemDevices {
     partitionIds: string[];
     sensorIds: string[];
 }
-/** Credentials for the push event stream. */
-export interface EventStreamToken {
-    token: string;
-    /** Endpoint reported by Alarm.com, when it supplies one. */
-    endpoint?: string;
+/** Health of the resilience layers, as reported by {@link AlarmComClient.getStatus}. */
+export interface ClientStatus {
+    circuitBreaker: {
+        state: CircuitState;
+    };
+    rateLimiter: {
+        remaining: number;
+    };
+    hasSession: boolean;
 }
 export interface AlarmComClientOptions {
     sessionManager: SessionManager;
@@ -56,19 +68,21 @@ export interface AlarmComClientOptions {
     onThrottle?: () => void;
     /** Called when a transient failure is about to be retried. */
     onRetry?: () => void;
+    /** Cancels in-flight requests and pending waits when the platform shuts down. */
+    signal?: AbortSignal;
 }
-/** Split a list into chunks no larger than the API will accept. */
-export declare function chunkIds(ids: readonly string[], size?: number): string[][];
 /** Reads and commands Alarm.com devices. */
 export declare class AlarmComClient {
     #private;
     constructor(options: AlarmComClientOptions);
     /** Resolve the system this account has selected. */
-    getSystemId(): Promise<string>;
+    getSystemId(signal?: AbortSignal): Promise<string>;
     /** List the partition and sensor IDs belonging to a system. */
-    getSystemDevices(systemId: string): Promise<SystemDevices>;
-    getSensors(ids: readonly string[]): Promise<Resource<SensorAttributes>[]>;
-    getPartitions(ids: readonly string[]): Promise<Resource<PartitionAttributes>[]>;
+    getSystemDevices(systemId: string, signal?: AbortSignal): Promise<SystemDevices>;
+    /** Read the current state of the given sensors. */
+    getSensors(ids: readonly string[], signal?: AbortSignal): Promise<Resource<SensorAttributes>[]>;
+    /** Read the current state of the given partitions. */
+    getPartitions(ids: readonly string[], signal?: AbortSignal): Promise<Resource<PartitionAttributes>[]>;
     /**
      * Send an arming command to a partition.
      *
@@ -91,14 +105,6 @@ export declare class AlarmComClient {
      */
     getEventStreamToken(): Promise<EventStreamToken>;
     /** Diagnostics for the resilience layers. */
-    getStatus(): {
-        circuitBreaker: {
-            state: string;
-        };
-        rateLimiter: {
-            remaining: number;
-        };
-        hasSession: boolean;
-    };
+    getStatus(): ClientStatus;
 }
 //# sourceMappingURL=client.d.ts.map

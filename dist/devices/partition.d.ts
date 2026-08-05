@@ -21,6 +21,15 @@ export declare class PartitionAccessory {
     #private;
     constructor(platform: MyAlarmComPlatform, accessory: PlatformAccessory, log: Logger);
     get deviceId(): string;
+    /**
+     * Republish the name when Alarm.com reports a different one.
+     *
+     * The constructor sets it once, and the constructor does not re-run for an
+     * existing handler — so a device renamed at the panel kept its old HomeKit
+     * name until Homebridge restarted, even though the platform was already
+     * writing the new one into the accessory context.
+     */
+    updateName(displayName: string): void;
     /** Push fresh partition attributes into HomeKit. */
     update(resource: Resource<PartitionAttributes>): void;
 }

@@ -12,19 +12,10 @@
  * plugin is worse than an acknowledged gap.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ArmingModifier = exports.PartitionState = exports.OpenClosedStatus = exports.SensorState = exports.SensorDeviceType = exports.ResourceType = void 0;
+exports.ArmingModifier = exports.PartitionState = exports.OpenClosedStatus = exports.SensorState = exports.SensorDeviceType = void 0;
 exports.readSensorState = readSensorState;
 exports.supportsNightArming = supportsNightArming;
 exports.acceptsArmingModifier = acceptsArmingModifier;
-/** Resource `type` discriminators returned by Alarm.com. */
-var ResourceType;
-(function (ResourceType) {
-    ResourceType["PARTITION"] = "devices/partition";
-    ResourceType["SENSOR"] = "devices/sensor";
-})(ResourceType || (exports.ResourceType = ResourceType = {}));
-// ---------------------------------------------------------------------------
-// Sensors
-// ---------------------------------------------------------------------------
 /**
  * Sensor hardware category, from a sensor's `deviceType` attribute.
  *
@@ -86,23 +77,30 @@ const RESTING_SENSOR_STATES = new Set([
     SensorState.IDLE,
     SensorState.DRY,
 ]);
-/** Human-readable labels per device type, matching Alarm.com's own UI text. */
-const STATE_LABELS = {
-    [SensorDeviceType.CONTACT]: {
-        [SensorState.CLOSED]: 'Closed',
-        [SensorState.OPEN]: 'Open',
-    },
-    [SensorDeviceType.MOTION]: {
-        [SensorState.IDLE]: 'Idle',
-        [SensorState.ACTIVE]: 'Activated',
-    },
-    [SensorDeviceType.SMOKE]: {
-        // Alarm.com's wording for a smoke detector at rest. Not a fault condition:
-        // it reported openClosedStatus=CLOSED alongside this state.
-        [SensorState.CLOSED]: 'Not Reset',
-        [SensorState.ACTIVE]: 'Activated',
-    },
-};
+/**
+ * Human-readable labels per device type, matching Alarm.com's own UI text.
+ *
+ * A `Map` rather than an object literal because the keys come straight off an
+ * unvalidated API response: an object literal inherits from `Object.prototype`,
+ * so a `deviceType` of `"constructor"` would resolve to a function instead of
+ * `undefined` and defeat every downstream guard.
+ */
+const STATE_LABELS = new Map([
+    [SensorDeviceType.CONTACT, new Map([
+            [SensorState.CLOSED, 'Closed'],
+            [SensorState.OPEN, 'Open'],
+        ])],
+    [SensorDeviceType.MOTION, new Map([
+            [SensorState.IDLE, 'Idle'],
+            [SensorState.ACTIVE, 'Activated'],
+        ])],
+    [SensorDeviceType.SMOKE, new Map([
+            // Alarm.com's wording for a smoke detector at rest. Not a fault condition:
+            // it reported openClosedStatus=CLOSED alongside this state.
+            [SensorState.CLOSED, 'Not Reset'],
+            [SensorState.ACTIVE, 'Activated'],
+        ])],
+]);
 /**
  * Resolve a sensor's raw reading.
  *
@@ -110,18 +108,25 @@ const STATE_LABELS = {
  * cover states this plugin has not seen. Disagreement is surfaced via
  * `isAmbiguous` rather than silently resolved, so the platform can log it
  * instead of guessing wrong in either direction.
+ *
+ * Arguments are typed `unknown` because they come from an API response parsed
+ * without validation; a non-numeric value resolves to an ambiguous "Unknown"
+ * reading rather than indexing a table with whatever arrived.
  */
 function readSensorState(deviceType, state, openClosedStatus) {
-    const label = STATE_LABELS[deviceType]?.[state]
-        ?? SensorState[state]
-        ?? 'Unknown';
+    if (typeof state !== 'number') {
+        return { label: 'Unknown', isTriggered: false, isAmbiguous: true };
+    }
+    const labels = typeof deviceType === 'number' ? STATE_LABELS.get(deviceType) : undefined;
+    const label = labels?.get(state) ?? SensorState[state] ?? 'Unknown';
     const isStateTriggered = TRIGGERED_SENSOR_STATES.has(state);
     const isStateResting = RESTING_SENSOR_STATES.has(state);
     const isStateKnown = isStateTriggered || isStateResting;
-    if (openClosedStatus === undefined || openClosedStatus === OpenClosedStatus.UNKNOWN) {
+    const openClosed = typeof openClosedStatus === 'number' ? openClosedStatus : undefined;
+    if (openClosed === undefined || openClosed === OpenClosedStatus.UNKNOWN) {
         return { label, isTriggered: isStateTriggered, isAmbiguous: !isStateKnown };
     }
-    const isOpenTriggered = openClosedStatus === OpenClosedStatus.OPEN;
+    const isOpenTriggered = openClosed === OpenClosedStatus.OPEN;
     // Unrecognised state: fall back to the normalised reading rather than
     // reporting a tripped smoke detector as safe.
     if (!isStateKnown) {
@@ -133,14 +138,13 @@ function readSensorState(deviceType, state, openClosedStatus) {
         isAmbiguous: isStateTriggered !== isOpenTriggered,
     };
 }
-// ---------------------------------------------------------------------------
-// Partitions
-// ---------------------------------------------------------------------------
 /**
  * Security panel arming state.
  *
- * Verified: DISARMED. The test account is provisioned read-only and never left
- * that state, so the armed values are inferred.
+ * Verified: DISARMED and ARMED_STAY, both observed live by arming and
+ * disarming from the mobile app while watching the account. Inferred: UNKNOWN,
+ * ARMED_AWAY, ARMED_NIGHT — the read-only test account cannot issue those
+ * commands. See docs/PROTOCOL.md.
  */
 var PartitionState;
 (function (PartitionState) {

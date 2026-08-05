@@ -8,9 +8,9 @@
 import { DiagnosticsCollector } from '../../../src/diagnostics/collector'
 import type { DiagnosticsReaders } from '../../../src/diagnostics/collector'
 import type { ResolvedConfig } from '../../../src/types/config'
+import { CircuitState } from '../../../src/api/circuit-breaker'
 
 const baseConfig = (): ResolvedConfig => ({
-  name: 'MyAlarmCom',
   username: 'user@example.com',
   password: 'superSecretPassword',
   twoFactorAuthenticationId: 'a'.repeat(64),
@@ -25,7 +25,7 @@ const baseConfig = (): ResolvedConfig => ({
 
 interface MutableReaders {
   readers: DiagnosticsReaders
-  breakerState: { value: string }
+  breakerState: { value: CircuitState }
   ws: {
     value: {
       isConnected: boolean
@@ -40,7 +40,7 @@ interface MutableReaders {
 }
 
 const makeReaders = (): MutableReaders => {
-  const breakerState = { value: 'CLOSED' }
+  const breakerState = { value: CircuitState.CLOSED }
   const ws = {
     value: {
       isConnected: true,
@@ -81,6 +81,43 @@ const makeReaders = (): MutableReaders => {
 }
 
 describe('DiagnosticsCollector', () => {
+  /**
+   * The two time-derived fields, on a controlled clock.
+   *
+   * The collector declares an injectable clock "for deterministic tests" and no
+   * test used it, so nothing asserted either value — and `lastTripAt` used to be
+   * emitted as a raw epoch integer that an operator had to convert by hand.
+   */
+  describe('time-derived fields', () => {
+    it('reports uptime in seconds and the last breaker trip as an ISO timestamp', () => {
+      const clock = { value: Date.UTC(2026, 6, 29, 2, 0, 0) }
+      const collector = new DiagnosticsCollector({
+        pluginVersion: '0.1.0',
+        config: baseConfig(),
+        now: () => clock.value,
+      })
+
+      clock.value += 90_000
+      collector.breakerTrip()
+      clock.value += 30_000
+
+      const report = collector.buildHeartbeat(makeReaders().readers)
+
+      expect(report.lifecycle.uptimeSec).toBe(120)
+      expect(report.circuitBreaker.lastTripAt).toBe('2026-07-29T02:01:30.000Z')
+    })
+
+    it('reports no trip time before the breaker has ever opened', () => {
+      const collector = new DiagnosticsCollector({
+        pluginVersion: '0.1.0',
+        config: baseConfig(),
+        now: () => 0,
+      })
+
+      expect(collector.buildHeartbeat(makeReaders().readers).circuitBreaker.lastTripAt).toBeNull()
+    })
+  })
+
   it('reports per-interval deltas and advances the marker each heartbeat', () => {
     const m = makeReaders()
     const collector = new DiagnosticsCollector({ pluginVersion: '0.1.0', config: baseConfig() })
@@ -143,8 +180,8 @@ describe('DiagnosticsCollector', () => {
     collector.apiRequest(90, true, true)
     collector.apiRequest(9999, false, false)
 
-    expect(collector.percentile(50)).toBe(50)
-    expect(collector.percentile(95)).toBe(90)
+    expect(collector.buildHeartbeat(makeReaders().readers).api.p50Ms).toBe(50)
+    expect(collector.buildHeartbeat(makeReaders().readers).api.p95Ms).toBe(90)
   })
 
   describe('rollup', () => {
@@ -156,7 +193,7 @@ describe('DiagnosticsCollector', () => {
 
     it('degrades when the circuit breaker is open', () => {
       const m = makeReaders()
-      m.breakerState.value = 'OPEN'
+      m.breakerState.value = CircuitState.OPEN
       const collector = new DiagnosticsCollector({ pluginVersion: '0.1.0', config: baseConfig() })
       expect(collector.rollup(m.readers)).toEqual({
         health: 'degraded',
@@ -197,6 +234,67 @@ describe('DiagnosticsCollector', () => {
         collector.apiRequest(10, i >= 8)
       }
       expect(collector.rollup(m.readers).reasons).toContain('apiErrorRateHigh')
+    })
+  })
+
+  /**
+   * The plugin is a daemon that runs for months. These two evictions are the
+   * only thing between the collector and a slow memory leak, and nothing
+   * exercised them: the tests never pushed more than a handful of samples.
+   */
+  describe('bounded memory', () => {
+    it('keeps only the most recent latencies for percentile math', () => {
+      const collector = new DiagnosticsCollector({ pluginVersion: '0.1.0', config: baseConfig() })
+
+      // 250 samples of 1ms, then 200 of 500ms: exactly enough to displace every
+      // one of the cheap samples if the window is honoured.
+      for (let index = 0; index < 250; index++) {
+        collector.apiRequest(1, true)
+      }
+      for (let index = 0; index < 200; index++) {
+        collector.apiRequest(500, true)
+      }
+
+      // Both percentiles report the expensive samples: if any of the 1ms samples
+      // had survived the window they would be the cheap end of the distribution.
+      const { p50Ms, p95Ms } = collector.buildHeartbeat(makeReaders().readers).api
+      expect(p50Ms).toBe(500)
+      expect(p95Ms).toBe(500)
+    })
+
+    it('judges the error rate on recent outcomes only, not the whole session', () => {
+      const m = makeReaders()
+      const collector = new DiagnosticsCollector({ pluginVersion: '0.1.0', config: baseConfig() })
+
+      for (let index = 0; index < 100; index++) {
+        collector.apiRequest(10, false)
+      }
+      expect(collector.rollup(m.readers).reasons).toContain('apiErrorRateHigh')
+
+      // 50 successes is the whole window, so the earlier failures must age out.
+      for (let index = 0; index < 50; index++) {
+        collector.apiRequest(10, true)
+      }
+
+      expect(collector.rollup(m.readers).reasons).not.toContain('apiErrorRateHigh')
+    })
+  })
+
+  describe('the reported WebSocket state', () => {
+    it.each([
+      ['disabled', { isExpected: false, ws: null }],
+      ['disconnected', { isExpected: true, ws: null }],
+      ['closed', { isExpected: true, ws: { isConnected: false, isConnecting: false, isClosed: true, lastEventAgeSec: null } }],
+      ['connected', { isExpected: true, ws: { isConnected: true, isConnecting: false, isClosed: false, lastEventAgeSec: 1 } }],
+      ['connecting', { isExpected: true, ws: { isConnected: false, isConnecting: true, isClosed: false, lastEventAgeSec: null } }],
+      ['disconnected', { isExpected: true, ws: { isConnected: false, isConnecting: false, isClosed: false, lastEventAgeSec: null } }],
+    ])('is "%s" for the matching status', (expected, { isExpected, ws }) => {
+      const m = makeReaders()
+      m.eventStreamExpected.value = isExpected
+      m.ws.value = ws
+      const collector = new DiagnosticsCollector({ pluginVersion: '0.1.0', config: baseConfig() })
+
+      expect(collector.snapshot('health', m.readers).websocket.state).toBe(expected)
     })
   })
 })

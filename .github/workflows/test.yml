@@ -16,6 +16,11 @@ jobs:
 
     strategy:
       matrix:
+        # 20.x is the floor `engines.node` promises, reachable through Homebridge
+        # 1.6. `npm ci` warns EBADENGINE there because the *dev* dependency
+        # homebridge 2.x wants ^22 || ^24; that is expected and is not a reason
+        # to drop the 20.x job, which is what proves the published plugin runs
+        # on the version it claims to support.
         node-version: [20.x, 22.x, 24.x]
 
     steps:
@@ -44,6 +49,11 @@ jobs:
           exit 1
         fi
         git diff --exit-code -- dist
+
+    # The build above only typechecks `src/`. This adds the test project, whose
+    # strictness is what keeps the doubles honest about the real contracts.
+    - name: Typecheck
+      run: npm run typecheck
 
     - name: Run linter
       run: npm run lint

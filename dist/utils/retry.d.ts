@@ -12,17 +12,28 @@ export interface RetryOptions {
     maxAttempts?: number;
     /** Delay before the second attempt, doubled each time after. */
     baseDelayMs?: number;
-    /** Ceiling on any single delay. */
+    /** Ceiling on any single delay, including a server-supplied `Retry-After`. */
     maxDelayMs?: number;
     /** Called before each wait, for logging. */
     onRetry?: (attempt: number, delayMs: number, error: unknown) => void;
     /** Injectable sleep, so tests need not wait in real time. */
-    sleep?: (ms: number) => Promise<void>;
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
     /** Override which errors are worth another attempt. */
     isRetryable?: (error: unknown) => boolean;
+    /** Abandons the retry loop, and any wait in progress, on shutdown. */
+    signal?: AbortSignal;
 }
-/** Resolve after the given delay. */
-export declare const sleep: (ms: number) => Promise<void>;
+/**
+ * Resolve after the given delay, or reject if the signal aborts first.
+ *
+ * The timer is `unref`'d so a pending backoff cannot hold Node open past
+ * shutdown. That matters here because the waits are long: retry backoff runs to
+ * a minute and the initial-discovery backoff to five, and a child bridge that
+ * refuses to exit for five minutes looks like a hang.
+ *
+ * @throws {OperationAbortedError} The signal aborted before the delay elapsed.
+ */
+export declare const sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 /**
  * Compute the delay before a given attempt.
  *
@@ -31,15 +42,5 @@ export declare const sleep: (ms: number) => Promise<void>;
  * otherwise retry in lockstep and look exactly like an attack.
  */
 export declare function computeBackoffMs(attempt: number, baseDelayMs?: number, maxDelayMs?: number, random?: () => number): number;
-/**
- * Run an operation, retrying retryable failures with backoff.
- *
- * Only errors that declare themselves retryable are retried; everything else
- * propagates immediately. A `Retry-After` from Alarm.com always wins over the
- * computed backoff, since arguing with a rate limiter is how accounts get
- * locked.
- *
- * @param operation Must be idempotent. Do not wrap arming commands in this.
- */
 export declare function withRetry<T>(operation: () => Promise<T>, options?: RetryOptions): Promise<T>;
 //# sourceMappingURL=retry.d.ts.map

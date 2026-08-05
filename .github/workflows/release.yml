@@ -78,15 +78,26 @@ jobs:
           node-version: 24.x
           registry-url: 'https://registry.npmjs.org'
 
-      # Trusted Publishing (tokenless OIDC) requires a recent npm release.
+      # Trusted Publishing (tokenless OIDC) requires npm >= 11.5.1.
+      #
+      # Pinned rather than `@latest`. This step runs in the one job holding
+      # `id-token: write`, so an `npm@latest` that resolved to a compromised
+      # release would execute with permission to publish this package. Bump it
+      # deliberately, like any other dependency.
       - name: Upgrade npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@12.0.2
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build TypeScript
         run: npm run build
+
+      # Every PR runs this; the publish gate should not be weaker than the gate
+      # the code already passed, especially since no status checks are required
+      # on the Release PR itself.
+      - name: Typecheck
+        run: npm run typecheck
 
       - name: Run linter
         run: npm run lint

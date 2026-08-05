@@ -10,9 +10,17 @@
 /** The platform block exactly as it appears in the Homebridge config file. */
 export interface MyAlarmComPlatformConfig {
   platform: string
-  name?: string
 
-  /** Alarm.com login email. */
+  /**
+   * Instance name.
+   *
+   * Read by Homebridge itself, which uses it as the log prefix. The plugin
+   * never reads it, so it is declared here only to document that the field is
+   * expected rather than ignored.
+   */
+  name?: unknown
+
+  /** Alarm.com username, usually an email address. */
   username?: unknown
   /** Alarm.com password. */
   password?: unknown
@@ -53,7 +61,6 @@ export interface MyAlarmComPlatformConfig {
 
 /** Configuration after validation, with every value present and in range. */
 export interface ResolvedConfig {
-  name: string
   username: string
   password: string
   twoFactorAuthenticationId: string
@@ -69,7 +76,10 @@ export interface ResolvedConfig {
 
 /** Outcome of validating user configuration. */
 export interface ConfigValidationResult {
-  config: ResolvedConfig
+  /** The usable configuration, or `null` when {@link errors} is non-empty. */
+  config: ResolvedConfig | null
   /** Non-fatal problems worth telling the user about. */
   warnings: string[]
+  /** Problems the user must fix before the platform can run at all. */
+  errors: string[]
 }

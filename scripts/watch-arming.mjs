@@ -30,28 +30,45 @@ import { createRequire } from 'node:module'
 import { stdout } from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 
+import { handleHelp, hasFlag, readNumericFlag } from './lib/cli.mjs'
+import { createTerminalLogger, DIST_DIR, requireBuild } from './lib/plugin-logger.mjs'
 import { resolveCredentials } from './lib/prompt.mjs'
-import { createScrubber } from './lib/scrub.mjs'
+import { createScrubber, redactFreeText } from './lib/scrub.mjs'
+
+handleHelp(`
+Watch an Alarm.com panel's state and event stream side by side.
+
+  node scripts/watch-arming.mjs [options]
+
+  --minutes <n>  Stop after this many minutes (default: run until Ctrl-C).
+  --verbose      Include the plugin's debug lines.
+  -h, --help     Show this message.
+
+Read-only: it polls and listens, and sends no commands. Ctrl-C writes a
+scrubbed timeline to probe-output/.
+
+Console output names your devices and is not scrubbed. Review it before
+sharing; the file written on exit is scrubbed.
+
+Credentials come from ADC_USERNAME, ADC_PASSWORD, and ADC_MFA_TOKEN, or are
+prompted for when a terminal is attached.
+`)
+
+requireBuild()
 
 const here = dirname(fileURLToPath(import.meta.url))
-const distDir = join(here, '..', 'dist')
 const outputDir = join(here, '..', 'probe-output')
 const require = createRequire(import.meta.url)
 
-if (!existsSync(join(distDir, 'index.js'))) {
-  stdout.write('dist/ is missing. Run "npm run build" first.\n')
-  process.exit(1)
-}
-
-const { SessionManager } = require(join(distDir, 'api/session-manager.js'))
-const { AlarmComClient } = require(join(distDir, 'api/client.js'))
-const { EventStream } = require(join(distDir, 'api/event-stream.js'))
-const { httpRequest } = require(join(distDir, 'api/http.js'))
-const mappers = require(join(distDir, 'utils/mappers.js'))
-const alarmTypes = require(join(distDir, 'types/alarm.js'))
-const settings = require(join(distDir, 'settings.js'))
+const { SessionManager } = require(join(DIST_DIR, 'api/session-manager.js'))
+const { AlarmComClient } = require(join(DIST_DIR, 'api/client.js'))
+const { EventStream } = require(join(DIST_DIR, 'api/event-stream.js'))
+const { httpRequest } = require(join(DIST_DIR, 'api/http.js'))
+const mappers = require(join(DIST_DIR, 'utils/mappers.js'))
+const alarmTypes = require(join(DIST_DIR, 'types/alarm.js'))
+const settings = require(join(DIST_DIR, 'settings.js'))
 
 /**
  * Polling cadence.
@@ -63,11 +80,6 @@ const settings = require(join(distDir, 'settings.js'))
 const POLL_INTERVAL_MS = 3_000
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-
-function readFlag(name, fallback) {
-  const index = process.argv.indexOf(`--${name}`)
-  return index === -1 ? fallback : process.argv[index + 1]
-}
 
 function nameOf(enumObject, value) {
   return Object.keys(enumObject).find((key) => enumObject[key] === value) ?? String(value)
@@ -121,12 +133,14 @@ async function explainFailure(sessionManager, url) {
       },
     })
 
-    const text = await response.text()
-    stdout.write(`  HTTP ${response.status} ${response.statusText}\n`)
+    stdout.write(`  HTTP ${response.status}\n`)
     stdout.write(`  content-type: ${response.headers.get('content-type')}\n\n`)
-    stdout.write(`${text.slice(0, 2000)}\n`)
+    // Scrubbed, not verbatim. Alarm.com serves HTML interstitials where JSON is
+    // expected, and this is the output an operator pastes into an issue when
+    // things are broken — which is exactly when it is least reviewed.
+    stdout.write(`${redactFreeText(response.text.slice(0, 2_000))}\n`)
   } catch (error) {
-    stdout.write(`  Could not re-request: ${error?.message ?? error}\n`)
+    stdout.write(`  Could not re-request: ${redactFreeText(String(error?.message ?? error))}\n`)
   }
 }
 
@@ -139,7 +153,7 @@ async function discover(client, sessionManager) {
   try {
     devices = await client.getSystemDevices(systemId)
   } catch (error) {
-    stdout.write(`\n  Discovery failed: ${error?.constructor?.name}: ${error?.message}\n`)
+    stdout.write(`\n  Discovery failed: ${error?.constructor?.name}: ${redactFreeText(String(error?.message))}\n`)
     await explainFailure(sessionManager, `${settings.SYSTEM_URL}${encodeURIComponent(systemId)}`)
     throw error
   }
@@ -155,16 +169,10 @@ function describePartition(attributes) {
 }
 
 async function main() {
-  const minutes = Number(readFlag('minutes', '0'))
-  const isVerbose = process.argv.includes('--verbose')
+  const minutes = readNumericFlag('--minutes', { fallback: 0, min: 0, max: 1_440 })
   const timeline = []
 
-  const log = {
-    debug: (message) => isVerbose && stdout.write(`  · ${message}\n`),
-    info: (message) => stdout.write(`  · ${message}\n`),
-    warn: (message) => stdout.write(`  ! ${message}\n`),
-    error: (message) => stdout.write(`  ✗ ${message}\n`),
-  }
+  const log = createTerminalLogger('watch', hasFlag('--verbose'))
 
   const credentials = await resolveCredentials()
 
@@ -246,7 +254,8 @@ async function main() {
   await stream.start()
 
   let isStopping = false
-  const stop = () => {
+  /** 130 for an interrupt, 0 for a completed watch. */
+  const stop = (exitCode = 0) => {
     if (isStopping) {
       return
     }
@@ -276,14 +285,19 @@ async function main() {
     }
 
     mkdirSync(outputDir, { recursive: true })
-    const file = join(outputDir, 'arming-timeline.json')
+    // Timestamped, so a second watch does not silently destroy the first. These
+    // captures cost a login and a session of someone's time to produce.
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const file = join(outputDir, `arming-timeline-${stamp}.json`)
     writeFileSync(file, JSON.stringify(createScrubber().scrub({ timeline }), null, 2))
     stdout.write(`\n  Scrubbed timeline written to ${file}\n`)
 
-    process.exit(0)
+    process.exit(exitCode)
   }
 
-  process.on('SIGINT', stop)
+  // 130 is the conventional shell exit for SIGINT, so a wrapper can tell an
+  // interrupted watch from a completed one.
+  process.on('SIGINT', () => stop(130))
 
   const deadline = minutes > 0 ? Date.now() + minutes * 60_000 : Infinity
 
@@ -296,7 +310,7 @@ async function main() {
       currentPartitions = await client.getPartitions(devices.partitionIds)
       currentSensors = await client.getSensors(devices.sensorIds)
     } catch (error) {
-      stdout.write(`  ${elapsed(startedAt)}  poll failed: ${error?.message}\n`)
+      stdout.write(`  ${elapsed(startedAt)}  poll failed: ${redactFreeText(String(error?.message))}\n`)
       continue
     }
 
@@ -352,6 +366,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  stdout.write(`\nFailed: ${error?.message ?? error}\n`)
+  stdout.write(`\nFailed: ${redactFreeText(String(error?.message ?? error))}\n`)
   process.exit(1)
 })
