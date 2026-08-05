@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.14](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.13...v0.1.14) (2026-08-05)
+
+
+### Bug Fixes
+
+* correct HomeKit alarm state, cancel stalled polls, and close redaction gaps ([#34](https://github.com/tbaur/homebridge-myalarmcom/issues/34)) ([642d2dd](https://github.com/tbaur/homebridge-myalarmcom/commit/642d2ddced2a7dfada703064bc09204f8b28b71c))
+
 ## [0.1.13](https://github.com/tbaur/homebridge-myalarmcom/compare/v0.1.12...v0.1.13) (2026-08-02)
 
 
