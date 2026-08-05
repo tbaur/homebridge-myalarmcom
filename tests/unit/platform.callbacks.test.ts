@@ -146,9 +146,9 @@ describe('platform collaborator callbacks', () => {
     const realSetInterval = global.setInterval.bind(global)
     setIntervalSpy = jest.spyOn(global, 'setInterval').mockImplementation((handler, timeout) => {
       if (timeout === KEEPALIVE_INTERVAL_MS && typeof handler === 'function') {
-        keepAliveTick = handler as () => void
+        keepAliveTick = handler
       }
-      return realSetInterval(handler as () => void, timeout as number)
+      return realSetInterval(handler, timeout as number)
     })
   })
 

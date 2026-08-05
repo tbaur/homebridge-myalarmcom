@@ -116,9 +116,9 @@ describe('platform diagnostics', () => {
     const realSetInterval = global.setInterval.bind(global)
     setIntervalSpy = jest.spyOn(global, 'setInterval').mockImplementation((handler, timeout) => {
       if (timeout === DIAGNOSTICS_INTERVAL_MS && typeof handler === 'function') {
-        diagnosticsHeartbeat = handler as () => void
+        diagnosticsHeartbeat = handler
       }
-      return realSetInterval(handler as () => void, timeout as number)
+      return realSetInterval(handler, timeout as number)
     })
   })
 

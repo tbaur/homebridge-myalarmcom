@@ -157,12 +157,12 @@ describe('platform lifecycle', () => {
       ) => {
         // Omit rest args: @types/node types them as `void | undefined`, so
         // spreading `unknown[]` fails typecheck under the locked 20.x types.
-        const handle = realSetInterval(handler as () => void, delay)
+        const handle = realSetInterval(handler, delay)
         if (delay === POLL_INTERVAL_SEC * 1_000 || delay === KEEPALIVE_INTERVAL_MS) {
           armed.push(handle)
         }
         return handle
-      }) as typeof setInterval)
+      }))
       const cleared = jest.spyOn(global, 'clearInterval')
 
       await launch()
