@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.3...v1.0.4) (2026-08-05)
+
+
+### Bug Fixes
+
+* drop component scope prefixes from log lines ([#45](https://github.com/tbaur/homebridge-myalarmcom/issues/45)) ([f8e6d65](https://github.com/tbaur/homebridge-myalarmcom/commit/f8e6d65f2e36a600a569dc9d402392867e07fe9d))
+
 ## [1.0.3](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.2...v1.0.3) (2026-08-05)
 
 
