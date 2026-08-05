@@ -7,9 +7,8 @@
  * @fileoverview Logging wrapper that enforces redaction.
  *
  * Every log line the plugin emits passes through here, so redaction cannot be
- * forgotten at an individual call site. Homebridge tags each line with the
- * plugin name; this adds the component within the plugin, so a stream problem
- * can be told apart from an auth problem without reading the message text.
+ * forgotten at an individual call site. Messages are not component-prefixed:
+ * Homebridge already tags lines with the plugin name (e.g. `[myalarmcom]`).
  */
 /** Somewhere log lines can be written. Homebridge's `Logging` satisfies this. */
 export interface LogSink {
@@ -18,7 +17,7 @@ export interface LogSink {
     warn(message: string, ...parameters: unknown[]): void;
     error(message: string, ...parameters: unknown[]): void;
 }
-/** A redacting, component-scoped logger. */
+/** A redacting logger. */
 export interface Logger extends LogSink {
     /**
      * Whether debug output is enabled.
@@ -33,14 +32,13 @@ export interface Logger extends LogSink {
 /**
  * Wrap a log sink so messages and parameters are stripped of secrets.
  *
- * Always wrap the *raw* sink. Wrapping an already-scoped logger runs the whole
- * pattern set twice on every line — in the polling hot path — and produces a
- * doubled `[platform] [partition]` prefix.
+ * Always wrap the *raw* sink. Wrapping an already-wrapped logger runs the whole
+ * pattern set twice on every line — in the polling hot path.
  *
- * @param scope Component this logger belongs to (auth, events, partition, …),
- *   written into the line as a `[scope]` prefix.
+ * @param _scope Retained for call-site documentation only (auth, events, …).
+ *   Not written into the log line — Homebridge already scopes by plugin name.
  * @param isDebugEnabled When false, `debug` calls are dropped entirely rather
  *   than delegated, so verbose paths cost nothing in normal operation.
  */
-export declare function createScopedLogger(base: LogSink, scope: string, isDebugEnabled: boolean): Logger;
+export declare function createScopedLogger(base: LogSink, _scope: string, isDebugEnabled: boolean): Logger;
 //# sourceMappingURL=logger.d.ts.map

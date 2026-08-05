@@ -113,9 +113,7 @@ Invalid configuration never takes the bridge down. A missing credential, a six-d
 
 ## Not Working?
 
-Log lines are prefixed with the component that produced them — `[auth]`, `[api]`, `[events]`, `[platform]`, `[partition]`, `[contact]`, `[motion]`, `[smoke]`, `[diagnostics]` — so you can tell a sign-in problem from a stream problem without reading the message.
-
-API lines also carry a short request tag and a duration, like `[3f9c1e, 412ms]`. Every retry and every failure belonging to the same request shares one tag, which is how you tell which of a poll cycle's requests actually went wrong.
+Homebridge already tags each line with the plugin name (e.g. `[myalarmcom]`). API lines also carry a short request tag and a duration, like `[3f9c1e, 412ms]`. Every retry and every failure belonging to the same request shares one tag, which is how you tell which of a poll cycle's requests actually went wrong.
 
 1. **`TwoFactorRequiredError`** — Cookie missing, expired, or for a different account. Capture a fresh one ([docs/AUTH.md](https://github.com/tbaur/homebridge-myalarmcom/blob/main/docs/AUTH.md)), then restart Homebridge; configuration is read once at startup.
 2. **Rejected username or password** — Fix credentials before restarting repeatedly; Alarm.com locks accounts after failed sign-ins. The plugin will not retry a rejected credential on its own.
