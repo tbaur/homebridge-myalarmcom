@@ -19,7 +19,6 @@ exports.authenticate = authenticate;
 exports.keepAlive = keepAlive;
 const errors_1 = require("../errors");
 const settings_1 = require("../settings");
-const sanitizers_1 = require("../utils/sanitizers");
 const cookie_jar_1 = require("./cookie-jar");
 const http_1 = require("./http");
 /**
@@ -114,7 +113,8 @@ async function authenticate(credentials, log, signal) {
     const jar = new cookie_jar_1.CookieJar();
     jar.absorb(loginResponse.headers);
     if (log.isDebugEnabled) {
-        log.debug(`login responded ${loginResponse.status} with cookies [${jar.names.join(', ')}], sent trust token ${(0, sanitizers_1.previewSecret)(credentials.twoFactorAuthenticationId)}`);
+        // Cookie *names* only — never values, fingerprints, or length bands.
+        log.debug(`login responded ${loginResponse.status} with cookies [${jar.names.join(', ')}]`);
     }
     assertLoginSucceeded(loginResponse.status);
     const ajaxKey = jar.get(settings_1.CSRF_COOKIE_NAME);

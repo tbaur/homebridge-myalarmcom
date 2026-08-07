@@ -690,7 +690,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       requestToken: () => this.client.getEventStreamToken(),
       onDeviceEvent: (deviceId, event) => this.#handleDeviceEvent(deviceId, event),
       onUnavailable: () => {
-        this.#log.warn('Continuing with polling only; HomeKit updates will be slower.')
+        this.#log.debug('Continuing with polling only; HomeKit updates will be slower.')
       },
       onReconnect: () => this.#diagnostics.wsReconnect(),
       // Counted, not logged. The stream itself reports recovery at info in words
@@ -885,12 +885,9 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   /**
    * Log a failure at a level matching whether the user can act on it.
    *
-   * Transient trouble is logged quietly; a bad password or a stale two-factor
+   * Transient trouble — including a sustained outage the circuit breaker is
+   * already announcing — stays at debug. A bad password or a stale two-factor
    * cookie is logged loudly, because nothing will improve until it is fixed.
-   *
-   * Repetition is what turns a quiet failure into a loud one. Every retryable
-   * error routes to debug, which is off by default, so a sustained outage used
-   * to produce no output at all while HomeKit silently went stale.
    */
   #reportFailure(context: string, error: unknown): void {
     const detail = sanitizeError(error)
@@ -919,10 +916,11 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     // changes during a real outage: the first few are network or 5xx failures,
     // and once the circuit breaker opens they become CircuitBreakerError. A
     // counter keyed on the message would reset at exactly that point and never
-    // reach the threshold.
+    // reach the threshold. Debug only — CLOSED -> OPEN is the default-visible
+    // outage signal.
     if (this.#consecutiveFailures >= POLL_FAILURE_WARN_THRESHOLD && !this.#hasWarnedAboutOutage) {
       this.#hasWarnedAboutOutage = true
-      this.#log.warn(
+      this.#log.debug(
         `Alarm.com has failed ${this.#consecutiveFailures} times in a row (most recently: ${detail}). `
         + 'HomeKit state may be stale until it is reachable again.',
       )
@@ -932,7 +930,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   /** Note that the operation is working again, pairing with {@link #reportFailure}. */
   #reportSuccess(): void {
     if (this.#hasWarnedAboutOutage) {
-      this.#log.info('Alarm.com is reachable again; HomeKit state is up to date.')
+      this.#log.debug('Alarm.com is reachable again; HomeKit state is up to date.')
     }
     this.#consecutiveFailures = 0
     this.#hasWarnedAboutOutage = false

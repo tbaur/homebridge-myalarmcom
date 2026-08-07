@@ -195,14 +195,15 @@ describe('platform collaborator callbacks', () => {
   })
 
   describe('the event stream callbacks', () => {
-    it('tells the user push updates are gone and polling has taken over', async () => {
+    it('notes at debug that push updates are gone and polling has taken over', async () => {
       await launch()
       expect(capturedStreamOptions?.onUnavailable).toBeDefined()
 
       capturedStreamOptions!.onUnavailable!()
 
-      expect(log.warnings.join('\n')).toMatch(/Continuing with polling only/)
-      expect(log.warnings.join('\n')).toMatch(/slower/)
+      expect(log.debugMessages.join('\n')).toMatch(/Continuing with polling only/)
+      expect(log.debugMessages.join('\n')).toMatch(/slower/)
+      expect(log.warnings.join('\n')).not.toMatch(/Continuing with polling only/)
     })
 
     it('does not add a second recovery line, which the stream already reports', async () => {

@@ -234,8 +234,7 @@ export class AlarmComClient {
   }
 
   /**
-   * Surface circuit-breaker transitions so operators can see when Alarm.com is
-   * being treated as unavailable and when it recovers.
+   * Surface circuit-breaker transitions as bare `from -> to` lines.
    *
    * Only the edges into and out of "unavailable" are loud. During an outage the
    * breaker necessarily flaps OPEN -> HALF_OPEN -> OPEN once per poll cycle as
@@ -248,13 +247,13 @@ export class AlarmComClient {
 
     if (to === CircuitState.OPEN && !this.#hasReportedCircuitOpen) {
       this.#hasReportedCircuitOpen = true
-      this.#log.warn(`${message}; Alarm.com is being treated as unavailable`)
+      this.#log.warn(message)
       return
     }
 
     if (to === CircuitState.CLOSED && this.#hasReportedCircuitOpen) {
       this.#hasReportedCircuitOpen = false
-      this.#log.info(`${message}; Alarm.com is reachable again`)
+      this.#log.info(message)
       return
     }
 

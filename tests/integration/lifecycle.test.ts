@@ -123,11 +123,13 @@ describe('platform lifecycle', () => {
   /** Drive one refresh that is expected to succeed. */
   async function driveSuccessfulRefresh(platform: MyAlarmComPlatform): Promise<void> {
     const failuresBefore = failureCount()
-    const infoBefore = log.infoMessages.length
+    const debugBefore = log.debugMessages.length
 
     platform.requestDeviceRefresh(FRONT_DOOR)
 
-    await waitFor(() => log.infoMessages.length > infoBefore, {
+    await waitFor(() => (
+      log.debugMessages.slice(debugBefore).some((message) => message.includes('reachable again'))
+    ), {
       description: 'the refresh to report recovery',
     })
     expect(failureCount()).toBe(failuresBefore)
@@ -226,18 +228,18 @@ describe('platform lifecycle', () => {
     }
 
     /**
-     * Every retryable failure logs at debug, which is off by default. Without
-     * escalation a sustained Alarm.com outage produced no output at all while
-     * HomeKit silently went stale — the worst of both.
+     * Outage detail stays at debug; the circuit breaker transition is what
+     * surfaces at default log levels.
      */
-    it('escalates to a warning once the same failure repeats', async () => {
+    it('summarizes a repeating failure once at debug', async () => {
       const platform = await launch()
       interceptForbiddenSensors()
 
       await driveFailingRefreshes(platform, POLL_FAILURE_WARN_THRESHOLD)
 
-      expect(log.warnings.join('\n')).toMatch(/failed \d+ times in a row/)
-      expect(log.warnings.join('\n')).toMatch(/HomeKit state may be stale/)
+      expect(log.warnings.join('\n')).not.toMatch(/times in a row/)
+      expect(log.debugMessages.join('\n')).toMatch(/failed \d+ times in a row/)
+      expect(log.debugMessages.join('\n')).toMatch(/HomeKit state may be stale/)
     })
 
     /**
@@ -251,9 +253,9 @@ describe('platform lifecycle', () => {
 
       await driveFailingRefreshes(platform, POLL_FAILURE_WARN_THRESHOLD + 2)
 
-      // The outage summary fires exactly once, and it fires despite the error type
+      // The outage summary fires exactly once at debug, despite the error type
       // changing under it when the breaker opens.
-      expect(log.warnings.filter((message) => message.includes('times in a row'))).toHaveLength(1)
+      expect(log.debugMessages.filter((message) => message.includes('times in a row'))).toHaveLength(1)
       expect(log.debugMessages.join('\n')).toMatch(/Circuit breaker|Alarm.com returned 503/)
       // Seven sequential refreshes, the first few retried three times each,
       // which is slower than the default per-test budget under coverage.
@@ -265,21 +267,22 @@ describe('platform lifecycle', () => {
 
       await driveFailingRefreshes(platform, 1)
 
-      expect(log.warnings.join('\n')).not.toMatch(/times in a row/)
+      expect(log.debugMessages.join('\n')).not.toMatch(/times in a row/)
       expect(log.debugMessages.join('\n')).toMatch(/Targeted refresh of 1 device\(s\) failed/)
     })
 
-    it('says so plainly when it starts working again', async () => {
+    it('notes recovery at debug when it starts working again', async () => {
       const platform = await launch()
       interceptForbiddenSensors()
 
       await driveFailingRefreshes(platform, POLL_FAILURE_WARN_THRESHOLD)
-      expect(log.warnings.join('\n')).toMatch(/times in a row/)
+      expect(log.debugMessages.join('\n')).toMatch(/times in a row/)
 
       restoreAccount()
       await driveSuccessfulRefresh(platform)
 
-      expect(log.infoMessages.join('\n')).toMatch(/reachable again/)
+      expect(log.debugMessages.join('\n')).toMatch(/reachable again/)
+      expect(log.infoMessages.join('\n')).not.toMatch(/reachable again/)
     })
   })
 

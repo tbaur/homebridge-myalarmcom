@@ -59,7 +59,7 @@ This plugin implements:
 
 - The Alarm.com username, password, and `twoFactorAuthenticationId` cookie are read from the Homebridge platform config. Homebridge stores that config in plain text on the host, so **host hardening is the primary mitigation** for all three.
 - The plugin holds session cookies in memory only; they are not persisted, and nothing is written to disk.
-- No credentials or cookies are written to logs, at any level. Where a line needs to refer to a secret it prints a non-reversible scrypt fingerprint and a coarse length band, never any part of the value.
+- No credentials or cookies are written to logs, at any level — not values, not truncations, not fingerprints. Debug may list cookie *names* after login; nothing that could identify a secret's contents.
 - **Device names and Alarm.com identifiers are logged.** They are what makes a log diagnosable, so this is deliberate — but it means a log describes your home: `Master Bedroom Window: Open` is a labelled floor plan with live occupancy. Review any log before sharing it, and note that `debug: true` adds considerably more of it.
 
 ## What Leaves Your Network
