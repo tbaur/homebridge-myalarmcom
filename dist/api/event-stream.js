@@ -44,8 +44,6 @@ class EventStream {
     #recoveryTimer = null;
     #consecutiveFailures = 0;
     #isStopped = false;
-    /** The reason last surfaced at warn level, so it is not repeated verbatim. */
-    #lastReportedReason = null;
     #isConnecting = false;
     #hadConnected = false;
     /** True after giving up until a recovery attempt succeeds. */
@@ -61,13 +59,6 @@ class EventStream {
     #lastEventAt = null;
     /** When the live socket was lost; cleared on the next successful open. */
     #disconnectedAt = null;
-    /**
-     * Whether this outage episode has already logged an info-level reconnect.
-     *
-     * Cleared after a successful proactive refresh — staying up long enough to
-     * refresh means the episode is over. Until then, further reconnects are debug.
-     */
-    #hasAnnouncedReconnectInEpisode = false;
     /** Completes a pending {@link #connect} handshake wait when stop interrupts it. */
     #handshakeSettle = null;
     /**
@@ -115,8 +106,6 @@ class EventStream {
         // Reset with the rest, or a restart after a give-up would abandon the stream
         // on its first attempt using counters from the previous run.
         this.#consecutiveFailures = 0;
-        this.#lastReportedReason = null;
-        this.#hasAnnouncedReconnectInEpisode = false;
         this.#hadConnected = false;
         this.#disconnectedAt = null;
         this.#connectReason = 'initial';
@@ -506,25 +495,15 @@ class EventStream {
         }
     }
     /**
-     * Report why the stream failed.
+     * Record why the stream failed (always at debug).
      *
-     * Loud once per distinct reason, then debug. Logging every attempt loudly
-     * would be noise, but logging none of them loudly means a user sees the
-     * stream give up with no indication of why, which is a genuinely unhelpful
-     * place to leave someone.
-     *
-     * Keyed on the reason rather than reset per recovery cycle: resetting meant a
-     * multi-hour Alarm.com outage produced one warn every 15 minutes forever,
-     * repeating a reason that had not changed. A reason that *does* change is
-     * news, so it is still surfaced.
+     * Token fetch shares the API client and circuit breaker, so a warn here
+     * restates an outage the breaker line already announced — often twice in a
+     * row (timeout, then "Circuit breaker is open"). Socket/handshake detail stays
+     * under debug; give-up is the single default-visible stream outage line.
      */
     #recordFailureReason(reason) {
-        if (this.#lastReportedReason === reason) {
-            this.#log.debug(`event stream: ${reason}`);
-            return;
-        }
-        this.#lastReportedReason = reason;
-        this.#log.warn(`Alarm.com event stream could not connect: ${reason}`);
+        this.#log.debug(`event stream: ${reason}`);
     }
     /**
      * Run a caller-supplied callback without letting it reach the event loop.
@@ -545,9 +524,6 @@ class EventStream {
     #handleOpen() {
         this.#isConnecting = false;
         this.#consecutiveFailures = 0;
-        // Cleared on a successful connect, so if the same failure recurs after a
-        // period of working it is news again and gets reported.
-        this.#lastReportedReason = null;
         this.#giveUpCount = 0;
         this.#disconnectedAt = null;
         const reason = this.#connectReason;
@@ -556,19 +532,14 @@ class EventStream {
         this.#hasGivenUp = false;
         if (this.#hadConnected) {
             if (reason === 'refresh') {
-                // Scheduled token refresh — routine, not an outage. Staying up long
-                // enough to refresh also ends a reconnect episode.
+                // Scheduled token refresh — routine, not an outage.
                 this.#log.debug('Alarm.com event stream refreshed');
-                this.#hasAnnouncedReconnectInEpisode = false;
-            }
-            else if (this.#hasAnnouncedReconnectInEpisode) {
-                // Same flaky stretch: the first recovery was already news.
-                this.#log.debug('Alarm.com event stream reconnected');
-                this.#notify('reconnect', this.#onReconnect);
             }
             else {
-                this.#log.info('Alarm.com event stream reconnected');
-                this.#hasAnnouncedReconnectInEpisode = true;
+                // Mid-session drop recovery is debug. A brief blip that never reached
+                // give-up must not pair a quiet failure with an info "reconnected".
+                // Give-up recovery has its own info line below.
+                this.#log.debug('Alarm.com event stream reconnected');
                 this.#notify('reconnect', this.#onReconnect);
             }
         }
@@ -586,11 +557,11 @@ class EventStream {
      * Proactively reconnect before the token expires.
      *
      * Must run *before* Alarm.com drops the socket (~5 minutes). Refreshing at or
-     * after that mark races the server close; the drop path wins and logs
-     * info-level "reconnected" every cycle. Make-before-break keeps the live
-     * socket through the candidate handshake so a hung upgrade is a quiet retry
-     * rather than an outage. Jitter subtracts from the interval so refresh always
-     * lands early. Multiple instances still desynchronize.
+     * after that mark races the server close; the drop path wins and would log a
+     * reconnect every cycle. Make-before-break keeps the live socket through the
+     * candidate handshake so a hung upgrade is a quiet retry rather than an
+     * outage. Jitter subtracts from the interval so refresh always lands early.
+     * Multiple instances still desynchronize.
      */
     #scheduleRefresh() {
         if (this.#refreshTimer) {
@@ -658,17 +629,15 @@ class EventStream {
         if (this.#consecutiveFailures > settings_1.WEBSOCKET_MAX_FAILURES) {
             this.#hasGivenUp = true;
             this.#giveUpCount++;
-            const summary = `The Alarm.com event stream failed ${this.#consecutiveFailures} times; `
-                + `falling back to polling. Will retry in ${Math.round(settings_1.WEBSOCKET_RECOVERY_INTERVAL_MS / settings_1.MS_PER_MINUTE)} minutes.`;
-            // Loud once. A multi-hour Alarm.com outage would otherwise repeat this
-            // whole warning set every recovery cycle for as long as it lasted, which
-            // tells the user nothing they were not told the first time.
+            // Debug only: the circuit breaker (and Health, when enabled) already
+            // announce the outage at default log levels. Notify the platform once per
+            // give-up episode so it can lean on polling without repeating this every
+            // recovery cycle.
+            const summary = 'Alarm.com event stream unavailable; falling back to polling. '
+                + `Will retry in ${Math.round(settings_1.WEBSOCKET_RECOVERY_INTERVAL_MS / settings_1.MS_PER_MINUTE)} minutes.`;
+            this.#log.debug(summary);
             if (this.#giveUpCount === 1) {
-                this.#log.warn(summary);
                 this.#notify('unavailable', this.#onUnavailable);
-            }
-            else {
-                this.#log.debug(summary);
             }
             this.#scheduleRecovery();
             return;

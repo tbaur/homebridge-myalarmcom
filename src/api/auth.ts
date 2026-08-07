@@ -34,7 +34,6 @@ import {
   USERNAME_FIELD,
 } from '../settings'
 import type { Logger } from '../utils/logger'
-import { previewSecret } from '../utils/sanitizers'
 import { CookieJar } from './cookie-jar'
 import { httpRequest } from './http'
 
@@ -179,8 +178,9 @@ export async function authenticate(
   jar.absorb(loginResponse.headers)
 
   if (log.isDebugEnabled) {
+    // Cookie *names* only — never values, fingerprints, or length bands.
     log.debug(
-      `login responded ${loginResponse.status} with cookies [${jar.names.join(', ')}], sent trust token ${previewSecret(credentials.twoFactorAuthenticationId)}`,
+      `login responded ${loginResponse.status} with cookies [${jar.names.join(', ')}]`,
     )
   }
 

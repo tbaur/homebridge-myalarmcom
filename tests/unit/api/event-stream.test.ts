@@ -233,7 +233,7 @@ describe('EventStream', () => {
       await pending
     })
 
-    it('logs when the stream connects and when it reconnects', async () => {
+    it('logs when the stream connects and quietly when it reconnects', async () => {
       await startOpen()
 
       expect(messagesAt(log, 'info')).toContain('Alarm.com event stream connected')
@@ -241,7 +241,9 @@ describe('EventStream', () => {
       currentSocket().emit('close', 1006)
       await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
 
-      expect(messagesAt(log, 'info')).toContain('Alarm.com event stream reconnected')
+      // A brief mid-session drop that never reaches give-up stays at debug.
+      expect(messagesAt(log, 'info')).not.toContain('Alarm.com event stream reconnected')
+      expect(messagesAt(log, 'debug')).toContain('Alarm.com event stream reconnected')
     })
 
     it('abandons a hung handshake and schedules a reconnect', async () => {
@@ -255,7 +257,8 @@ describe('EventStream', () => {
       ).resolves.toBeUndefined()
       await pending
 
-      expect(messagesAt(log, 'warn').join('\n')).toMatch(/handshake timed out/)
+      expect(messagesAt(log, 'debug').join('\n')).toMatch(/handshake timed out/)
+      expect(messagesAt(log, 'warn').join('\n')).not.toMatch(/handshake timed out/)
       expect(socket.closeCount).toBe(1)
       expect(socket.readyState).toBe(MockWebSocket.CLOSED)
       expect(stream.isConnected).toBe(false)
@@ -359,7 +362,12 @@ describe('EventStream', () => {
       }
 
       expect(onUnavailable).toHaveBeenCalledTimes(1)
-      expect(messagesAt(log, 'warn').join('\n')).toMatch(/falling back to polling/)
+      expect(messagesAt(log, 'debug')).toContain(
+        'Alarm.com event stream unavailable; falling back to polling. Will retry in 15 minutes.',
+      )
+      expect(messagesAt(log, 'warn')).not.toContain(
+        'Alarm.com event stream unavailable; falling back to polling. Will retry in 15 minutes.',
+      )
     })
 
     it('retries the stream after giving up, once the recovery interval elapses', async () => {
@@ -396,28 +404,11 @@ describe('EventStream', () => {
     })
 
     /**
-     * Keyed on the reason rather than "have I complained yet".
-     *
-     * A multi-hour Alarm.com outage retries every 15 minutes, and resetting the
-     * flag on each recovery cycle meant one warn per cycle repeating a reason
-     * that had not changed. Repeats are now quiet.
+     * Failure reasons stay at debug; give-up is the loud line and carries the
+     * latest reason. Token-fetch failures share the API breaker, so warning
+     * here used to restate CLOSED -> OPEN (timeout, then breaker open).
      */
-    it('repeats an unchanged failure reason quietly', async () => {
-      const { pending, socket } = await startPending()
-
-      socket.emit('error', new Error('socket hang up'))
-      socket.emit('error', new Error('socket hang up'))
-      socket.emit('close', 1006)
-      await pending
-
-      expect(messagesAt(log, 'warn')).toEqual([
-        'Alarm.com event stream could not connect: socket hang up',
-      ])
-      expect(messagesAt(log, 'debug').join('\n')).toContain('event stream: socket hang up')
-    })
-
-    /** A reason that changes is news, and the second reason is often the useful one. */
-    it('still speaks up when the reason changes', async () => {
+    it('records failure reasons at debug only', async () => {
       const { pending, socket } = await startPending()
 
       socket.emit('error', new Error('socket hang up'))
@@ -425,10 +416,9 @@ describe('EventStream', () => {
       socket.emit('close', 1006)
       await pending
 
-      expect(messagesAt(log, 'warn')).toEqual([
-        'Alarm.com event stream could not connect: socket hang up',
-        'Alarm.com event stream could not connect: certificate has expired',
-      ])
+      expect(messagesAt(log, 'warn')).toEqual([])
+      expect(messagesAt(log, 'debug').join('\n')).toContain('event stream: socket hang up')
+      expect(messagesAt(log, 'debug').join('\n')).toContain('event stream: certificate has expired')
     })
 
     it('reports the status code when the upgrade itself is refused', async () => {
@@ -438,19 +428,23 @@ describe('EventStream', () => {
       socket.emit('close', 1006)
       await pending
 
-      expect(messagesAt(log, 'warn').join('\n')).toMatch(/refused the connection upgrade with HTTP 401/)
+      expect(messagesAt(log, 'debug').join('\n')).toMatch(/refused the connection upgrade with HTTP 401/)
+      expect(messagesAt(log, 'warn').join('\n')).not.toMatch(/refused the connection upgrade/)
     })
 
-    it('is willing to complain again after a successful connection in between', async () => {
-      const { pending, socket } = await startPending()
-      socket.emit('error', new Error('first failure'))
-      socket.readyState = MockWebSocket.OPEN
-      socket.emit('open')
-      await pending
+    it('keeps token-fetch failures quiet until a short give-up line', async () => {
+      requestToken.mockRejectedValue(new Error('Circuit breaker is open. Service unavailable until 2099-01-01T00:00:00.000Z'))
 
-      socket.emit('error', new Error('later failure'))
+      await stream.start()
+      for (let attempt = 0; attempt < 20 && onUnavailable.mock.calls.length === 0; attempt++) {
+        await jest.advanceTimersByTimeAsync(WEBSOCKET_RECONNECT_MAX_MS)
+      }
 
-      expect(messagesAt(log, 'warn')).toHaveLength(2)
+      expect(messagesAt(log, 'debug').join('\n')).toMatch(/Circuit breaker is open/)
+      expect(messagesAt(log, 'debug')).toContain(
+        'Alarm.com event stream unavailable; falling back to polling. Will retry in 15 minutes.',
+      )
+      expect(messagesAt(log, 'warn')).toEqual([])
     })
   })
 
@@ -529,9 +523,12 @@ describe('EventStream', () => {
       await jest.advanceTimersByTimeAsync(WEBSOCKET_RECONNECT_BASE_MS)
       await flushConnect()
 
-      expect(messagesAt(log, 'warn')).toEqual([
-        'Alarm.com event stream could not connect: could not obtain a stream token: still no token',
-      ])
+      // Already connected once — token failures on the drop path stay at debug
+      // until give-up, which is what carries the last error at warn.
+      expect(messagesAt(log, 'warn')).toEqual([])
+      expect(messagesAt(log, 'debug').join('\n')).toContain(
+        'event stream: could not obtain a stream token: still no token',
+      )
     })
 
     it('abandons a deferred refresh when the socket drops and recovers during the token fetch', async () => {
@@ -560,7 +557,8 @@ describe('EventStream', () => {
       firstSocket.emit('close', 1006)
       const recovered = await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
       expect(stream.isConnected).toBe(true)
-      expect(messagesAt(log, 'info')).toContain('Alarm.com event stream reconnected')
+      expect(messagesAt(log, 'debug')).toContain('Alarm.com event stream reconnected')
+      expect(messagesAt(log, 'info')).not.toContain('Alarm.com event stream reconnected')
 
       const socketsBeforeStaleResume = MockWebSocket.instances.length
       releaseRefreshToken({ token: 'stale-refresh-token' })
@@ -624,26 +622,24 @@ describe('EventStream', () => {
 
       await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
       expect(stream.isConnected).toBe(true)
-      expect(messagesAt(log, 'info')).toContain('Alarm.com event stream reconnected')
+      expect(messagesAt(log, 'debug')).toContain('Alarm.com event stream reconnected')
+      expect(messagesAt(log, 'info')).not.toContain('Alarm.com event stream reconnected')
     })
 
-    it('demotes repeated reconnect announcements within one outage episode', async () => {
+    it('keeps every mid-session reconnect at debug', async () => {
       await startOpen()
 
       currentSocket().emit('close', 1006)
       await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
-      expect(messagesAt(log, 'info').filter((message) => (
-        message === 'Alarm.com event stream reconnected'
-      ))).toHaveLength(1)
-
       currentSocket().emit('close', 1006)
       await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
+
       expect(messagesAt(log, 'info').filter((message) => (
         message === 'Alarm.com event stream reconnected'
-      ))).toHaveLength(1)
+      ))).toHaveLength(0)
       expect(messagesAt(log, 'debug').filter((message) => (
         message === 'Alarm.com event stream reconnected'
-      )).length).toBeGreaterThanOrEqual(1)
+      )).length).toBeGreaterThanOrEqual(2)
     })
 
     it('does not WARN when a deferred refresh token fails while drop reconnect is pending', async () => {
@@ -733,7 +729,8 @@ describe('EventStream', () => {
       await openAfterReconnect(WEBSOCKET_RECONNECT_BASE_MS)
 
       expect(MockWebSocket.instances).toHaveLength(2)
-      expect(messagesAt(log, 'info')).toContain('Alarm.com event stream reconnected')
+      expect(messagesAt(log, 'debug')).toContain('Alarm.com event stream reconnected')
+      expect(messagesAt(log, 'info')).not.toContain('Alarm.com event stream reconnected')
       expect(messagesAt(log, 'debug')).not.toContain('Alarm.com event stream refreshed')
     })
   })

@@ -623,9 +623,7 @@ describe('AlarmComClient', () => {
 
       await expect(client.getSystemId()).rejects.toThrow()
 
-      expect(messagesAt(log, 'warn')).toContain(
-        'Circuit breaker CLOSED -> OPEN; Alarm.com is being treated as unavailable',
-      )
+      expect(messagesAt(log, 'warn')).toContain('Circuit breaker CLOSED -> OPEN')
     })
 
     /**
@@ -662,7 +660,7 @@ describe('AlarmComClient', () => {
       breaker.recordFailure()
       breaker.recordFailure()
       expect(messagesAt(log, 'warn')).toEqual([
-        'Circuit breaker CLOSED -> OPEN; Alarm.com is being treated as unavailable',
+        'Circuit breaker CLOSED -> OPEN',
       ])
 
       // Two failed probe cycles: each moves OPEN -> HALF_OPEN -> OPEN, and neither
@@ -683,7 +681,7 @@ describe('AlarmComClient', () => {
       await expect(breaker.execute(() => Promise.resolve('ok'))).resolves.toBe('ok')
 
       expect(messagesAt(log, 'info')).toEqual([
-        'Circuit breaker HALF_OPEN -> CLOSED; Alarm.com is reachable again',
+        'Circuit breaker HALF_OPEN -> CLOSED',
       ])
 
       jest.useRealTimers()

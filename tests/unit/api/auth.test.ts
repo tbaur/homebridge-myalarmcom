@@ -267,20 +267,18 @@ describe('authenticate', () => {
     expect(log.warn).not.toHaveBeenCalled()
   })
 
-  it('logs the cookie names and a fingerprint of the token, never the values', async () => {
+  it('logs cookie names only, never values or secret fingerprints', async () => {
     interceptLoginPage()
     nock(BASE_URL).post('/web/Default.aspx').reply(302, '', SUCCESSFUL_LOGIN_COOKIES)
 
     await authenticate(CREDENTIALS, log)
     const debugOutput = messagesAt(log, 'debug').join('\n')
 
+    expect(debugOutput).toMatch(/login responded 302 with cookies \[/)
     expect(debugOutput).toContain('afg')
     expect(debugOutput).not.toContain(CSRF_COOKIE)
     expect(debugOutput).not.toContain(TRUST_TOKEN)
-    // A size band, not the exact length: enough to tell a real token from a
-    // truncated paste without publishing another fact about the credential.
-    expect(debugOutput).toMatch(/\(\d+-\d+ chars, scrypt:[0-9a-f]+\)/)
-    expect(debugOutput).not.toContain(`${TRUST_TOKEN.length} chars`)
+    expect(debugOutput).not.toMatch(/scrypt:|chars,|trust token|sent trust/i)
   })
 })
 
