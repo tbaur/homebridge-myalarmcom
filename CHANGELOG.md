@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.5](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.4...v1.0.5) (2026-08-07)
+
+
+### Bug Fixes
+
+* quiet redundant Alarm.com outage log noise ([15ea0de](https://github.com/tbaur/homebridge-myalarmcom/commit/15ea0de06a5eac084babe553e8107af5fee7a232))
+
 ## [1.0.4](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.3...v1.0.4) (2026-08-05)
 
 
