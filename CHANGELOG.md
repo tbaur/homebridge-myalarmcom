@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.6](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.5...v1.0.6) (2026-08-13)
+
+
+### Bug Fixes
+
+* bump ws from 8.21.1 to 8.21.3 ([ab00bb8](https://github.com/tbaur/homebridge-myalarmcom/commit/ab00bb8dbae6cfca2bf4304d038ec888a7b16cb7))
+
 ## [1.0.5](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.4...v1.0.5) (2026-08-07)
 
 
