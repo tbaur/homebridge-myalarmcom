@@ -23,7 +23,7 @@ Releases are fully automated with [release-please](https://github.com/googleapis
    - publishes a GitHub Release with the changelog notes,
    - runs the `publish` job (build → typecheck → lint → test → `npm publish --dry-run` → `npm publish --provenance --access public`) on Node 24.
 
-A release therefore reduces to: merge the code PR(s), then merge the Release PR.
+A release therefore reduces to: merge the code PR(s), approve the Release PR's checks, then merge the Release PR.
 
 ## Recovery
 
@@ -35,15 +35,27 @@ A release therefore reduces to: merge the code PR(s), then merge the Release PR.
 
 All three converge on the same `publish` job, which re-verifies build, typecheck, lint, and tests before publishing, so none of them can ship something untested.
 
+## Approve the Release PR checks
+
+The Release PR is authored by `github-actions[bot]`, because `release.yml` passes `github.token` to release-please. GitHub creates its checks but holds them until a user with write access approves.
+
+**Open the Release PR's Checks tab and click "Approve and run" before merging.**
+
+- There is no CLI for this. `POST /actions/runs/{run_id}/approve` is documented for forks from first-time contributors and does not cover this gate.
+- The approval does not stick. It is needed on every release, and again whenever release-please updates an open Release PR.
+- **Merging without approving turns the runs red.** They finalise as `failure` with zero jobs and no logs. That means nobody approved them, not that anything broke.
+
+This gate arrived with GitHub's [bot-created pull requests change](https://github.blog/changelog/2026-06-11-bot-created-pull-requests-can-run-workflows-if-approved/) and reached these repos in late August 2026. It applies to same-repo branches, not just forks, and has no repository-level opt-out. The only way to remove the step is to author the Release PR as a different identity, which needs a GitHub App or a PAT. Neither is set up here, and the click is cheaper.
+
 ## Branch protection
 
 `main` is protected with settings chosen to be compatible with the automated flow above:
 
 - **Require a pull request before merging** (0 required approvals) — keeps direct pushes off `main` without blocking a solo maintainer.
 - **Block force-pushes and deletions.**
-- **No required status checks.** The Tests workflow runs on every code PR and is visible there, but it is intentionally *not* a hard merge gate. The Release PR is opened by the built-in `GITHUB_TOKEN`, and GitHub does not trigger workflows for such PRs (loop prevention), so a required check would leave every Release PR permanently unmergeable. The `publish` job re-runs the whole gate — build, typecheck, lint, test — before `npm publish`, so releases are still gated on a green build. That job is deliberately not weaker than the one a code PR passes.
+- **No required status checks.** The Tests workflow runs on every code PR and is visible there, but it is intentionally *not* a hard merge gate. The Release PR's own checks are held for approval, so a required check there would sit unresolved until someone approves it. The `publish` job re-runs the whole gate — build, typecheck, lint, test — before `npm publish`, so releases are still gated on a green build. That job is deliberately not weaker than the one a code PR passes.
 
-> If enforced required checks on the Release PR are ever wanted, the only way to get them is to have release-please open its PR with a Personal Access Token instead of the built-in token, so the Tests workflow fires. That trades a stored secret for enforced checks; the current setup avoids the secret.
+> Required checks on the Release PR are now possible, because its runs do execute once approved. They would make approval mandatory instead of advisory. Removing the approval step altogether needs a GitHub App or a PAT.
 
 ## Publishing authentication
 
@@ -77,7 +89,7 @@ release-please then opens a Release PR for that version. Do not hand-edit `packa
 ## Notes
 
 - **PR titles drive releases.** With squash merges, the PR title becomes the commit release-please reads. `chore:`/`docs:`/`ci:` titles intentionally produce no release.
-- **The Release PR does not re-run the Tests workflow.** GitHub does not trigger workflows for PRs opened by the built-in token (loop prevention). The code was already tested on its own PR, and the `publish` job builds, lints, and tests again before publishing, so nothing ships untested.
+- **The Release PR's checks wait for approval.** They do not run on their own, and go red if the PR is merged first. See [Approve the Release PR checks](#approve-the-release-pr-checks). The code was already tested on its own PR, and the `publish` job builds, lints and tests again before publishing, so nothing ships untested.
 - **Version source of truth** is `.release-please-manifest.json`. The `package.json` version is owned by release-please and is not hand-edited.
 - Behavior is configured in `release-please-config.json`.
 
