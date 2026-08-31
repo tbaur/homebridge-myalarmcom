@@ -72,7 +72,7 @@ Example: `feat: add night arming support for partitions`
 
 ## Pull Request Process
 
-1. Update documentation if needed
+1. Update documentation if needed. Install stays in [README.md](README.md); options, log lines, and troubleshooting live in [docs/README-DETAILED.md](docs/README-DETAILED.md).
 2. Ensure CI passes (tests, linting)
 3. Request review from maintainers
 

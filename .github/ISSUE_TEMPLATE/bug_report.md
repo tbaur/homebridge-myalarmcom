@@ -39,7 +39,7 @@ DEBUG lines also require Homebridge Debug Mode (the -D flag, or
 Settings -> Homebridge Debug Mode in the UI). Both changes need a restart.
 ```
 
-Then include the `Health:` lines and the surrounding output.
+Then include the `Health:` lines and the surrounding output. How to read that line: [docs/README-DETAILED.md](../../docs/README-DETAILED.md#reading-a-health-line).
 
 **Read it before pasting.** Credentials and cookies are redacted automatically, but device names and Alarm.com identifiers are not, so a log describes your home's layout and activity.
 

@@ -1,5 +1,7 @@
 # Alarm.com protocol notes
 
+User-facing options and troubleshooting: [README-DETAILED.md](README-DETAILED.md). Cookie capture: [AUTH.md](AUTH.md).
+
 Alarm.com publishes no consumer API and no documentation. Everything below was established empirically against a live account using `scripts/probe.mjs`. This document exists so the next person to touch this code — likely a future version of the current maintainer — does not have to rediscover it.
 
 Findings are marked **verified** when a live account actually produced the behaviour, and **inferred** when they are reasoned from partial evidence. Please preserve that distinction when you add to this document. In a security integration, a confidently wrong note is worse than an acknowledged gap.

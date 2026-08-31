@@ -83,7 +83,8 @@
     "config.schema.json",
     "CHANGELOG.md",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "docs/**/*"
   ],
   "publishConfig": {
     "access": "public",
