@@ -1,5 +1,7 @@
 # Authentication
 
+Install and options: [README](../README.md). Full options, log lines, and troubleshooting: [README-DETAILED.md](README-DETAILED.md).
+
 Alarm.com publishes no consumer API. This plugin signs in the way the website does: username, password, and — when two-factor is enabled — a browser cookie named `twoFactorAuthenticationId`.
 
 That cookie is **not** the six-digit code from your authenticator app. It is a long, opaque value Alarm.com sets after you complete two-factor verification, and it tells Alarm.com this sign-in has already passed 2FA.

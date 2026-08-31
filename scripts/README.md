@@ -1,5 +1,7 @@
 # Development scripts
 
+User-facing options and troubleshooting: [docs/README-DETAILED.md](../docs/README-DETAILED.md). Cookie capture: [docs/AUTH.md](../docs/AUTH.md).
+
 | Script | Purpose |
 | --- | --- |
 | `probe.mjs` | Signs in to Alarm.com once, reports what the account exposes, probes for a better authentication path, and writes scrubbed JSON:API payloads to `probe-output/` for use as test fixtures. |

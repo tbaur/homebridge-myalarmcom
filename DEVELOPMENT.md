@@ -1,5 +1,7 @@
 # Development
 
+User-facing install and options: [README.md](README.md). Full options, log lines, and troubleshooting: [docs/README-DETAILED.md](docs/README-DETAILED.md). Cookie capture: [docs/AUTH.md](docs/AUTH.md). Wire-level notes: [docs/PROTOCOL.md](docs/PROTOCOL.md).
+
 ## Architecture
 
 Two layers, meeting at the platform. Above it, `devices/` speaks HomeKit and knows nothing about how state was obtained. Below it, `api/` speaks Alarm.com and knows nothing about HomeKit. Every outbound call runs the same gauntlet in the same order: rate limiter, then circuit breaker, then transport.
