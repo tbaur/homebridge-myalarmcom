@@ -125,10 +125,16 @@ describe('config.schema.json', () => {
    * Without these the UI accepts an empty form and the platform starts, logs its
    * validation errors, and publishes nothing — a far worse first experience than
    * being told which field is missing.
+   *
+   * JSON Schema spells this as an array on the object, not a flag on each
+   * property. The per-property form is what the Homebridge plugin-verification
+   * bot flags, and a JSON Schema validator ignores it outright, so the old
+   * spelling enforced nothing.
    */
   it('requires the two credentials the validator treats as fatal', () => {
-    expect(properties.username).toMatchObject({ required: true })
-    expect(properties.password).toMatchObject({ required: true })
+    expect(schema.schema.required).toEqual(['username', 'password'])
+    expect(properties.username).not.toHaveProperty('required')
+    expect(properties.password).not.toHaveProperty('required')
   })
 
   it('lays out every declared option, so none is unreachable in the UI', () => {
