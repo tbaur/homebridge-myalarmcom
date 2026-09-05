@@ -6,24 +6,25 @@
   "footerDisplay": "Alarm.com may lock accounts that poll or sign in too aggressively, and a locked account also loses the Alarm.com app. The intervals below are enforced at safe minimums for that reason.",
   "schema": {
     "type": "object",
+    "required": [
+      "username",
+      "password"
+    ],
     "properties": {
       "name": {
         "title": "Name",
         "type": "string",
         "default": "MyAlarmCom",
-        "required": false,
         "description": "Name Homebridge shows for this platform in its log."
       },
       "username": {
         "title": "Username",
         "type": "string",
-        "required": true,
         "description": "The username you sign in to Alarm.com with. Usually an email address, but any Alarm.com login works."
       },
       "password": {
         "title": "Password",
         "type": "string",
-        "required": true,
         "x-schema-form": {
           "type": "password"
         },
@@ -32,7 +33,6 @@
       "twoFactorAuthenticationId": {
         "title": "Two-Factor Cookie",
         "type": "string",
-        "required": false,
         "x-schema-form": {
           "type": "password"
         },
@@ -75,7 +75,6 @@
       "ignoredDeviceIds": {
         "title": "Ignored Device IDs",
         "type": "array",
-        "required": false,
         "description": "Alarm.com device IDs to leave out of HomeKit entirely. Each ID is shown in the log when its accessory is added, and is also the accessory’s Serial Number in the Home app.",
         "items": {
           "type": "string",

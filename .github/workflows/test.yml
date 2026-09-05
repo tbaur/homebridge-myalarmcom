@@ -16,12 +16,11 @@ jobs:
 
     strategy:
       matrix:
-        # 20.x is the floor `engines.node` promises, reachable through Homebridge
-        # 1.6. `npm ci` warns EBADENGINE there because the *dev* dependency
-        # homebridge 2.x wants ^22 || ^24; that is expected and is not a reason
-        # to drop the 20.x job, which is what proves the published plugin runs
-        # on the version it claims to support.
-        node-version: [20.x, 22.x, 24.x]
+        # Exactly the versions `engines.node` promises, so every runtime the
+        # published plugin claims to support is one CI has run. Node 20 was
+        # dropped when it went end-of-life: Homebridge 2 requires ^22 || ^24 ||
+        # ^26, so promising 20 promised a runtime the host cannot start on.
+        node-version: [22.x, 24.x, 26.x]
 
     steps:
     - name: Checkout code
@@ -65,7 +64,7 @@ jobs:
 
     - name: Upload coverage to artifacts
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-      if: matrix.node-version == '20.x'
+      if: matrix.node-version == '22.x'
       with:
         name: coverage-report
         path: coverage/

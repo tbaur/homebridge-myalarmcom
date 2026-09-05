@@ -3,8 +3,8 @@
 [![Tests](https://github.com/tbaur/homebridge-myalarmcom/actions/workflows/test.yml/badge.svg)](https://github.com/tbaur/homebridge-myalarmcom/actions/workflows/test.yml)
 [![npm version](https://img.shields.io/npm/v/homebridge-myalarmcom?style=flat-square)](https://www.npmjs.com/package/homebridge-myalarmcom)
 [![npm downloads](https://img.shields.io/npm/dt/homebridge-myalarmcom?style=flat-square)](https://www.npmjs.com/package/homebridge-myalarmcom)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D20-green)](https://nodejs.org)
-[![Homebridge](https://img.shields.io/badge/homebridge-%3E%3D1.6.0%20%7C%7C%202.x-purple)](https://homebridge.io)
+[![Node.js](https://img.shields.io/badge/node-22%20%7C%7C%2024%20%7C%7C%2026-green)](https://nodejs.org)
+[![Homebridge](https://img.shields.io/badge/homebridge-%3E%3D2.0.0-purple)](https://homebridge.io)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 Expose your [Alarm.com](https://www.alarm.com) security panel and sensors in Apple HomeKit through Homebridge.
@@ -126,8 +126,8 @@ Alarm.com publishes no consumer API and can change or lock accounts without noti
 
 ## Requirements
 
-- Node.js 20 or newer
-- Homebridge 1.6.x or 2.x
+- Node.js 22, 24, or 26
+- Homebridge 2.x
 - An Alarm.com account
 
 ## More Info

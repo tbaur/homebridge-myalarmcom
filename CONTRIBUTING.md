@@ -26,7 +26,7 @@ npm run lint          # Check code style
 npm run lint:fix      # Auto-fix style issues
 ```
 
-Node 22 or newer for development, matching what `homebridge` 2.x requires. `nvm use` picks that up from `.nvmrc`. The published plugin still supports Node 20 through Homebridge 1.6, which CI verifies by running the whole toolchain on 20, 22, and 24 — the Node 20 job emits an `EBADENGINE` warning for the dev-only `homebridge` dependency, which is expected and not a failure.
+Node 22 or newer for development, matching what `homebridge` 2.x requires. `nvm use` picks that up from `.nvmrc`. The published plugin promises `^22 || ^24 || ^26`, the same set Homebridge 2 supports, and CI verifies it by running the whole toolchain on each of the three. Node 20 was dropped when it went end-of-life, because Homebridge 2 cannot start on it.
 
 ### Code Style
 

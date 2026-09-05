@@ -82,10 +82,32 @@ describe('PartitionAccessory', () => {
       await expect(current.handleGetRequest()).resolves.toBe(HomeKitSecurityState.AWAY_ARM)
     })
 
-    it('answers disarmed before Alarm.com has reported anything', async () => {
-      const current = service().getCharacteristic(Characteristic.SecuritySystemCurrentState)
+    it('answers an arming mode read from the last known attributes', async () => {
+      accessory.update(withAttributes({ state: 2 }))
 
-      await expect(current.handleGetRequest()).resolves.toBe(HomeKitSecurityState.DISARMED)
+      await expect(targetCharacteristic().handleGetRequest())
+        .resolves.toBe(HomeKitSecurityTarget.STAY_ARM)
+    })
+
+    /**
+     * The one answer a security accessory must never invent. A restart during
+     * an Alarm.com outage leaves the panel's real state unknown, and answering
+     * "disarmed" told the Home app, and any automation reading this accessory,
+     * that a possibly-armed panel was safe. Refusing the read is what makes
+     * HomeKit show "No Response" instead of a fabricated state.
+     */
+    describe('before Alarm.com has reported anything', () => {
+      it('refuses to answer the panel state rather than reporting disarmed', async () => {
+        const current = service().getCharacteristic(Characteristic.SecuritySystemCurrentState)
+
+        await expect(current.handleGetRequest())
+          .rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      })
+
+      it('refuses to answer the arming mode rather than reporting disarm', async () => {
+        await expect(targetCharacteristic().handleGetRequest())
+          .rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      })
     })
 
     it('exposes the device id it was configured with', () => {
@@ -165,10 +187,50 @@ describe('PartitionAccessory', () => {
       expect(messagesAt(log, 'warn').join('\n')).toMatch(/does not recognise \(99\)/)
     })
 
-    it('still answers disarmed before any reading, because HAP needs a value', async () => {
+    /**
+     * HAP will not publish an absent value, so a bound characteristic carries a
+     * legal one before any reading arrives. That constraint belongs to the push
+     * path alone, which is why refusing the *read* does not break it: the tile
+     * is bound and valid while a read of the same characteristic still declines
+     * to answer for a panel nobody has heard from.
+     */
+    it('publishes a legal value at bind time while a read still refuses', async () => {
       const current = service().getCharacteristic(Characteristic.SecuritySystemCurrentState)
 
-      await expect(current.handleGetRequest()).resolves.toBe(HomeKitSecurityState.DISARMED)
+      expect(current.props.validValues).toContain(current.value)
+      await expect(current.handleGetRequest())
+        .rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+
+      accessory.update(withAttributes({ state: 3 }))
+
+      expect(characteristicValue(service(), Characteristic.SecuritySystemCurrentState))
+        .toBe(HomeKitSecurityState.AWAY_ARM)
+      expect(characteristicValue(service(), Characteristic.SecuritySystemTargetState))
+        .toBe(HomeKitSecurityTarget.AWAY_ARM)
+    })
+
+    /**
+     * A reading whose state the plugin cannot map leaves the panel's real state
+     * just as unknown as no reading at all. `update` already withholds the write
+     * so the last known value survives — but HAP writes a getter's answer back
+     * into the cached value, so answering "disarmed" here would erase the very
+     * value that withholding was protecting, and call an armed panel disarmed.
+     */
+    it('refuses a read of an unmappable state instead of reporting disarmed', async () => {
+      accessory.update(withAttributes({ state: 3 }))
+      expect(characteristicValue(service(), Characteristic.SecuritySystemCurrentState))
+        .toBe(HomeKitSecurityState.AWAY_ARM)
+
+      accessory.update(withAttributes({ state: 99 }))
+
+      await expect(service().getCharacteristic(Characteristic.SecuritySystemCurrentState)
+        .handleGetRequest()).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      await expect(service().getCharacteristic(Characteristic.SecuritySystemTargetState)
+        .handleGetRequest()).rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+
+      // The armed value the panel last reported is still what HomeKit holds.
+      expect(characteristicValue(service(), Characteristic.SecuritySystemCurrentState))
+        .toBe(HomeKitSecurityState.AWAY_ARM)
     })
 
     it('raises a fault for a malfunctioning panel', () => {

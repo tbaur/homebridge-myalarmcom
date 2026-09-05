@@ -82,11 +82,11 @@ export class PartitionAccessory {
 
     this.#service
       .getCharacteristic(Characteristic.SecuritySystemCurrentState)
-      .onGet(() => this.#currentState())
+      .onGet(() => this.#readCurrentState())
 
     this.#service
       .getCharacteristic(Characteristic.SecuritySystemTargetState)
-      .onGet(() => this.#targetToShow(this.#currentState()) ?? HomeKitSecurityTarget.DISARM)
+      .onGet(() => this.#readTargetState())
       .onSet((value) => this.#handleTargetState(value))
   }
 
@@ -115,21 +115,19 @@ export class PartitionAccessory {
   }
 
   /**
-   * The state to show, or `undefined` when the panel's state is unrecognised.
+   * The state to show, or `undefined` when there is no reading yet or the
+   * panel's state is unrecognised.
    *
    * Kept separate from the characteristic write so an unmappable state can
-   * leave the previous value alone. HAP still needs *some* value before the
-   * first reading, which is the only case that falls back to disarmed.
+   * leave the previous value alone. HAP needs *some* value to publish, so
+   * {@link update} withholds the write rather than invent one. A read is under
+   * no such constraint and refuses instead: see {@link #requireDisplayedState}.
    */
   #displayedState(): number | undefined {
     if (!this.#attributes) {
       return undefined
     }
     return toDisplayedSecurityState(this.#attributes)
-  }
-
-  #currentState(): number {
-    return this.#displayedState() ?? HomeKitSecurityState.DISARMED
   }
 
   /**
@@ -147,6 +145,41 @@ export class PartitionAccessory {
     }
     if (displayedState === HomeKitSecurityState.ALARM_TRIGGERED) {
       return this.#lastShownTarget
+    }
+    return displayedState
+  }
+
+  /** Answer a HomeKit read of the panel's state, or refuse to answer at all. */
+  #readCurrentState(): number {
+    return this.#requireDisplayedState()
+  }
+
+  /** Answer a HomeKit read of the arming mode, or refuse to answer at all. */
+  #readTargetState(): number {
+    return this.#targetToShow(this.#requireDisplayedState()) ?? HomeKitSecurityTarget.DISARM
+  }
+
+  /**
+   * The state to answer a read with, or a refusal to answer.
+   *
+   * Two situations leave the panel's real state unknown: no reading has arrived
+   * yet, as after a restart during an Alarm.com outage; and a reading whose
+   * state Alarm.com describes in terms this plugin cannot map, which
+   * {@link update} has already flagged as a fault. Answering "disarmed" for
+   * either is a false-safety signal on a physical alarm, because neither the
+   * Home app nor an automation can tell it apart from a panel that genuinely is
+   * disarmed. HomeKit is told the accessory cannot be reached instead, and
+   * shows "No Response".
+   *
+   * Refusing also protects what {@link update} was already trying to do. It
+   * withholds the write on an unmappable state so the last known value stays
+   * put; a read that answered "disarmed" would be written straight back into
+   * that cached value by HAP, undoing it.
+   */
+  #requireDisplayedState(): number {
+    const displayedState = this.#displayedState()
+    if (displayedState === undefined) {
+      throw new this.#platform.api.hap.HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
     }
     return displayedState
   }

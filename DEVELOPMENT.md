@@ -156,7 +156,7 @@ npm run diagnose-stream    # build, then isolate a WebSocket connection failure
 
 Note that `npm test` does not build first. When a change needs to be reflected in `dist/`, run `npm run build` explicitly.
 
-Every script takes `--help`, and each one fails with an actionable message — and a non-zero exit — when a required credential or a numeric flag is missing or malformed. Node 22 or newer is expected for development, matching what `homebridge` 2.x requires, and `nvm use` picks that up from `.nvmrc`; the *published* plugin still supports Node 20 via Homebridge 1.6, which the CI matrix proves by running everything on 20, 22, and 24.
+Every script takes `--help`, and each one fails with an actionable message — and a non-zero exit — when a required credential or a numeric flag is missing or malformed. Node 22 or newer is expected for development, matching what `homebridge` 2.x requires, and `nvm use` picks that up from `.nvmrc`; the *published* plugin promises `^22 || ^24 || ^26`, which the CI matrix proves by running everything on 22, 24, and 26.
 
 ## Committed `dist/`
 
