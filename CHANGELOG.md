@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.6...v2.0.0) (2026-09-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* requires Homebridge 2.0 or newer and Node 22, 24 or 26. Homebridge 1.x and Node 20 are no longer supported.
+
+### Bug Fixes
+
+* refuse security-state reads instead of reporting disarmed ([#62](https://github.com/tbaur/homebridge-myalarmcom/issues/62)) ([2f9eb75](https://github.com/tbaur/homebridge-myalarmcom/commit/2f9eb752111fb2338458ad5265b3f4645a17e979))
+
 ## [1.0.6](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.5...v1.0.6) (2026-08-13)
 
 
