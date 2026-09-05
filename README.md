@@ -4,7 +4,7 @@
 [![npm version](https://img.shields.io/npm/v/homebridge-myalarmcom?style=flat-square)](https://www.npmjs.com/package/homebridge-myalarmcom)
 [![npm downloads](https://img.shields.io/npm/dt/homebridge-myalarmcom?style=flat-square)](https://www.npmjs.com/package/homebridge-myalarmcom)
 [![Node.js](https://img.shields.io/badge/node-22%20%7C%7C%2024%20%7C%7C%2026-green)](https://nodejs.org)
-[![Homebridge](https://img.shields.io/badge/homebridge-%3E%3D2.0.0-purple)](https://homebridge.io)
+[![Homebridge](https://img.shields.io/badge/homebridge-2.x-purple)](https://homebridge.io)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 Expose your [Alarm.com](https://www.alarm.com) security panel and sensors in Apple HomeKit through Homebridge.

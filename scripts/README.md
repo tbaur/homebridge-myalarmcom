@@ -16,7 +16,7 @@ User-facing options and troubleshooting: [docs/README-DETAILED.md](../docs/READM
 
 Every script takes `--help`, and `--help` works before the project is built. Each script exits non-zero with an actionable message when a credential is missing, when there is no terminal to prompt at, or when a numeric flag is malformed — rather than silently skipping the phase that flag configures. Numeric flags are validated before anything spends a login.
 
-`probe --ws` needs Node 22 or newer for the global `WebSocket`; on Node 20 it says so and skips the event capture rather than failing after the login.
+`probe --ws` needs the global `WebSocket`, which arrived in Node 22 — the same floor the package declares. On a build without it, the script says so and skips the event capture rather than failing after the login.
 
 They answer different questions. `probe.mjs` reimplements the protocol in order to *discover* it, and is the right tool when Alarm.com changes something and you need to find out what. `verify.mjs` exercises the code that actually ships, and is the right tool for confirming a change behaves correctly against real hardware. `watch-arming.mjs` observes rather than interprets, which is what you want when the question is "what does Alarm.com actually send when I do this?"
 

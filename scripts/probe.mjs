@@ -309,15 +309,15 @@ async function captureDevices(session, systemId, scrubber, context) {
 
 /** Connect to the event stream briefly and record the shapes that arrive. */
 async function listenForEvents(session, seconds) {
-  // Checked before the token request, not after. `globalThis.WebSocket` is behind
-  // a flag until Node 22 while the package supports Node 20, so on the declared
-  // minimum this used to throw `WebSocket is not defined` — after having already
-  // spent a login, which is the one resource this whole script exists to
-  // conserve.
+  // Checked before the token request, not after. The global `WebSocket` arrived
+  // in Node 22, which is also this package's floor, so a build without it means
+  // the script is being run on an unsupported runtime. Failing here rather than
+  // after the token request keeps it from spending a login first, which is the
+  // one resource this whole script exists to conserve.
   const SocketConstructor = globalThis.WebSocket
   if (!SocketConstructor) {
     stdout.write('\nThis Node build has no global WebSocket (it arrived in Node 22).\n')
-    stdout.write('Skipping event capture; re-run on Node 22+ to capture event frames.\n')
+    stdout.write('Skipping event capture; re-run on a supported Node to capture event frames.\n')
     return []
   }
 
