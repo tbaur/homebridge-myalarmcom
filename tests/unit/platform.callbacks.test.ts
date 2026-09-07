@@ -194,6 +194,21 @@ describe('platform collaborator callbacks', () => {
     })
   })
 
+  /**
+   * What an arming command consults before deciding a panel will refuse it.
+   * The fixture is deliberately mixed: one contact closed, one open, and a
+   * motion sensor reading activated at the same time.
+   */
+  describe('listOpenContacts', () => {
+    it('names an open contact and ignores an activated motion sensor', async () => {
+      const platform = await launch()
+
+      // Hallway Motion is activated in the fixture. Motion does not stop a
+      // panel arming, so counting it would refuse arms that would have worked.
+      expect(platform.listOpenContacts()).toEqual(['Kitchen Window'])
+    })
+  })
+
   describe('the event stream callbacks', () => {
     it('notes at debug that push updates are gone and polling has taken over', async () => {
       await launch()

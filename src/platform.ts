@@ -232,6 +232,27 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     return this.#config.allowSensorBypass
   }
 
+  /**
+   * Names of contacts standing open, which a panel will not arm over.
+   *
+   * Empty when the account has more than one partition. Alarm.com reports
+   * sensors per system, not per partition, so with several partitions there is
+   * no way to tell whether an open door belongs to the one being armed, and
+   * refusing on that basis would block an arm the panel would have accepted.
+   *
+   * Sorted so a message naming several of them reads the same way twice.
+   */
+  listOpenContacts(): string[] {
+    if (this.#partitions.size !== 1) {
+      return []
+    }
+
+    return [...this.#sensors.values()]
+      .filter((sensor) => sensor.isOpenContact)
+      .map((sensor) => sensor.name)
+      .sort()
+  }
+
   /** Homebridge replays cached accessories here on startup. */
   configureAccessory(accessory: PlatformAccessory): void {
     this.#cachedAccessories.set(accessory.UUID, accessory)

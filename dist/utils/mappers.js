@@ -219,6 +219,7 @@ function toHomeKitSensorState(attributes) {
         kind,
         value: toCharacteristicValue(kind, reading.isTriggered),
         label: reading.label,
+        isTriggered: reading.isTriggered,
         isAmbiguous: reading.isAmbiguous,
     };
 }

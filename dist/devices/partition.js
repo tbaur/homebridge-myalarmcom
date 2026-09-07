@@ -290,9 +290,39 @@ class PartitionAccessory {
         if (!action) {
             throw new this.#platform.api.hap.HapStatusError(-70410 /* HAPStatus.INVALID_VALUE_IN_REQUEST */);
         }
+        if (action !== 'disarm') {
+            this.#refuseArmOverOpenSensors(target);
+        }
         this.#targetState = target;
         this.#targetSetAt = Date.now();
         await this.#sendCommand(action, target, buildCommandOptions(attributes, target, this.#platform.isSensorBypassAllowed));
+    }
+    /**
+     * Refuse an arm the panel is certain to reject, before spending a minute on it.
+     *
+     * A panel asked to arm over an open contact does not answer at all. The
+     * request stays open until the client's own ceiling expires, so the user
+     * waited a full minute to be told something the plugin already knew the
+     * moment they tapped. Answering now costs nothing and reverts the tile at
+     * once.
+     *
+     * The open sensors are named because "close the sensor" is not usable advice
+     * when the whole question is which one.
+     */
+    #refuseArmOverOpenSensors(target) {
+        if (this.#platform.isSensorBypassAllowed) {
+            return;
+        }
+        const open = this.#platform.listOpenContacts();
+        if (open.length === 0) {
+            return;
+        }
+        const isSingle = open.length === 1;
+        this.#log.error(`${this.#name}: cannot reach ${(0, mappers_1.toSecurityStateLabel)(target)} because `
+            + `${formatNameList(open)} ${isSingle ? 'is' : 'are'} open. `
+            + `Close ${isSingle ? 'it' : 'them'}, or turn on "Allow arming with open sensors" `
+            + 'to have the panel bypass them.');
+        throw new this.#platform.api.hap.HapStatusError(-70412 /* HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE */);
     }
     /**
      * Refuse the command unless this account is known to be allowed to arm.
@@ -413,20 +443,26 @@ exports.PartitionAccessory = PartitionAccessory;
 function toSeconds(ms) {
     return `${(ms / settings_1.MS_PER_SECOND).toFixed(1).replace(/\.0$/, '')}s`;
 }
+/** Names as a person would list them: "A", "A and B", "A, B and C". */
+function formatNameList(names) {
+    if (names.length <= 1) {
+        return names[0] ?? '';
+    }
+    return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
 /**
  * Say what went wrong in terms of what the user can do about it.
  *
- * A timeout here is nearly always a refusal rather than a network fault.
- * Alarm.com holds the request open until the panel replies, and a panel that
- * will not arm simply never replies — most often because a sensor is open. The
- * raw error says none of that: it reported the timeout twice, once wrapped in
- * the other, alongside the full request URL, and left the reader to guess.
+ * The raw error said none of that: it reported the timeout twice, once wrapped
+ * in the other, alongside the full request URL. Nor does this call a timeout a
+ * refusal any more. The refusal the plugin can see coming — an open contact
+ * with bypass off — is now answered before the request is sent, so what reaches
+ * here is genuinely unexplained and says so instead of guessing.
  */
 function describeCommandFailure(error, elapsedMs) {
     if (error instanceof errors_1.TimeoutError) {
-        return `the panel never answered, and the request was abandoned after ${toSeconds(elapsedMs)}. `
-            + 'A panel that refuses to arm goes quiet like this, usually because a sensor is open. '
-            + 'Close it, or turn on "Allow arming with open sensors" to have the panel bypass it.';
+        return `Alarm.com did not reply within ${toSeconds(elapsedMs)}. `
+            + 'The panel may still be acting on the request; check the Alarm.com app before retrying.';
     }
     return (0, sanitizers_1.sanitizeError)(error);
 }

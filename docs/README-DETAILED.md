@@ -95,16 +95,26 @@ Architecture: [DEVELOPMENT.md](../DEVELOPMENT.md). Wire-level notes: [PROTOCOL.m
 7. **`Circuit breaker CLOSED -> OPEN`.** Repeated failures, so requests are being refused locally for 30 seconds at a time. This protects your account from looking like a scraper, which Alarm.com locks accounts for.
 8. **`Continuing with polling only`.** The push event stream gave up after repeated failures. State still updates, just on the poll interval instead of within a second or two. The stream is retried every 15 minutes.
 9. **`did not reach <state>`.** An arming request was accepted but the panel never confirmed it, usually an open zone or a keypad abort. The tile falls back to the panel's real state after a minute. For an open zone, `allowSensorBypass` lets the panel arm past it instead, at the cost of arming with that sensor unmonitored.
-10. **Arming appears to hang, then fails.** A panel refusing to arm over an open zone never answers, so the request runs to its 60-second ceiling before the log reports `could not reach Armed Stay — the panel never answered`. Close the zone, or enable `allowSensorBypass` so the panel bypasses it. Note that a *successful* arm is also slow: Alarm.com holds the request open until the panel acknowledges, measured at 17-25 seconds, so the Home app shows the requested state as pending for that long before the panel confirms it. That is normal and is not a failure. Each command logs twice, once when it goes out and once when it finishes:
+10. **Arming is refused because a sensor is open.** With `allowSensorBypass` off, an arm is refused straight away and the open contacts are named, rather than being sent to a panel that would never answer:
+
+    ```
+    [myalarmcom] Alarm Panel: cannot reach Armed Stay because Living Room Patio Door
+    is open. Close it, or turn on "Allow arming with open sensors" to have the panel
+    bypass them.
+    ```
+
+    Only contact sensors count. An active motion sensor does not stop a panel arming. On an account with more than one partition the check is skipped entirely, because Alarm.com reports sensors per system rather than per partition and there is no way to tell which partition an open door belongs to.
+
+11. **Arming is slow, but not broken.** Alarm.com holds the request open until the panel acknowledges, measured at 17-25 seconds, so the Home app shows the requested state as pending for that long before the panel confirms. That is normal. Each command logs twice, once when it goes out and once when it finishes:
 
     ```
     [myalarmcom] Alarm Panel: requesting Armed Stay
     [myalarmcom] Alarm Panel: Armed Stay, confirmed by the panel in 17.3s
     ```
-11. **`reported an arming state this plugin does not recognise`.** The tile keeps its last known value and shows a fault rather than guessing. Please open an issue with the state number.
-12. **`is now reporting as a <kind> sensor`.** An Alarm.com device ID is reporting a different hardware type than the accessory published for it. Its state is left alone rather than written to the wrong characteristic. Restart Homebridge to republish it.
-13. **`issued a new two-factor trust token`.** The configured `twoFactorAuthenticationId` was not accepted and Alarm.com handed back a different one. Requests still work for now. Capture a fresh cookie ([AUTH.md](AUTH.md)) before they start failing.
-14. **`keep-alive failed repeatedly`.** Three consecutive session touches failed, so the session was discarded and the next request signs in again. Usually a network blip. Persistent occurrences point at an expired cookie.
+12. **`reported an arming state this plugin does not recognise`.** The tile keeps its last known value and shows a fault rather than guessing. Please open an issue with the state number.
+13. **`is now reporting as a <kind> sensor`.** An Alarm.com device ID is reporting a different hardware type than the accessory published for it. Its state is left alone rather than written to the wrong characteristic. Restart Homebridge to republish it.
+14. **`issued a new two-factor trust token`.** The configured `twoFactorAuthenticationId` was not accepted and Alarm.com handed back a different one. Requests still work for now. Capture a fresh cookie ([AUTH.md](AUTH.md)) before they start failing.
+15. **`keep-alive failed repeatedly`.** Three consecutive session touches failed, so the session was discarded and the next request signs in again. Usually a network blip. Persistent occurrences point at an expired cookie.
 
 ## Collecting diagnostics
 

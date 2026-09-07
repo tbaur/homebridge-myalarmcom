@@ -30,6 +30,17 @@ export declare class MyAlarmComPlatform implements DynamicPlatformPlugin {
      * accessory cannot quietly grow a dependency on unrelated settings.
      */
     get isSensorBypassAllowed(): boolean;
+    /**
+     * Names of contacts standing open, which a panel will not arm over.
+     *
+     * Empty when the account has more than one partition. Alarm.com reports
+     * sensors per system, not per partition, so with several partitions there is
+     * no way to tell whether an open door belongs to the one being armed, and
+     * refusing on that basis would block an arm the panel would have accepted.
+     *
+     * Sorted so a message naming several of them reads the same way twice.
+     */
+    listOpenContacts(): string[];
     /** Homebridge replays cached accessories here on startup. */
     configureAccessory(accessory: PlatformAccessory): void;
     /** Record a HomeKit-originated arming command for diagnostics. */

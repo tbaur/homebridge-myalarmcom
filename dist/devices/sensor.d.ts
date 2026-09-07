@@ -27,6 +27,16 @@ export declare class SensorAccessory {
     get deviceId(): string;
     /** The device type established at discovery, which push frames misreport. */
     get kind(): SensorServiceKind;
+    /** The name Alarm.com last reported, for messages about this sensor. */
+    get name(): string;
+    /**
+     * Whether this is a contact standing open, which stops a panel arming.
+     *
+     * Only contacts. An active motion sensor does not prevent arming, and neither
+     * does a smoke detector, so counting them would refuse arms that would have
+     * worked. Unknown until the first reading, and unknown means no.
+     */
+    get isOpenContact(): boolean;
     /**
      * Republish the name when Alarm.com reports a different one.
      *

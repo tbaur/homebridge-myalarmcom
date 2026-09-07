@@ -28,6 +28,8 @@ class SensorAccessory {
     #logChange;
     /** Latest name Alarm.com reported, so push and poll lines agree. */
     #name;
+    /** Latest reading, or `null` before the first one. Read when arming. */
+    #isTriggered = null;
     /** Whether an unresolvable reading has already been reported for this sensor. */
     #hasReportedUnsupportedType = false;
     #hasReportedAmbiguity = false;
@@ -48,6 +50,20 @@ class SensorAccessory {
     /** The device type established at discovery, which push frames misreport. */
     get kind() {
         return this.#kind;
+    }
+    /** The name Alarm.com last reported, for messages about this sensor. */
+    get name() {
+        return this.#name;
+    }
+    /**
+     * Whether this is a contact standing open, which stops a panel arming.
+     *
+     * Only contacts. An active motion sensor does not prevent arming, and neither
+     * does a smoke detector, so counting them would refuse arms that would have
+     * worked. Unknown until the first reading, and unknown means no.
+     */
+    get isOpenContact() {
+        return this.#kind === 'contact' && this.#isTriggered === true;
     }
     /**
      * Republish the name when Alarm.com reports a different one.
@@ -107,6 +123,7 @@ class SensorAccessory {
      */
     applyImmediateState(isTriggered, isTransient = false) {
         this.#clearTransientReset();
+        this.#isTriggered = isTriggered;
         this.#service.updateCharacteristic(this.#primaryCharacteristic(), (0, mappers_1.toCharacteristicValue)(this.#kind, isTriggered));
         this.#logChange.report(this.#name, (0, mappers_1.toImmediateSensorLabel)(this.#kind, isTriggered));
         if (isTransient && isTriggered) {
@@ -167,6 +184,7 @@ class SensorAccessory {
             this.#hasReportedAmbiguity = false;
         }
         this.#service.updateCharacteristic(this.#primaryCharacteristic(), mapped.value);
+        this.#isTriggered = mapped.isTriggered;
         const { Characteristic } = this.#platform;
         // StatusActive is how HomeKit expresses "this sensor exists but is not
         // currently supervised", which is exactly what disabled monitoring means.
