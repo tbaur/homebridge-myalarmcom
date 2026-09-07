@@ -43,6 +43,8 @@ export class SensorAccessory {
   readonly #logChange: ChangeLogger
   /** Latest name Alarm.com reported, so push and poll lines agree. */
   #name: string
+  /** Latest reading, or `null` before the first one. Read when arming. */
+  #isTriggered: boolean | null = null
   /** Whether an unresolvable reading has already been reported for this sensor. */
   #hasReportedUnsupportedType = false
   #hasReportedAmbiguity = false
@@ -71,6 +73,22 @@ export class SensorAccessory {
   /** The device type established at discovery, which push frames misreport. */
   get kind(): SensorServiceKind {
     return this.#kind
+  }
+
+  /** The name Alarm.com last reported, for messages about this sensor. */
+  get name(): string {
+    return this.#name
+  }
+
+  /**
+   * Whether this is a contact standing open, which stops a panel arming.
+   *
+   * Only contacts. An active motion sensor does not prevent arming, and neither
+   * does a smoke detector, so counting them would refuse arms that would have
+   * worked. Unknown until the first reading, and unknown means no.
+   */
+  get isOpenContact(): boolean {
+    return this.#kind === 'contact' && this.#isTriggered === true
   }
 
   /**
@@ -138,6 +156,7 @@ export class SensorAccessory {
    */
   applyImmediateState(isTriggered: boolean, isTransient = false): void {
     this.#clearTransientReset()
+    this.#isTriggered = isTriggered
 
     this.#service.updateCharacteristic(
       this.#primaryCharacteristic(),
@@ -218,6 +237,7 @@ export class SensorAccessory {
     }
 
     this.#service.updateCharacteristic(this.#primaryCharacteristic(), mapped.value)
+    this.#isTriggered = mapped.isTriggered
 
     const { Characteristic } = this.#platform
 

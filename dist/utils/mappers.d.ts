@@ -96,6 +96,8 @@ export interface MappedSensorState {
     value: HomeKitContactState | HomeKitSmokeState | boolean;
     /** Alarm.com's own wording, for logs. */
     label: string;
+    /** Whether the sensor is away from rest: a contact open, a motion active. */
+    isTriggered: boolean;
     /** Set when the underlying reading was not conclusive. */
     isAmbiguous: boolean;
 }

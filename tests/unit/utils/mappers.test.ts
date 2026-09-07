@@ -146,6 +146,7 @@ describe('toHomeKitSensorState', () => {
       kind: 'contact',
       value: HomeKitContactState.CONTACT_DETECTED,
       label: 'Closed',
+      isTriggered: false,
       isAmbiguous: false,
     })
   })
@@ -155,6 +156,7 @@ describe('toHomeKitSensorState', () => {
       kind: 'contact',
       value: HomeKitContactState.CONTACT_NOT_DETECTED,
       label: 'Open',
+      isTriggered: true,
       isAmbiguous: false,
     })
   })
@@ -164,6 +166,7 @@ describe('toHomeKitSensorState', () => {
       kind: 'motion',
       value: true,
       label: 'Activated',
+      isTriggered: true,
       isAmbiguous: false,
     })
   })
@@ -173,6 +176,7 @@ describe('toHomeKitSensorState', () => {
       kind: 'motion',
       value: false,
       label: 'Idle',
+      isTriggered: false,
       isAmbiguous: false,
     })
   })
@@ -182,6 +186,7 @@ describe('toHomeKitSensorState', () => {
       kind: 'smoke',
       value: HomeKitSmokeState.SMOKE_NOT_DETECTED,
       label: 'Not Reset',
+      isTriggered: false,
       isAmbiguous: false,
     })
   })

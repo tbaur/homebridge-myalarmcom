@@ -38,7 +38,9 @@ describe('PartitionAccessory', () => {
   let bed: PlatformTestBed
   let accessory: PartitionAccessory
 
-  function mount(options: { isSensorBypassAllowed?: boolean } = {}): PartitionAccessory {
+  function mount(
+    options: { isSensorBypassAllowed?: boolean, openContacts?: string[] } = {},
+  ): PartitionAccessory {
     const context: PartitionAccessoryContext = {
       deviceId: livePartition.id,
       kind: 'partition',
@@ -411,6 +413,72 @@ describe('PartitionAccessory', () => {
       expect(armedLines).toEqual(['Home: requesting Armed Away', expect.stringContaining(
         'Home: Armed Away, confirmed by the panel in',
       )])
+    })
+
+    /**
+     * A panel asked to arm over an open contact never answers, so the request
+     * ran to the client's 60-second ceiling before reporting a failure the
+     * plugin could have predicted the moment the tile was tapped. Waiting a
+     * minute to be told no is the complaint that prompted this.
+     */
+    describe('with a contact standing open and bypass turned off', () => {
+      it('refuses immediately instead of sending a command that cannot succeed', async () => {
+        mount({ openContacts: ['Living Room Patio Door'] })
+        accessory.update(controllable)
+
+        await expect(requestTarget(HomeKitSecurityTarget.STAY_ARM))
+          .rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE)
+
+        expect(bed.commandPartition).not.toHaveBeenCalled()
+      })
+
+      it('names the sensor, because "close the sensor" does not say which', async () => {
+        mount({ openContacts: ['Living Room Patio Door'] })
+        accessory.update(controllable)
+
+        await expect(requestTarget(HomeKitSecurityTarget.STAY_ARM)).rejects.toBeDefined()
+
+        expect(messagesAt(log, 'error')).toEqual([
+          'Home: cannot reach Armed Stay because Living Room Patio Door is open. '
+          + 'Close it, or turn on "Allow arming with open sensors" to have the panel bypass them.',
+        ])
+      })
+
+      it('lists several of them as a person would', async () => {
+        mount({ openContacts: ['Garage Door', 'Office Windows', 'Patio Door'] })
+        accessory.update(controllable)
+
+        await expect(requestTarget(HomeKitSecurityTarget.AWAY_ARM)).rejects.toBeDefined()
+
+        expect(messagesAt(log, 'error').join('')).toContain(
+          'because Garage Door, Office Windows and Patio Door are open. Close them,',
+        )
+      })
+
+      // Disarming over an open sensor is exactly how someone gets back in.
+      it('still allows a disarm', async () => {
+        mount({ openContacts: ['Living Room Patio Door'] })
+        bed.commandPartition.mockResolvedValue(livePartition)
+        accessory.update(controllable)
+
+        await requestTarget(HomeKitSecurityTarget.DISARM)
+
+        expect(bed.commandPartition).toHaveBeenCalledWith('1234567-127', 'disarm', expect.any(Object))
+      })
+
+      it('sends the command anyway once bypass is turned on', async () => {
+        mount({ openContacts: ['Living Room Patio Door'], isSensorBypassAllowed: true })
+        bed.commandPartition.mockResolvedValue(livePartition)
+        accessory.update(controllable)
+
+        await requestTarget(HomeKitSecurityTarget.STAY_ARM)
+
+        expect(bed.commandPartition).toHaveBeenCalledWith(
+          '1234567-127',
+          'armStay',
+          expect.objectContaining({ forceBypass: true }),
+        )
+      })
     })
 
     it('disarms', async () => {
