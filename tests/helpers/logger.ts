@@ -41,3 +41,30 @@ export function createRecordingLogger(isDebugEnabled = true): RecordingLogger {
 export function messagesAt(logger: RecordingLogger, level: LogLevel): string[] {
   return logger[level].mock.calls.map((call: unknown[]) => String(call[0]))
 }
+
+/**
+ * Assert one logged line matches, and return it so its wording can be checked.
+ *
+ * Prefer this to `expect(messages.some(...)).toBe(true)`. That form passes as
+ * long as a match exists anywhere and says nothing about the rest, which is how
+ * a single arm came to log three lines — two of them near-duplicates — past a
+ * fully green suite. Requiring exactly one match turns a repeated line into a
+ * failure, and returning it means the assertion can go on to pin what it says
+ * rather than stopping at the fact that something did.
+ *
+ * Where the whole output is short and predictable, assert the entire array
+ * instead; this is for the cases where it is neither.
+ */
+export function expectOneMessage(messages: readonly string[], pattern: RegExp | string): string {
+  const matches = messages.filter((message) =>
+    typeof pattern === 'string' ? message.includes(pattern) : pattern.test(message))
+
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected exactly one message matching ${String(pattern)}, found ${matches.length}.\n`
+      + `All messages:\n${messages.map((message) => `  ${message}`).join('\n')}`,
+    )
+  }
+
+  return matches[0] as string
+}
