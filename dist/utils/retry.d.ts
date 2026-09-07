@@ -54,5 +54,17 @@ export declare const sleep: (ms: number, signal?: AbortSignal, options?: SleepOp
  * otherwise retry in lockstep and look exactly like an attack.
  */
 export declare function computeBackoffMs(attempt: number, baseDelayMs?: number, maxDelayMs?: number, random?: () => number): number;
+/**
+ * Run an operation, retrying retryable failures with backoff.
+ *
+ * Only errors that declare themselves retryable are retried; everything else
+ * propagates immediately. A `Retry-After` from Alarm.com wins over the computed
+ * backoff within the configured ceiling, since arguing with a rate limiter is
+ * how accounts get locked; beyond the ceiling the retry is abandoned so the
+ * caller's own schedule can decide when to try again.
+ *
+ * @param operation Must be idempotent. Do not wrap arming commands in this.
+ * @throws {OperationAbortedError} `options.signal` aborted during a wait.
+ */
 export declare function withRetry<T>(operation: () => Promise<T>, options?: RetryOptions): Promise<T>;
 //# sourceMappingURL=retry.d.ts.map

@@ -18,7 +18,6 @@ import type { Logger } from '../utils/logger';
 import { CircuitBreaker, CircuitState } from './circuit-breaker';
 import { RateLimiter } from './rate-limiter';
 import type { SessionManager } from './session-manager';
-export type { EventStreamToken, PartitionAction };
 /** One timed API call outcome for diagnostics. */
 export interface ApiRequestMetric {
     durationMs: number;
@@ -86,11 +85,14 @@ export declare class AlarmComClient {
     /**
      * Send an arming command to a partition.
      *
-     * Modifiers are omitted rather than sent as `false` because neither applies
-     * to a disarm and a panel need not understand them. `forceBypass: true` was
-     * measured as accepted on a panel that advertises BYPASS_SENSORS but not
-     * FORCE_ARM, so an unadvertised modifier does not necessarily break the
-     * command; whether to send it at all is decided by the caller.
+     * "Modifier" splits two ways here, so be exact. `noEntryDelay` and
+     * `silentArming` are always sent as `false` on an arm, because the endpoint
+     * expects the keys; only `nightArming` and `forceBypass` are omitted when
+     * unset. A disarm carries none of them.
+     *
+     * `forceBypass: true` was measured as accepted on a panel that advertises
+     * BYPASS_SENSORS but not FORCE_ARM, so an unadvertised modifier does not
+     * necessarily break the command; whether to send it is the caller's decision.
      *
      * Not wrapped in {@link withRetry}: arming is not idempotent from the user's
      * point of view — a duplicate command can produce a second exit-delay

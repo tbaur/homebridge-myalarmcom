@@ -90,6 +90,19 @@ describe('PartitionAccessory', () => {
       await expect(current.handleGetRequest()).resolves.toBe(HomeKitSecurityState.AWAY_ARM)
     })
 
+    /**
+     * The alarm is sounding and no target has ever been published, because the
+     * very first reading arrived mid-alarm and `update` rightly withheld the
+     * write. There is genuinely no honest answer, and the fallback used to
+     * supply "Disarm" — telling the Home app and any automation reading it that
+     * a house with its alarm going off was unarmed.
+     */
+    it('refuses the arming mode read when an alarm arrives before any target', async () => {
+      accessory.update(withAttributes({ state: 2, hasActiveAlarm: true }))
+
+      await expect(targetCharacteristic().handleGetRequest()).rejects.toBeDefined()
+    })
+
     it('answers an arming mode read from the last known attributes', async () => {
       accessory.update(withAttributes({ state: 2 }))
 
@@ -509,6 +522,47 @@ describe('PartitionAccessory', () => {
           expect.objectContaining({ forceBypass: true }),
         )
       })
+
+      /**
+       * Turning the setting on is not enough for a bypass to happen; the panel
+       * has to offer it for the mode being requested. The refusal check and the
+       * command builder each decided this separately, and only the builder
+       * asked the panel — so on a panel that does not advertise `BYPASS_SENSORS`
+       * the arm was waved through with no bypass flag and hung for the full
+       * sixty seconds, which is the failure the refusal exists to prevent.
+       */
+      it('still refuses when the panel will not bypass, however the setting is set', async () => {
+        mount({ openContacts: ['Living Room Patio Door'], isSensorBypassAllowed: true })
+        bed.commandPartition.mockResolvedValue(livePartition)
+        accessory.update({
+          ...controllable,
+          attributes: {
+            ...controllable.attributes,
+            extendedArmingOptions: { ArmedStay: [], ArmedAway: [] },
+          },
+        })
+
+        await expect(requestTarget(HomeKitSecurityTarget.STAY_ARM))
+          .rejects.toBe(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE)
+
+        expect(bed.commandPartition).not.toHaveBeenCalled()
+      })
+
+      // "Turn on the setting you already turned on" reads as the plugin not
+      // listening. The reason it cannot bypass is the panel, so say that.
+      it('does not advise turning on a setting that is already on', async () => {
+        mount({ openContacts: ['Patio Door'], isSensorBypassAllowed: true })
+        accessory.update({
+          ...controllable,
+          attributes: { ...controllable.attributes, extendedArmingOptions: { ArmedAway: [] } },
+        })
+
+        await expect(requestTarget(HomeKitSecurityTarget.AWAY_ARM)).rejects.toBeDefined()
+
+        const message = messagesAt(log, 'error').join('')
+        expect(message).toContain('does not offer sensor bypass')
+        expect(message).not.toContain('Allow arming with open sensors')
+      })
     })
 
     it('disarms', async () => {
@@ -766,6 +820,56 @@ describe('PartitionAccessory', () => {
       // HomeKit was already told the request was accepted, so only a re-read
       // can correct the tile before the next poll.
       expect(bed.requestDeviceRefresh).toHaveBeenCalledWith('1234567-127')
+    })
+
+    /**
+     * Answering HomeKit at the deadline lets it send another command while the
+     * first is still running, so two can be in flight at once. The first to
+     * finish is not necessarily the one the user is waiting on.
+     *
+     * Tapping Away and then Disarm used to end with the Away command clearing
+     * the pending Disarm and reporting "could not reach Armed Away" — an error
+     * about a request the user had already replaced, on a tile that then
+     * snapped back.
+     */
+    it('lets a superseded command fail without disturbing the one that replaced it', async () => {
+      const away = deferCommand()
+      await armPastTheDeadline()
+
+      const disarm = deferCommand()
+      const secondWrite = requestTarget(HomeKitSecurityTarget.DISARM)
+      await jest.advanceTimersByTimeAsync(PARTITION_COMMAND_DEADLINE_MS)
+      await secondWrite
+
+      away.reject(new Error('Alarm.com returned 500'))
+      await jest.advanceTimersByTimeAsync(0)
+
+      expect(messagesAt(log, 'error')).toEqual([])
+      accessory.update(controllable)
+      expect(characteristicValue(service(), Characteristic.SecuritySystemTargetState))
+        .toBe(HomeKitSecurityTarget.DISARM)
+
+      disarm.resolve()
+      await jest.advanceTimersByTimeAsync(0)
+      expect(messagesAt(log, 'info')).toContain('Home: requesting Disarmed')
+    })
+
+    it('does not credit a superseded command that succeeds late', async () => {
+      const away = deferCommand()
+      await armPastTheDeadline()
+
+      deferCommand()
+      const secondWrite = requestTarget(HomeKitSecurityTarget.DISARM)
+      await jest.advanceTimersByTimeAsync(PARTITION_COMMAND_DEADLINE_MS)
+      await secondWrite
+
+      away.resolve()
+      await jest.advanceTimersByTimeAsync(0)
+
+      expect(messagesAt(log, 'info')).not.toContain(
+        expect.stringContaining('Armed Away, confirmed'),
+      )
+      expect(bed.recordCommand).not.toHaveBeenCalled()
     })
   })
 

@@ -77,6 +77,8 @@ function readRequiredString(value, field, report) {
     }
     return trimmed;
 }
+/** Why the polling and re-authentication floors exist. */
+const ACCOUNT_LOCKOUT_RATIONALE = 'Alarm.com may lock accounts that poll or re-authenticate more aggressively than this';
 /**
  * Clamp a numeric setting into [floor, ceiling], recording a warning if adjusted.
  *
@@ -87,8 +89,6 @@ function readRequiredString(value, field, report) {
  * Rounded to an integer to match `config.schema.json`, which declares these
  * fields as integers and so never produced a fractional value through the UI.
  */
-/** Why the polling and re-authentication floors exist. */
-const ACCOUNT_LOCKOUT_RATIONALE = 'Alarm.com may lock accounts that poll or re-authenticate more aggressively than this';
 function clampToRange(value, { field, fallback, floor, ceiling, unit, warnings, floorRationale = ACCOUNT_LOCKOUT_RATIONALE }) {
     if (value === undefined || value === null) {
         return fallback;

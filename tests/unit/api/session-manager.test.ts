@@ -131,7 +131,10 @@ describe('SessionManager', () => {
     await manager.getSession()
 
     expect(mockedSleep).toHaveBeenCalledTimes(1)
-    expect(mockedSleep).toHaveBeenCalledWith(2_000, undefined)
+    // Held, not unref'd: a caller is awaiting this, and an unref'd timer lets a
+    // bare process exit mid-wait and strand the promise. Same reasoning as the
+    // rate limiter's pacing wait.
+    expect(mockedSleep).toHaveBeenCalledWith(2_000, undefined, { shouldHoldProcess: true })
     expect(messagesAt(log, 'debug').join('\n')).toMatch(/deferring re-authentication for 2s/)
   })
 
@@ -188,7 +191,7 @@ describe('SessionManager', () => {
     await expect(manager.getSession()).resolves.toBeDefined()
 
     expect(mockedSleep).toHaveBeenCalledTimes(1)
-    expect(mockedSleep).toHaveBeenCalledWith(3_000, undefined)
+    expect(mockedSleep).toHaveBeenCalledWith(3_000, undefined, { shouldHoldProcess: true })
     expect(mockedAuthenticate).toHaveBeenCalledTimes(2)
   })
 

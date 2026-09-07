@@ -128,7 +128,12 @@ class SessionManager {
             throw new errors_1.LoginThrottledError(remainingMs);
         }
         this.#log.debug(`deferring re-authentication for ${Math.round(remainingMs / settings_1.MS_PER_SECOND)}s to stay within the login floor`);
-        await (0, retry_1.sleep)(remainingMs, this.#signal);
+        // Held, like the rate limiter's pacing wait, because a caller is already
+        // awaiting this. An unref'd timer lets a process with nothing else
+        // scheduled exit mid-wait, stranding that promise unsettled — which looks
+        // like a clean exit rather than a failure. Capped at five seconds by the
+        // check above, so it cannot hold a process open for long.
+        await (0, retry_1.sleep)(remainingMs, this.#signal, { shouldHoldProcess: true });
     }
     async #login() {
         // The floor applies after a successful sign-in or a permanent credential

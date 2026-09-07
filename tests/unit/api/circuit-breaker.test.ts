@@ -56,7 +56,6 @@ describe('CircuitBreaker', () => {
 
     expect(breaker.getStatus().state).toBe(CircuitState.CLOSED)
     expect(breaker.canRequest()).toBe(true)
-    expect(breaker.isOpen).toBe(false)
   })
 
   it('opens once failures reach the threshold', () => {
@@ -207,7 +206,6 @@ describe('CircuitBreaker', () => {
       state: CircuitState.OPEN,
       remainingResetTimeMs: CONFIG.resetTimeoutMs - 10_000,
     })
-    expect(breaker.isOpen).toBe(true)
   })
 
   it('reports no reset time while closed', () => {
