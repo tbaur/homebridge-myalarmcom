@@ -51,7 +51,6 @@ export interface Session {
   cookieHeader: string
   /** Anti-CSRF value for the `ajaxrequestuniquekey` header. */
   ajaxKey: string
-  /** When this session was established. */
 }
 
 /** Result of scraping the login page. */

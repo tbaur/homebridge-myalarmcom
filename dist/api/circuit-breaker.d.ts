@@ -46,9 +46,10 @@ export declare const DEFAULT_CIRCUIT_BREAKER_CONFIG: CircuitBreakerConfig;
 /**
  * Snapshot of breaker state, for diagnostics.
  *
- * Trimmed to what is consumed. It previously carried `failures`, `successes`,
- * `lastFailureTime` and `isOpen`, all computed on every diagnostics heartbeat
- * and read by nothing.
+ * Trimmed once already: `successes` and `lastFailureTime` were computed on
+ * every diagnostics heartbeat and read by nothing. What remains describes an
+ * outage well enough to explain one — whether the breaker is open, how much
+ * recent failure put it there, and when it will next let a request through.
  */
 export interface CircuitBreakerStatus {
     state: CircuitState;
@@ -66,8 +67,6 @@ export declare class CircuitBreaker {
      * replacing any listener already supplied at construction.
      */
     attachOnStateChange(handler: (from: CircuitState, to: CircuitState) => void): void;
-    /** Whether the breaker is currently rejecting requests outright. */
-    get isOpen(): boolean;
     /** Whether a request may proceed right now. */
     canRequest(): boolean;
     /** Note that a guarded call succeeded, closing the circuit once enough have. */

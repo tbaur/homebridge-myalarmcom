@@ -30,6 +30,15 @@ class PartitionAccessory {
     #lastShownTarget = undefined;
     /** When {@link #targetState} was set, so a never-confirmed target can expire. */
     #targetSetAt = 0;
+    /**
+     * Counts commands, so a slow one can tell it has been superseded.
+     *
+     * A command outlives the HAP deadline by up to fifty seconds, and HomeKit is
+     * free to send another the moment that deadline passes. Comparing this at the
+     * end against the value taken at the start is how an outcome knows whether
+     * the tile is still its to speak for.
+     */
+    #commandSequence = 0;
     /** Reports a state at info only when it differs from the previous one. */
     #logChange;
     /** Whether an active alarm was already reported, so it is warned about once. */
@@ -111,9 +120,23 @@ class PartitionAccessory {
     #readCurrentState() {
         return this.#requireDisplayedState();
     }
-    /** Answer a HomeKit read of the arming mode, or refuse to answer at all. */
+    /**
+     * Answer a HomeKit read of the arming mode, or refuse to answer at all.
+     *
+     * The undefined case is reachable and used to answer `DISARM`. It happens
+     * when the very first reading has an alarm sounding: {@link update} rightly
+     * withholds the target write, so no target has ever been published, and
+     * {@link #targetToShow} has nothing to fall back on. Substituting "disarmed"
+     * there told HomeKit a house with its alarm going off was unarmed — the exact
+     * false-safety signal {@link #requireDisplayedState} exists to prevent, so it
+     * refuses the same way.
+     */
     #readTargetState() {
-        return this.#targetToShow(this.#requireDisplayedState()) ?? mappers_1.HomeKitSecurityTarget.DISARM;
+        const target = this.#targetToShow(this.#requireDisplayedState());
+        if (target === undefined) {
+            throw new this.#platform.api.hap.HapStatusError(-70402 /* HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
+        }
+        return target;
     }
     /**
      * The state to answer a read with, or a refusal to answer.
@@ -294,9 +317,14 @@ class PartitionAccessory {
     /**
      * Send an arming change requested from HomeKit.
      *
-     * Modifiers are only included when the panel advertises support for them,
-     * because Alarm.com rejects the whole command otherwise rather than ignoring
-     * the unsupported flag.
+     * `forceBypass` is gated on the panel advertising it for the mode being
+     * requested. `nightArming` is not gated here at all: the mode is withheld
+     * from the tile's valid values when unsupported, so the request cannot arrive.
+     *
+     * An unadvertised modifier is not necessarily fatal — `forceBypass: true` was
+     * measured accepted by a panel advertising only `BYPASS_SENSORS` — but the
+     * gate stays, because sending a flag the panel never offered is not something
+     * to do on a guess with someone's alarm.
      */
     async #handleTargetState(value) {
         const attributes = this.#assertCanCommand();
@@ -306,7 +334,7 @@ class PartitionAccessory {
             throw new this.#platform.api.hap.HapStatusError(-70410 /* HAPStatus.INVALID_VALUE_IN_REQUEST */);
         }
         if (action !== 'disarm') {
-            this.#refuseArmOverOpenSensors(target);
+            this.#refuseArmOverOpenSensors(attributes, target);
         }
         this.#targetState = target;
         this.#targetSetAt = Date.now();
@@ -323,9 +351,16 @@ class PartitionAccessory {
      *
      * The open sensors are named because "close the sensor" is not usable advice
      * when the whole question is which one.
+     *
+     * Asks {@link willBypassOpenSensors} rather than the setting, because the
+     * setting alone is not enough for a bypass to happen. Waving the arm through
+     * on the setting while the command builder withheld the flag left the setting
+     * switched on, no bypass sent, and the full sixty-second hang back — the very
+     * thing this check exists to remove.
      */
-    #refuseArmOverOpenSensors(target) {
-        if (this.#platform.isSensorBypassAllowed) {
+    #refuseArmOverOpenSensors(attributes, target) {
+        const isBypassAllowed = this.#platform.isSensorBypassAllowed;
+        if (willBypassOpenSensors(attributes, target, isBypassAllowed)) {
             return;
         }
         const open = this.#platform.listOpenContacts();
@@ -333,10 +368,15 @@ class PartitionAccessory {
             return;
         }
         const isSingle = open.length === 1;
+        // Which advice to give depends on why no bypass is coming. Telling someone
+        // to switch on a setting they already switched on reads as the plugin not
+        // listening, when the real answer is that their panel will not do it.
+        const remedy = isBypassAllowed
+            ? `This panel does not offer sensor bypass for that mode, so ${isSingle ? 'it has' : 'they have'} to be closed.`
+            : `Close ${isSingle ? 'it' : 'them'}, or turn on "Allow arming with open sensors" `
+                + 'to have the panel bypass them.';
         this.#log.error(`${this.#name}: cannot reach ${(0, mappers_1.toSecurityStateLabel)(target)} because `
-            + `${formatNameList(open)} ${isSingle ? 'is' : 'are'} open. `
-            + `Close ${isSingle ? 'it' : 'them'}, or turn on "Allow arming with open sensors" `
-            + 'to have the panel bypass them.');
+            + `${formatNameList(open)} ${isSingle ? 'is' : 'are'} open. ${remedy}`);
         throw new this.#platform.api.hap.HapStatusError(-70412 /* HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE */);
     }
     /**
@@ -369,20 +409,28 @@ class PartitionAccessory {
      * the real outcome is logged and reconciled whenever it arrives.
      */
     async #sendCommand(action, target, options) {
-        const startedAt = Date.now();
+        // The token is claimed before anything is sent. Answering HomeKit at the
+        // deadline frees it to accept another write while this command is still
+        // running, so an outcome landing later has to be able to tell whether it is
+        // still the one the user is waiting on.
+        const attempt = {
+            target,
+            startedAt: Date.now(),
+            token: ++this.#commandSequence,
+        };
         // Announced here rather than when the wait gives up, so its timestamp is
         // the moment the request left. Logging it at the deadline instead put a
         // "sent" line nine seconds late, and the duration on the following line
         // then disagreed with the gap between the two.
         this.#log.info(`${this.#name}: requesting ${(0, mappers_1.toSecurityStateLabel)(target)}`);
-        const outcome = this.#startCommand(action, options, target, startedAt);
+        const outcome = this.#startCommand(action, options, attempt);
         const settled = await this.#awaitWithinHapWindow(outcome);
         if (settled === null) {
             this.#log.debug(`${this.#name}: ${action} still in flight at the HAP deadline, answering HomeKit without it`);
-            void outcome.then((late) => this.#recordOutcome(late, target, startedAt));
+            void outcome.then((late) => this.#recordOutcome(late, attempt));
             return;
         }
-        this.#recordOutcome(settled, target, startedAt);
+        this.#recordOutcome(settled, attempt);
         if (!settled.isOk) {
             throw new this.#platform.api.hap.HapStatusError(settled.error instanceof errors_1.TimeoutError
                 ? -70408 /* HAPStatus.OPERATION_TIMED_OUT */
@@ -392,9 +440,10 @@ class PartitionAccessory {
     /**
      * Start the command and give it a handler, once, here.
      *
-     * Both callers read the returned promise rather than the raw command, so a
-     * rejection arriving long after the deadline is still owned and never
-     * surfaces as an unhandled rejection.
+     * Its single caller consumes the returned promise twice — once in the race
+     * against the deadline, once in the late handler — so a rejection arriving
+     * long after the deadline is still owned and never surfaces as an unhandled
+     * rejection.
      *
      * The call is wrapped because it can throw *synchronously*, before any
      * promise exists: reading `platform.client` raises `ConfigurationError` when
@@ -402,14 +451,14 @@ class PartitionAccessory {
      * as a bare error, so HomeKit reverted the tile with nothing written to the
      * log to say why.
      */
-    #startCommand(action, options, target, startedAt) {
+    #startCommand(action, options, attempt) {
         try {
             return this.#platform.client
                 .commandPartition(this.deviceId, action, options)
                 .then(() => ({ isOk: true }), (error) => ({ isOk: false, error }));
         }
         catch (error) {
-            this.#recordOutcome({ isOk: false, error }, target, startedAt);
+            this.#recordOutcome({ isOk: false, error }, attempt);
             throw new this.#platform.api.hap.HapStatusError(-70402 /* HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
         }
     }
@@ -432,9 +481,20 @@ class PartitionAccessory {
         }
     }
     /** Log a finished command and reconcile the pending target against it. */
-    #recordOutcome(outcome, target, startedAt) {
-        const elapsedMs = Date.now() - startedAt;
-        const label = (0, mappers_1.toSecurityStateLabel)(target);
+    #recordOutcome(outcome, attempt) {
+        const elapsedMs = Date.now() - attempt.startedAt;
+        const label = (0, mappers_1.toSecurityStateLabel)(attempt.target);
+        // A command the user has already replaced must not speak for the one that
+        // replaced it. Tapping Away and then Disarm a few seconds later left the
+        // Away command still running; when it finished it cleared the pending
+        // Disarm and reported "could not reach Armed Away", so the tile the user
+        // was watching snapped back with an error about a command they had
+        // abandoned. Its result is still worth a debug line, and nothing more.
+        if (attempt.token !== this.#commandSequence) {
+            this.#log.debug(`${this.#name}: superseded ${label} request settled after ${toSeconds(elapsedMs)} `
+                + `(${outcome.isOk ? 'accepted' : 'failed'}); a newer request owns the tile`);
+            return;
+        }
         if (!outcome.isOk) {
             this.#targetState = null;
             this.#log.error(`${this.#name}: could not reach ${label} — ${describeCommandFailure(outcome.error, elapsedMs)}`);
@@ -499,11 +559,23 @@ function describeCommandFailure(error, elapsedMs) {
  * Sending the flag with nothing open is a no-op, which is why the decision is
  * the user's standing preference rather than a guess at the current state.
  */
+/**
+ * Whether an arm to this mode will actually bypass anything left open.
+ *
+ * Both the user's setting and the panel's advertisement have to agree, and the
+ * single source of that answer lives here. It was previously decided twice —
+ * once to gate the fail-fast refusal, once to build the command — and the two
+ * copies did not ask the same question, so a panel that does not advertise
+ * `BYPASS_SENSORS` skipped the refusal *and* sent no bypass flag.
+ */
+function willBypassOpenSensors(attributes, target, isBypassAllowed) {
+    return isBypassAllowed
+        && (0, alarm_1.acceptsArmingModifier)(attributes, (0, mappers_1.armingModeFor)(target), alarm_1.ArmingModifier.BYPASS_SENSORS);
+}
 function buildCommandOptions(attributes, target, isBypassAllowed) {
     return {
         nightArming: target === mappers_1.HomeKitSecurityTarget.NIGHT_ARM,
-        forceBypass: isBypassAllowed
-            && (0, alarm_1.acceptsArmingModifier)(attributes, (0, mappers_1.armingModeFor)(target), alarm_1.ArmingModifier.BYPASS_SENSORS),
+        forceBypass: willBypassOpenSensors(attributes, target, isBypassAllowed),
     };
 }
 //# sourceMappingURL=partition.js.map

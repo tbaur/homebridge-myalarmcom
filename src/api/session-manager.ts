@@ -154,7 +154,12 @@ export class SessionManager {
     this.#log.debug(
       `deferring re-authentication for ${Math.round(remainingMs / MS_PER_SECOND)}s to stay within the login floor`,
     )
-    await sleep(remainingMs, this.#signal)
+    // Held, like the rate limiter's pacing wait, because a caller is already
+    // awaiting this. An unref'd timer lets a process with nothing else
+    // scheduled exit mid-wait, stranding that promise unsettled — which looks
+    // like a clean exit rather than a failure. Capped at five seconds by the
+    // check above, so it cannot hold a process open for long.
+    await sleep(remainingMs, this.#signal, { shouldHoldProcess: true })
   }
 
   async #login(): Promise<Session> {

@@ -348,13 +348,21 @@ export const TRANSIENT_HINT_RESET_MS = 10 * MS_PER_SECOND
 /**
  * How long HomeKit may show a requested arming state before it is abandoned.
  *
- * Arming settles at the panel in 20-30 seconds. Past this the request is
- * treated as unconfirmed and the panel's real state is shown instead, because
- * two things stop a target from ever being confirmed: night arming is sent as a
- * stay command and lands on a different state, and a user can abort an arm at
- * the keypad. Either one leaves the Home app stuck on "Arming…" forever.
+ * Past this the request is treated as unconfirmed and the panel's real state is
+ * shown instead, because two things stop a target from ever being confirmed:
+ * night arming is sent as a stay command and lands on a different state, and a
+ * user can abort an arm at the keypad. Either one leaves the Home app stuck on
+ * "Arming…" forever.
+ *
+ * Derived from the command ceiling rather than restated as a number. Both
+ * clocks start at the same instant, so a settle window merely *equal* to the
+ * ceiling gives a command that succeeds late nowhere to land: the target is
+ * retired before the confirming read arrives, and the user is told the arm did
+ * not happen when it did. They were briefly equal at 60s after the ceiling was
+ * raised, which is how that came about. The margin covers the command itself
+ * plus the debounced re-read that confirms it.
  */
-export const PARTITION_TARGET_SETTLE_MS = 60 * MS_PER_SECOND
+export const PARTITION_TARGET_SETTLE_MS = PARTITION_COMMAND_TIMEOUT_MS + 30 * MS_PER_SECOND
 
 /**
  * How long a HomeKit-initiated arming command is waited on before HomeKit is
@@ -363,9 +371,9 @@ export const PARTITION_TARGET_SETTLE_MS = 60 * MS_PER_SECOND
  * HAP terminates a set handler after 10 seconds, so this sits just under that.
  *
  * It bounds the wait, not the command. Alarm.com holds the command request open
- * until the panel acknowledges: measured at 17.6s for an arm and 19.4s for a
- * disarm on a live panel, against 1.4s for a no-op that changes nothing. A
- * command that really changes state therefore cannot answer inside HAP's
+ * until the panel acknowledges, for the measured durations recorded on
+ * {@link PARTITION_COMMAND_TIMEOUT_MS} — every one of them far longer than this.
+ * A command that really changes state therefore cannot answer inside HAP's
  * window, and an earlier version treated that as a timeout — reporting a failed
  * arm for every arm that was seconds from succeeding.
  *
