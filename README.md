@@ -97,6 +97,7 @@ Lights, locks, thermostats, garage door *openers*, cameras, and doorbells are no
 | `pollIntervalSeconds` | `60` | Full state refresh. Clamped to `60`–`86400`. |
 | `authIntervalMinutes` | `10` | Session reuse before signing in again. Clamped to `10`–`1440`. |
 | `useEventStream` | `true` | Subscribe to push events. Polling continues regardless. |
+| `allowSensorBypass` | `false` | Let arming bypass open sensors instead of failing. Arms the house with that zone unmonitored, without asking. |
 | `includeUnmonitoredSensors` | `false` | Expose sensors Alarm.com reports as unmonitored (marked inactive). |
 | `ignoredDeviceIds` | `[]` | Device IDs to leave out of HomeKit. |
 | `diagnosticsInterval` | `0` | Seconds between health heartbeats; `0` off, else `30`–`86400`. |

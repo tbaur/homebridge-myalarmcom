@@ -113,6 +113,7 @@ The rest of the resilience story:
 - **Shutdown cancels in-flight work.** An `AbortController` is threaded through the client, the session manager, and every wait, so clearing the timers stops new work *and* the request already out.
 - **Batched reads are capped** at `MAX_IDS_PER_REQUEST` (50). Alarm.com answers an over-long query string with a `404` rather than a useful error, so an oversized batch fails as "no such endpoint".
 - **Permission is checked before acting.** A partition the account may not control is refused locally, before a command is sent, rather than after it fails: HomeKit gets `INSUFFICIENT_PRIVILEGES` and the log reports that the Alarm.com account used cannot change the arming state of that partition. The check is fail-closed, so anything other than a literal `hasPermissionToChangeState: true` counts as "may not control".
+- **A slow command is not a failed one.** Alarm.com holds an arming request open until the panel acknowledges, measured at 17–19 seconds, while HAP abandons a set handler at 10. `PARTITION_COMMAND_DEADLINE_MS` therefore ends the *wait* rather than the command: HomeKit is told the request was accepted, the pending target keeps the tile on the requested state, and the outcome is logged and reconciled when it lands. Treating that deadline as a timeout reported a failure for every arm that was seconds from succeeding.
 
 ## Capturing fixtures with the probe
 

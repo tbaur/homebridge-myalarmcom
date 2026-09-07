@@ -108,11 +108,27 @@ This is issue #65. Reads carry no body and so never set the header, which is why
 
 A refused command comes back in roughly half the time an accepted one takes (~0.5s against ~1.4s), which is the shape of a request dying in the web framework before it reaches anything that knows what a panel is.
 
-Two modifiers must be **omitted rather than sent as `false`** when not wanted: `nightArming` and `forceBypass` break the command outright on panels that do not support them. Neither applies to a disarm.
+Modifiers are **omitted rather than sent as `false`** when not wanted, and none of them applies to a disarm. An unadvertised modifier is not necessarily fatal, though: `forceBypass: true` was accepted with a `200` by a panel advertising `BYPASS_SENSORS` and not `FORCE_ARM`, and it did bypass an open contact.
 
-Ask `extendedArmingOptions` about the mode you are actually requesting. Support for a modifier is advertised per mode, so a panel can offer force arming for `ArmedAway` and not for `ArmedStay`. Note that night arming is sent as an `armStay` verb but advertised under `ArmedNight`, so the mode you ask about is not always the verb you send.
+Ask `extendedArmingOptions` about the mode you are actually requesting. Support for a modifier is advertised per mode, so a panel can offer bypass for `ArmedAway` and not for `ArmedStay`. Note that night arming is sent as an `armStay` verb but advertised under `ArmedNight`, so the mode you ask about is not always the verb you send.
 
-Arming takes 20–30 seconds to settle at the panel. Do not expect the response to reflect the new state.
+The capability to look for when bypassing is `BYPASS_SENSORS` (`0`). `FORCE_ARM` (`5`) reads like the obvious one and no panel observed here advertises it, so a client gated on it never sends the flag at all.
+
+**Do not trust `hasOpenBypassableSensors`.** A live panel reported it `false` while holding an open, bypassable contact that the same panel then bypassed when asked. It cannot be used to decide whether a bypass is needed.
+
+### Command timing
+
+**Verified, and not what the folklore says.** The request is held open until the panel acknowledges. The often-quoted "arming takes 20–30 seconds to settle" describes time spent *inside* the POST, not after it.
+
+| Command                              | Duration  |
+| ------------------------------------ | --------- |
+| `armStay`, real state change         | 17,595 ms |
+| `disarm`, real state change          | 19,364 ms |
+| `disarm` on an already-disarmed panel | 1,389 ms  |
+
+A command that changes nothing returns in about a second; one that moves the panel takes the better part of twenty. The response *does* carry the new state when it finally arrives, so a client need not poll to learn the outcome — it only needs to survive the wait.
+
+Two consequences for a client. Any deadline shorter than about 25 seconds will fire on a command that is going to succeed, so a timeout must not be reported as a failure. And a panel that refuses to arm, over an open zone for instance, simply never answers, so the request runs to whatever ceiling the client imposes.
 
 ## Device state
 
@@ -244,6 +260,8 @@ Anything deciding what a device is must resolve the type from discovery and igno
 `deviceIcon` also changes with the state (`184` disarmed, `185` armed stay). It is cosmetic and the plugin ignores it, but it shows up in attribute diffs.
 
 Two open windows were bypassed as part of the arm. Each emitted a `13` on arming and a `35` on disarm, and neither changed its own `state` or `openClosedStatus` throughout. Bypass is therefore invisible in the sensor attributes the plugin maps, so a bypassed open window continues to report open in HomeKit, which is the truthful answer.
+
+That pair of events is also the only reliable signal that a bypass happened, given `hasOpenBypassableSensors` cannot be trusted (see [Commands](#commands)).
 
 ### The transient-state problem, and the narrow exception
 

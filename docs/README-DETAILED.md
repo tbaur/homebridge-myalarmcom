@@ -26,6 +26,7 @@ Install and a short options table live in the [README](../README.md). This page 
       "pollIntervalSeconds": 60,
       "authIntervalMinutes": 10,
       "useEventStream": true,
+      "allowSensorBypass": false,
       "includeUnmonitoredSensors": false,
       "ignoredDeviceIds": [],
       "diagnosticsInterval": 0,
@@ -48,6 +49,7 @@ Invalid configuration never takes the bridge down. A missing credential, a six-d
 | `pollIntervalSeconds` | `60` | Full state refresh interval. Clamped to `60`–`86400` (24h). |
 | `authIntervalMinutes` | `10` | Session reuse before signing in again. Clamped to `10`–`1440` (24h). |
 | `useEventStream` | `true` | Subscribe to push events. Polling continues regardless. |
+| `allowSensorBypass` | `false` | Let an arming command bypass sensors that are open, rather than failing. The Alarm.com app asks before bypassing and HomeKit gives the plugin no way to ask, so enabling this lets an arm from Siri or the Home app leave an open door unmonitored, reported only in the Homebridge log. Left off, the panel refuses and the tile returns to its previous state after about a minute. |
 | `includeUnmonitoredSensors` | `false` | Expose sensors Alarm.com reports as unmonitored. They appear marked inactive in the Home app, because an unsupervised sensor's state cannot be trusted. |
 | `ignoredDeviceIds` | `[]` | Device IDs to leave out of HomeKit. Each ID is logged when its accessory is added, and is also the accessory's Serial Number in the Home app. |
 | `diagnosticsInterval` | `0` | Seconds between health heartbeats in the log. `0` is off. Otherwise `30`–`86400` (24h). At 30 that is about 2,880 lines/day; prefer `300` or higher. |
@@ -92,11 +94,12 @@ Architecture: [DEVELOPMENT.md](../DEVELOPMENT.md). Wire-level notes: [PROTOCOL.m
 6. **`Alarm.com has failed N times in a row`.** A sustained outage. Nothing to do but wait. Polling keeps retrying and a matching "reachable again" line follows. Alarm.com is being left alone on purpose in the meantime.
 7. **`Circuit breaker CLOSED -> OPEN`.** Repeated failures, so requests are being refused locally for 30 seconds at a time. This protects your account from looking like a scraper, which Alarm.com locks accounts for.
 8. **`Continuing with polling only`.** The push event stream gave up after repeated failures. State still updates, just on the poll interval instead of within a second or two. The stream is retried every 15 minutes.
-9. **`did not reach <state>`.** An arming request was accepted but the panel never confirmed it, usually an open zone or a keypad abort. The tile falls back to the panel's real state after a minute.
-10. **`reported an arming state this plugin does not recognise`.** The tile keeps its last known value and shows a fault rather than guessing. Please open an issue with the state number.
-11. **`is now reporting as a <kind> sensor`.** An Alarm.com device ID is reporting a different hardware type than the accessory published for it. Its state is left alone rather than written to the wrong characteristic. Restart Homebridge to republish it.
-12. **`issued a new two-factor trust token`.** The configured `twoFactorAuthenticationId` was not accepted and Alarm.com handed back a different one. Requests still work for now. Capture a fresh cookie ([AUTH.md](AUTH.md)) before they start failing.
-13. **`keep-alive failed repeatedly`.** Three consecutive session touches failed, so the session was discarded and the next request signs in again. Usually a network blip. Persistent occurrences point at an expired cookie.
+9. **`did not reach <state>`.** An arming request was accepted but the panel never confirmed it, usually an open zone or a keypad abort. The tile falls back to the panel's real state after a minute. For an open zone, `allowSensorBypass` lets the panel arm past it instead, at the cost of arming with that sensor unmonitored.
+10. **Arming appears to hang, then fails.** A panel refusing to arm over an open zone never answers, so the request runs to its 30-second ceiling. Close the zone, or enable `allowSensorBypass`. Note that a *successful* arm is also slow: Alarm.com holds the request open until the panel acknowledges, measured at 17-19 seconds, so the Home app shows the requested state as pending for that long before the panel confirms it. That is normal and is not a failure.
+11. **`reported an arming state this plugin does not recognise`.** The tile keeps its last known value and shows a fault rather than guessing. Please open an issue with the state number.
+12. **`is now reporting as a <kind> sensor`.** An Alarm.com device ID is reporting a different hardware type than the accessory published for it. Its state is left alone rather than written to the wrong characteristic. Restart Homebridge to republish it.
+13. **`issued a new two-factor trust token`.** The configured `twoFactorAuthenticationId` was not accepted and Alarm.com handed back a different one. Requests still work for now. Capture a fresh cookie ([AUTH.md](AUTH.md)) before they start failing.
+14. **`keep-alive failed repeatedly`.** Three consecutive session touches failed, so the session was discarded and the next request signs in again. Usually a network blip. Persistent occurrences point at an expired cookie.
 
 ## Collecting diagnostics
 
