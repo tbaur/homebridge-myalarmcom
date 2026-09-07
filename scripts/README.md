@@ -5,6 +5,7 @@ User-facing options and troubleshooting: [docs/README-DETAILED.md](../docs/READM
 | Script | Purpose |
 | --- | --- |
 | `probe.mjs` | Signs in to Alarm.com once, reports what the account exposes, probes for a better authentication path, and writes scrubbed JSON:API payloads to `probe-output/` for use as test fixtures. |
+| `probe-command.mjs` | Settles which request shape the partition command endpoint accepts, by sending the same command once per candidate `Content-Type`. Writes to a live panel; read the safety notes below. |
 | `verify.mjs` | Drives the **compiled plugin** in `dist/` against a live account and prints how each device maps to HomeKit. |
 | `watch-arming.mjs` | Streams events while polling partition and sensor state, printing every change with a diff. Built for watching a real arm/disarm driven from the mobile app. |
 | `diagnose-stream.mjs` | Connects to the event stream four ways (two clients × raw and encoded token) and reports which combinations work. Run it when the stream stops connecting. |
@@ -18,7 +19,7 @@ Every script takes `--help`, and `--help` works before the project is built. Eac
 
 `probe --ws` needs the global `WebSocket`, which arrived in Node 22 — the same floor the package declares. On a build without it, the script says so and skips the event capture rather than failing after the login.
 
-They answer different questions. `probe.mjs` reimplements the protocol in order to *discover* it, and is the right tool when Alarm.com changes something and you need to find out what. `verify.mjs` exercises the code that actually ships, and is the right tool for confirming a change behaves correctly against real hardware. `watch-arming.mjs` observes rather than interprets, which is what you want when the question is "what does Alarm.com actually send when I do this?"
+They answer different questions. `probe.mjs` reimplements the protocol in order to *discover* it, and is the right tool when Alarm.com changes something and you need to find out what. `verify.mjs` exercises the code that actually ships, and is the right tool for confirming a change behaves correctly against real hardware. `watch-arming.mjs` observes rather than interprets, which is what you want when the question is "what does Alarm.com actually send when I do this?" `probe-command.mjs` answers a narrower question than any of them: of several request shapes that all look reasonable, which one does the server take?
 
 ## Verifying the plugin against real hardware
 
@@ -72,6 +73,22 @@ ADC_USERNAME='you@example.com' ADC_PASSWORD='…' ADC_MFA_TOKEN='…' node scrip
 
 Prefer the prompts when a terminal is available. Inline assignments land in your shell history and are visible to other local users in `ps` output for the lifetime of the process. If you must use them, `read -rs` into a variable first, or at minimum prefix the command with a space where your shell honours `HISTCONTROL=ignorespace`.
 
+## Settling what a command has to look like
+
+```bash
+node scripts/probe-command.mjs             # report what the panel advertises, send nothing
+node scripts/probe-command.mjs --compare   # the same no-op disarm, once per Content-Type
+node scripts/probe-command.mjs --arm stay  # one real arm, watch it settle, disarm again
+```
+
+This exists because `Accept` and `Content-Type` are separate negotiations and the plugin was sending one value for both. `--compare` holds the body constant and varies only the label, so the result is a measurement rather than an argument. A fourth attempt varies the body instead, sending a JSON:API document under `application/vnd.api+json`, which separates "the label is wrong" from "the label is right and demands a different body" — a distinction the status code alone does not make.
+
+It also records what a fix needs beyond a `200`: whether the response carries the `data.attributes.state` shape the client destructures, whether Alarm.com reissues the `afg` cookie on a command response, and how long the panel takes to reach the state the response claimed it wanted.
+
+`--compare` sends real disarms. It runs them against a panel that is *already disarmed*, where a disarm is a no-op, and refuses to run against an armed one unless you add `--force`. It also refuses outright on a read-only account, because there every command fails for a reason that has nothing to do with the one being investigated. Both `--compare` and `--arm` need a confirmation phrase typed in full. `--arm` disarms afterwards, including on Ctrl-C, and ignores a second Ctrl-C during that disarm.
+
+Every attempt is a real entry in your Alarm.com history.
+
 ## Getting `ADC_MFA_TOKEN`
 
 If two-factor authentication is enabled, set `ADC_MFA_TOKEN` to the `twoFactorAuthenticationId` browser cookie — not a six-digit authenticator code. Capture steps and why to treat it like a password: [docs/AUTH.md](../docs/AUTH.md).
@@ -90,7 +107,7 @@ It opens and immediately closes one socket per client/encoding combination and r
 Two constraints are built in, and both matter:
 
 - **Alarm.com locks accounts that authenticate or poll too aggressively.** The probe uses a single login for the whole run and spaces every request 1.5 seconds apart.
-- **Capability discovery issues `GET` requests only.** This is a live security system. Probing an unknown endpoint with `POST` could arm, disarm, or unlock something, so nothing in this script is capable of changing state.
+- **Capability discovery issues `GET` requests only.** This is a live security system. Probing an unknown endpoint with `POST` could arm, disarm, or unlock something, so nothing in `probe.mjs` is capable of changing state. `probe-command.mjs` is the one exception, and it is narrow by construction: it POSTs only to the partition command endpoint, only to the action you named, and only after you type a confirmation phrase.
 - **Interrupting the probe keeps what it captured.** A run spends a login, which is the operation Alarm.com polices hardest, so Ctrl-C leaves the fixtures already written in place rather than discarding the whole run.
 - **Scripts that drive `dist/` log through the plugin's own redaction.** The "every line is redacted" guarantee belongs to the plugin's logger, not to its components, so a script that supplied a plain stdout logger would opt out of it — and `ws` reports a malformed endpoint by throwing the whole URL, token included.
 

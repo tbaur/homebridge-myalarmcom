@@ -105,6 +105,11 @@ function reportPartition(resource) {
   stdout.write(`    hasActiveAlarm     ${attributes.hasActiveAlarm}\n`)
   stdout.write(`    -> HomeKit         ${displayed} (${nameOf(mappers.HomeKitSecurityState, displayed)})\n`)
   stdout.write(`    can change state   ${attributes.hasPermissionToChangeState}\n`)
+  // Printed because a panel refuses to arm over an open zone, and the refusal
+  // arrives as a 30-second hang rather than an error. Without this line the
+  // only clue is a faulted sensor buried in the list further down.
+  stdout.write(`    open bypassable    ${attributes.hasOpenBypassableSensors}\n`)
+  stdout.write(`    sensor trouble     ${attributes.hasSensorInTroubleCondition}\n`)
   stdout.write(`    night arming       ${alarmTypes.supportsNightArming(attributes)}\n`)
   stdout.write(`    arming options     ${describeArmingOptions(attributes.extendedArmingOptions)}\n`)
 }
@@ -200,7 +205,13 @@ async function armCycle(client, partition) {
     return
   }
 
-  let isArmed = false
+  // Set before the arm is sent, not after it succeeds. A timeout or a dropped
+  // connection says nothing about whether the panel got the command: Alarm.com
+  // logged an Arm Stay that this script had already given up on, and because
+  // the error looked like "not armed" the disarm below was skipped entirely.
+  // A disarm the panel does not need is a no-op; the reverse is someone's house
+  // left armed.
+  let wasArmAttempted = false
   const disarm = async () => {
     stdout.write('\n  Disarming...\n')
     if (await sendCommand(client, partitionId, 'disarm')) {
@@ -232,8 +243,8 @@ async function armCycle(client, partition) {
 
   try {
     stdout.write('\n  Arming (stay)...\n')
+    wasArmAttempted = true
     if (await sendCommand(client, partitionId, 'armStay')) {
-      isArmed = true
       const settled = await watchPartition(
         client,
         partitionId,
@@ -250,7 +261,7 @@ async function armCycle(client, partition) {
     // it reached Node's default handler and killed the process mid-disarm,
     // leaving the house armed — the exact outcome the handler above exists to
     // prevent, reintroduced by the ordering of its own cleanup.
-    if (isArmed) {
+    if (wasArmAttempted) {
       await disarm()
     }
     process.removeListener('SIGINT', onInterrupt)

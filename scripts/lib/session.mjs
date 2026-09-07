@@ -126,21 +126,37 @@ async function throttle() {
   lastRequestAt = Date.now()
 }
 
-/** Throttled `fetch` with a hard timeout and a consistent User-Agent. */
-export async function request(url, init = {}) {
+/**
+ * Throttled `fetch` with a hard timeout, reporting how long the server took.
+ *
+ * The duration excludes the throttle wait and is measured to the arrival of
+ * the response headers, which is what separates a request the web framework
+ * refused outright from one that reached the application behind it. Against an
+ * undocumented service that answers a malformed request with the same `500` it
+ * would give an internal fault, that gap is often the only signal available.
+ */
+export async function timedRequest(url, init = {}) {
   await throttle()
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const startedAt = Date.now()
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       redirect: 'manual',
       ...init,
       headers: { 'User-Agent': USER_AGENT, ...init.headers },
       signal: controller.signal,
     })
+    return { response, durationMs: Date.now() - startedAt }
   } finally {
     clearTimeout(timer)
   }
+}
+
+/** Throttled `fetch` with a hard timeout and a consistent User-Agent. */
+export async function request(url, init = {}) {
+  const { response } = await timedRequest(url, init)
+  return response
 }
 
 /**
@@ -370,25 +386,40 @@ export async function followRedirects(jar, startPath, maxHops = 5) {
   return hops
 }
 
-/** Issue an authenticated JSON:API GET and return status plus parsed body. */
-export async function authenticatedGet(url, { jar, ajaxKey }) {
-  const response = await request(url, {
-    method: 'GET',
-    headers: {
-      Accept: 'application/vnd.api+json',
-      Cookie: jar.header,
-      ajaxrequestuniquekey: ajaxKey ?? '',
-      Referer: HOME_REFERER,
-    },
-  })
+/**
+ * The four headers every authenticated JSON:API request needs.
+ *
+ * Omitting the `Referer` is enough to be refused: the API is the web app's own
+ * backend and expects requests that look like they came from it.
+ */
+function authHeaders({ jar, ajaxKey }) {
+  return {
+    Accept: 'application/vnd.api+json',
+    Cookie: jar.header,
+    ajaxrequestuniquekey: ajaxKey ?? '',
+    Referer: HOME_REFERER,
+  }
+}
 
+/**
+ * Read a response once, keeping both the parsed document and the raw text.
+ *
+ * The text is kept even when the body parses, because a failing request is
+ * diagnosed from what the server actually wrote and a caller that only has the
+ * parsed form has already lost the interesting part.
+ */
+async function readResponse(response, durationMs) {
   const contentType = response.headers.get('content-type') ?? ''
   const isJson = contentType.includes('json')
-  let body = null
-  try {
-    body = isJson ? await response.json() : await response.text()
-  } catch {
-    body = null
+  const text = await response.text().catch(() => '')
+
+  let body = isJson ? null : text
+  if (isJson) {
+    try {
+      body = JSON.parse(text)
+    } catch {
+      body = null
+    }
   }
 
   return {
@@ -396,8 +427,45 @@ export async function authenticatedGet(url, { jar, ajaxKey }) {
     contentType,
     isJson,
     body,
+    text,
+    durationMs,
+    // Names only. Whether Alarm.com reissued `afg` mid-session is a real
+    // question about the protocol; the value it reissued is a live credential.
+    setCookieNames: response.headers.getSetCookie()
+      .map((raw) => raw.split('=')[0].trim())
+      .filter(Boolean),
     // Recorded so a redirected API call is distinguishable from a rejected one.
     // Path only, for the same reason as the login redirect above.
     location: redirectPath(response.headers.get('location')),
   }
+}
+
+/** Issue an authenticated JSON:API GET and return status plus parsed body. */
+export async function authenticatedGet(url, session) {
+  const { response, durationMs } = await timedRequest(url, {
+    method: 'GET',
+    headers: authHeaders(session),
+  })
+  return readResponse(response, durationMs)
+}
+
+/**
+ * Issue an authenticated POST, with the request `Content-Type` as a parameter.
+ *
+ * That parameter is the entire reason this exists. `Accept` and `Content-Type`
+ * are separate negotiations, and every client known to arm a real panel asks
+ * for `application/vnd.api+json` back while sending `application/json` up.
+ * Reusing one value for both is the difference this function is built to
+ * measure, so it must be caller-supplied rather than a constant here.
+ *
+ * A POST on this surface commands a live security panel. Nothing in this
+ * module judges whether that is safe; the caller does, and must.
+ */
+export async function authenticatedPost(url, session, { body, contentType }) {
+  const { response, durationMs } = await timedRequest(url, {
+    method: 'POST',
+    headers: { ...authHeaders(session), 'Content-Type': contentType },
+    body: JSON.stringify(body),
+  })
+  return readResponse(response, durationMs)
 }

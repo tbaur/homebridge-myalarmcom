@@ -71,6 +71,7 @@
     "lint:fix": "eslint . --fix --ignore-pattern node_modules --ignore-pattern dist --ignore-pattern coverage",
     "prepublishOnly": "npm run clean && npm run build",
     "probe": "node scripts/probe.mjs",
+    "probe-command": "node scripts/probe-command.mjs",
     "test": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --coverage",
     "test:integration": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --testPathPatterns=tests/integration --collectCoverage=false",
     "test:unit": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --coverage --testPathPatterns=tests/unit",

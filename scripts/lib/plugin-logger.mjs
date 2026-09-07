@@ -16,7 +16,7 @@
  */
 
 import { createRequire } from 'node:module'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { stdout } from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -26,12 +26,47 @@ const here = dirname(fileURLToPath(import.meta.url))
 /** The compiled plugin directory these scripts load the real client from. */
 export const DIST_DIR = join(here, '..', '..', 'dist')
 
+const SRC_DIR = join(here, '..', '..', 'src')
+
 const require = createRequire(import.meta.url)
 
-/** Exit with an actionable message when the plugin has not been built. */
+/**
+ * Most recent modification time anywhere under a directory, in ms.
+ *
+ * @param {string} dir Directory to walk.
+ * @returns {number} Newest mtime found, or 0 for an empty tree.
+ */
+function newestModifiedMs(dir) {
+  let newest = 0
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name)
+    const modified = entry.isDirectory() ? newestModifiedMs(path) : statSync(path).mtimeMs
+    if (modified > newest) {
+      newest = modified
+    }
+  }
+
+  return newest
+}
+
+/**
+ * Exit with an actionable message unless `dist/` is present and current.
+ *
+ * Staleness is fatal rather than a warning because these scripts exist to check
+ * the code that ships. A build predating the source it was made from verifies
+ * the previous release while appearing to verify the fix in front of you, and
+ * nothing in the output would say so.
+ */
 export function requireBuild() {
   if (!existsSync(join(DIST_DIR, 'index.js'))) {
     stdout.write('dist/ is missing. Run "npm run build" first.\n')
+    process.exit(1)
+  }
+
+  if (newestModifiedMs(SRC_DIR) > newestModifiedMs(DIST_DIR)) {
+    stdout.write('dist/ is older than src/, so this would check the previous build.\n')
+    stdout.write('Run "npm run build" first.\n')
     process.exit(1)
   }
 }
