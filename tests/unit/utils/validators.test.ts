@@ -239,6 +239,7 @@ describe('defaults', () => {
       authIntervalMinutes: 10,
       useEventStream: true,
       includeUnmonitoredSensors: false,
+      allowSensorBypass: false,
       debug: false,
       diagnosticsInterval: 0,
     })
@@ -260,12 +261,14 @@ describe('defaults', () => {
     const { config } = resolve({
       useEventStream: false,
       includeUnmonitoredSensors: true,
+      allowSensorBypass: true,
       debug: true,
     })
 
     expect(config).toMatchObject({
       useEventStream: false,
       includeUnmonitoredSensors: true,
+      allowSensorBypass: true,
       debug: true,
     })
   })

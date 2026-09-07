@@ -236,6 +236,7 @@ function validateConfig(raw) {
         useEventStream: parseBoolean(raw.useEventStream, true),
         ignoredDeviceIds: parseIgnoredIds(raw.ignoredDeviceIds, warnings),
         includeUnmonitoredSensors: parseBoolean(raw.includeUnmonitoredSensors, false),
+        allowSensorBypass: parseBoolean(raw.allowSensorBypass, false),
         debug: parseBoolean(raw.debug, false),
         diagnosticsInterval: parseDiagnosticsInterval(raw.diagnosticsInterval, warnings),
     };

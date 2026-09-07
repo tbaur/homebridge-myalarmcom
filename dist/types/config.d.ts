@@ -38,6 +38,14 @@ export interface MyAlarmComPlatformConfig {
     ignoredDeviceIds?: unknown;
     /** Expose sensors whose monitoring Alarm.com reports as disabled. */
     includeUnmonitoredSensors?: unknown;
+    /**
+     * Let an arming command bypass sensors that are open.
+     *
+     * Off by default. The Alarm.com app asks before bypassing; HomeKit offers no
+     * way to ask, so enabling this means an arm requested from HomeKit can leave
+     * an open door unmonitored without confirmation.
+     */
+    allowSensorBypass?: unknown;
     /** Emit verbose diagnostics. */
     debug?: unknown;
     /**
@@ -58,6 +66,7 @@ export interface ResolvedConfig {
     useEventStream: boolean;
     ignoredDeviceIds: ReadonlySet<string>;
     includeUnmonitoredSensors: boolean;
+    allowSensorBypass: boolean;
     debug: boolean;
     /** Seconds between diagnostics heartbeats; `0` means emission is off. */
     diagnosticsInterval: number;

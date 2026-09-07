@@ -23,6 +23,13 @@ export declare class MyAlarmComPlatform implements DynamicPlatformPlugin {
      * no accessories, so there is nothing to call this.
      */
     get client(): AlarmComClient;
+    /**
+     * Whether an arming command may bypass sensors that are open.
+     *
+     * Exposed as a single flag rather than the whole configuration so an
+     * accessory cannot quietly grow a dependency on unrelated settings.
+     */
+    get isSensorBypassAllowed(): boolean;
     /** Homebridge replays cached accessories here on startup. */
     configureAccessory(accessory: PlatformAccessory): void;
     /** Record a HomeKit-originated arming command for diagnostics. */

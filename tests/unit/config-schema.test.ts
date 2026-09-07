@@ -85,7 +85,12 @@ describe('config.schema.json', () => {
   })
 
   describe('boolean defaults match what the validator resolves', () => {
-    it.each(['useEventStream', 'includeUnmonitoredSensors', 'debug'] as const)('%s', (option) => {
+    it.each([
+      'useEventStream',
+      'includeUnmonitoredSensors',
+      'allowSensorBypass',
+      'debug',
+    ] as const)('%s', (option) => {
       const { config } = validateConfig({
         platform: PLATFORM_NAME,
         username: 'user@example.com',

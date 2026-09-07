@@ -72,6 +72,12 @@
         "default": false,
         "description": "Expose sensors that Alarm.com reports as having monitoring disabled. These are hidden by default because their readings may not be maintained. Exposed sensors are marked inactive in HomeKit rather than appearing normal, because an unsupervised sensor’s state cannot be trusted."
       },
+      "allowSensorBypass": {
+        "title": "Allow arming with open sensors",
+        "type": "boolean",
+        "default": false,
+        "description": "Let an arming command bypass sensors that are open, rather than failing. The Alarm.com app asks you before bypassing; HomeKit gives the plugin no way to ask, so with this enabled an arm from Siri or the Home app can leave an open door unmonitored and say so only in the Homebridge log. Left off, the panel refuses to arm over an open sensor and the Home app tile returns to its previous state after about a minute."
+      },
       "ignoredDeviceIds": {
         "title": "Ignored Device IDs",
         "type": "array",
@@ -112,6 +118,15 @@
         "username",
         "password",
         "twoFactorAuthenticationId"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Arming",
+      "expandable": true,
+      "expanded": false,
+      "items": [
+        "allowSensorBypass"
       ]
     },
     {

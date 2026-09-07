@@ -333,6 +333,7 @@ function redactConfig(config) {
         authIntervalMinutes: config.authIntervalMinutes,
         useEventStream: config.useEventStream,
         includeUnmonitoredSensors: config.includeUnmonitoredSensors,
+        allowSensorBypass: config.allowSensorBypass,
         ignoredDeviceIds: config.ignoredDeviceIds.size,
         debug: config.debug,
     };

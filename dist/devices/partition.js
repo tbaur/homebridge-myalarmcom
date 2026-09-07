@@ -292,7 +292,7 @@ class PartitionAccessory {
         }
         this.#targetState = target;
         this.#targetSetAt = Date.now();
-        await this.#sendCommand(action, target, buildCommandOptions(attributes, target));
+        await this.#sendCommand(action, target, buildCommandOptions(attributes, target, this.#platform.isSensorBypassAllowed));
     }
     /**
      * Refuse the command unless this account is known to be allowed to arm.
@@ -312,48 +312,75 @@ class PartitionAccessory {
         }
         return attributes;
     }
+    /**
+     * Send an arming command without making HomeKit wait for the panel.
+     *
+     * Alarm.com holds the command request open until the panel acknowledges,
+     * measured at 17-19 seconds for a real state change against 1.4 seconds for a
+     * no-op. HAP abandons a set handler at 10 seconds, so waiting for the answer
+     * reported a failure for every arm that was about to succeed. The deadline
+     * therefore ends the *wait*, not the command: HomeKit is told the request was
+     * accepted, the pending target keeps the Home app on the requested state, and
+     * the real outcome is logged and reconciled whenever it arrives.
+     */
     async #sendCommand(action, target, options) {
         const startedAt = Date.now();
-        try {
-            await this.#withCommandDeadline(this.#platform.client.commandPartition(this.deviceId, action, options));
-            this.#log.info(`${this.#name}: ${(0, mappers_1.toSecurityStateLabel)(target)} (Latency: ${Date.now() - startedAt}ms)`);
-            // Recorded through the change logger so the confirming poll, which will
-            // report the same state, does not emit a second identical info line
-            // without the latency figure.
-            this.#logChange(this.#name, (0, mappers_1.toSecurityStateLabel)(target));
-            this.#platform.recordCommand();
-            // Arming takes 20-30 seconds to settle at the panel, so the confirming
-            // read is left to the next poll or event rather than done inline.
-            this.#platform.requestDeviceRefresh(this.deviceId);
+        // Given a handler exactly once, here. Both branches below read this rather
+        // than the raw command, so a rejection arriving long after the deadline is
+        // still owned and never surfaces as an unhandled rejection.
+        const outcome = this.#platform.client
+            .commandPartition(this.deviceId, action, options)
+            .then(() => ({ isOk: true }), (error) => ({ isOk: false, error }));
+        const settled = await this.#awaitWithinHapWindow(outcome);
+        if (settled === null) {
+            this.#log.info(`${this.#name}: ${(0, mappers_1.toSecurityStateLabel)(target)} sent, waiting for the panel to confirm`);
+            void outcome.then((late) => this.#recordOutcome(late, action, target, startedAt));
+            return;
         }
-        catch (error) {
-            this.#targetState = null;
-            this.#log.error(`Failed to ${action} partition ${this.deviceId} after ${Date.now() - startedAt}ms: ${(0, sanitizers_1.sanitizeError)(error)}`);
-            throw new this.#platform.api.hap.HapStatusError(error instanceof errors_1.TimeoutError
+        this.#recordOutcome(settled, action, target, startedAt);
+        if (!settled.isOk) {
+            throw new this.#platform.api.hap.HapStatusError(settled.error instanceof errors_1.TimeoutError
                 ? -70408 /* HAPStatus.OPERATION_TIMED_OUT */
                 : -70402 /* HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
         }
     }
     /**
-     * Bound the command so HAP does not cut the handler off mid-request.
+     * Wait for a command, or stop waiting before HAP cuts the handler off.
      *
-     * The command is left running when the deadline wins: it has already been
-     * sent, so abandoning the *wait* is the only thing on offer. HomeKit is told
-     * the operation timed out, and the confirming poll reports whatever the panel
-     * actually did.
+     * @returns The outcome, or `null` when the deadline came first.
      */
-    async #withCommandDeadline(command) {
+    async #awaitWithinHapWindow(outcome) {
         let timer;
-        const deadline = new Promise((_resolve, reject) => {
-            timer = setTimeout(() => reject(new errors_1.TimeoutError(`Alarm.com did not answer the command within ${settings_1.PARTITION_COMMAND_DEADLINE_MS}ms`)), settings_1.PARTITION_COMMAND_DEADLINE_MS);
+        const deadline = new Promise((resolve) => {
+            timer = setTimeout(() => resolve(null), settings_1.PARTITION_COMMAND_DEADLINE_MS);
             timer.unref?.();
         });
         try {
-            return await Promise.race([command, deadline]);
+            return await Promise.race([outcome, deadline]);
         }
         finally {
             clearTimeout(timer);
         }
+    }
+    /** Log a finished command and reconcile the pending target against it. */
+    #recordOutcome(outcome, action, target, startedAt) {
+        const elapsedMs = Date.now() - startedAt;
+        if (!outcome.isOk) {
+            this.#targetState = null;
+            this.#log.error(`Failed to ${action} partition ${this.deviceId} after ${elapsedMs}ms: ${(0, sanitizers_1.sanitizeError)(outcome.error)}`);
+            // Read back even on failure. HomeKit may already have been told the
+            // request was accepted, so the panel's real state is the only thing that
+            // corrects the tile before the next poll comes round.
+            this.#platform.requestDeviceRefresh(this.deviceId);
+            return;
+        }
+        this.#log.info(`${this.#name}: ${(0, mappers_1.toSecurityStateLabel)(target)} (Latency: ${elapsedMs}ms)`);
+        // Recorded through the change logger so the confirming poll, which will
+        // report the same state, does not emit a second identical info line
+        // without the latency figure.
+        this.#logChange(this.#name, (0, mappers_1.toSecurityStateLabel)(target));
+        this.#platform.recordCommand();
+        this.#platform.requestDeviceRefresh(this.deviceId);
     }
 }
 exports.PartitionAccessory = PartitionAccessory;
@@ -364,12 +391,22 @@ exports.PartitionAccessory = PartitionAccessory;
  * the flag off `ArmedStay` for every mode meant a panel offering it only under
  * `ArmedAway` never received it, and away arming failed with open sensors that
  * the Alarm.com app would have bypassed.
+ *
+ * The capability checked is BYPASS_SENSORS, which is what panels actually
+ * advertise. FORCE_ARM was checked before and no observed panel offers it, so
+ * the flag never went out and arming over an open zone hung until the request
+ * timed out. `hasOpenBypassableSensors` is deliberately not consulted either:
+ * it read false on a live panel that had an open bypassable contact and did
+ * bypass it when asked, so gating on it suppressed the flag just as reliably.
+ *
+ * Sending the flag with nothing open is a no-op, which is why the decision is
+ * the user's standing preference rather than a guess at the current state.
  */
-function buildCommandOptions(attributes, target) {
+function buildCommandOptions(attributes, target, isBypassAllowed) {
     return {
         nightArming: target === mappers_1.HomeKitSecurityTarget.NIGHT_ARM,
-        forceBypass: (0, alarm_1.acceptsArmingModifier)(attributes, (0, mappers_1.armingModeFor)(target), alarm_1.ArmingModifier.FORCE_ARM)
-            && attributes.hasOpenBypassableSensors === true,
+        forceBypass: isBypassAllowed
+            && (0, alarm_1.acceptsArmingModifier)(attributes, (0, mappers_1.armingModeFor)(target), alarm_1.ArmingModifier.BYPASS_SENSORS),
     };
 }
 //# sourceMappingURL=partition.js.map

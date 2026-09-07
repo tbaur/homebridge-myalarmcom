@@ -79,7 +79,10 @@ export interface PlatformTestBed {
   recordCommand: jest.Mock
 }
 
-export function createPlatformTestBed(context: Record<string, unknown>): PlatformTestBed {
+export function createPlatformTestBed(
+  context: Record<string, unknown>,
+  options: { isSensorBypassAllowed?: boolean } = {},
+): PlatformTestBed {
   const commandPartition = jest.fn()
   const requestDeviceRefresh = jest.fn()
   const recordCommand = jest.fn()
@@ -94,6 +97,7 @@ export function createPlatformTestBed(context: Record<string, unknown>): Platfor
     client: { commandPartition },
     requestDeviceRefresh,
     recordCommand,
+    isSensorBypassAllowed: options.isSensorBypassAllowed ?? false,
   } as unknown as MyAlarmComPlatform
 
   return {

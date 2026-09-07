@@ -19,6 +19,7 @@ const baseConfig = (): ResolvedConfig => ({
   useEventStream: true,
   ignoredDeviceIds: new Set(['1234567-99']),
   includeUnmonitoredSensors: false,
+  allowSensorBypass: false,
   debug: false,
   diagnosticsInterval: 60,
 })
@@ -167,6 +168,7 @@ describe('DiagnosticsCollector', () => {
       authIntervalMinutes: 10,
       useEventStream: true,
       includeUnmonitoredSensors: false,
+      allowSensorBypass: false,
       ignoredDeviceIds: 1,
       debug: false,
     })

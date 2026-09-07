@@ -44,6 +44,7 @@ const DISABLED_CONFIG = {
     useEventStream: false,
     ignoredDeviceIds: new Set(),
     includeUnmonitoredSensors: false,
+    allowSensorBypass: false,
     debug: false,
     diagnosticsInterval: 0,
 };
@@ -171,6 +172,15 @@ class MyAlarmComPlatform {
             throw new errors_1.ConfigurationError(`${settings_1.PLATFORM_NAME} has no usable configuration`);
         }
         return this.#client;
+    }
+    /**
+     * Whether an arming command may bypass sensors that are open.
+     *
+     * Exposed as a single flag rather than the whole configuration so an
+     * accessory cannot quietly grow a dependency on unrelated settings.
+     */
+    get isSensorBypassAllowed() {
+        return this.#config.allowSensorBypass;
     }
     /** Homebridge replays cached accessories here on startup. */
     configureAccessory(accessory) {

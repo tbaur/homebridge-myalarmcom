@@ -340,23 +340,21 @@ export const TRANSIENT_HINT_RESET_MS = 10 * MS_PER_SECOND
 export const PARTITION_TARGET_SETTLE_MS = 60 * MS_PER_SECOND
 
 /**
- * Deadline on the HomeKit-initiated arming command itself.
+ * How long a HomeKit-initiated arming command is waited on before HomeKit is
+ * answered without it.
  *
- * HAP terminates a set handler after 10 seconds, so anything slower than that is
- * reported to the user as a failure regardless of what the panel does. The worst
- * case without a bound is far longer — up to 30s of pacing, plus a login, plus
- * the command POST — which showed the user a failed arm while the panel armed
- * anyway.
+ * HAP terminates a set handler after 10 seconds, so this sits just under that.
  *
- * Set just *under* HAP's limit rather than comfortably under it. Any deadline
- * shorter than 10s turns a command that would have completed between the
- * deadline and 10s into a reported failure, so that window should be as narrow
- * as possible while still leaving the plugin time to log the outcome and return
- * a specific status instead of being cut off mid-request.
+ * It bounds the wait, not the command. Alarm.com holds the command request open
+ * until the panel acknowledges: measured at 17.6s for an arm and 19.4s for a
+ * disarm on a live panel, against 1.4s for a no-op that changes nothing. A
+ * command that really changes state therefore cannot answer inside HAP's
+ * window, and an earlier version treated that as a timeout — reporting a failed
+ * arm for every arm that was seconds from succeeding.
  *
- * This is a judgement call, not a measurement: the command POST itself is fast
- * (the 20-30s figure people quote is the panel *settling* afterwards), so the
- * realistic way to exceed this is pacing plus an interposed sign-in.
+ * So expiry here means "not finished yet", not "failed". The request is
+ * reported to HomeKit as accepted, the pending target holds the tile, and
+ * {@link PARTITION_TARGET_SETTLE_MS} retires it if the panel never confirms.
  */
 export const PARTITION_COMMAND_DEADLINE_MS = 9 * MS_PER_SECOND
 

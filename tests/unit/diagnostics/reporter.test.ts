@@ -26,6 +26,7 @@ const CONFIG: ResolvedConfig = {
   useEventStream: true,
   ignoredDeviceIds: new Set(),
   includeUnmonitoredSensors: false,
+  allowSensorBypass: false,
   debug: true,
   diagnosticsInterval: 60,
 }

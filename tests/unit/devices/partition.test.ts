@@ -22,7 +22,7 @@ import {
 import { createRecordingLogger, messagesAt, type RecordingLogger } from '../../helpers/logger'
 import partitionsFixture from '../../fixtures/partitions.json'
 import { fixtureAt } from '../../helpers/fixtures'
-import { PARTITION_TARGET_SETTLE_MS } from '../../../src/settings'
+import { PARTITION_COMMAND_DEADLINE_MS, PARTITION_TARGET_SETTLE_MS } from '../../../src/settings'
 
 const livePartition = partitionsFixture.data[0] as unknown as Resource<PartitionAttributes>
 
@@ -38,15 +38,21 @@ describe('PartitionAccessory', () => {
   let bed: PlatformTestBed
   let accessory: PartitionAccessory
 
-  function mount(): PartitionAccessory {
+  function mount(options: { isSensorBypassAllowed?: boolean } = {}): PartitionAccessory {
     const context: PartitionAccessoryContext = {
       deviceId: livePartition.id,
       kind: 'partition',
       displayName: 'Home',
     }
-    bed = createPlatformTestBed(context as unknown as Record<string, unknown>)
+    bed = createPlatformTestBed(context as unknown as Record<string, unknown>, options)
     accessory = new PartitionAccessory(bed.platform, bed.accessory, log)
     return accessory
+  }
+
+  /** Re-mount as a user who has opted in to bypassing open sensors. */
+  function mountWithBypassAllowed(): void {
+    mount({ isSensorBypassAllowed: true })
+    bed.commandPartition.mockResolvedValue(livePartition)
   }
 
   function service(): Service {
@@ -417,11 +423,11 @@ describe('PartitionAccessory', () => {
       )
     })
 
-    it('asks to bypass open sensors only when the panel allows it and some are open', async () => {
+    it('asks to bypass when the user allows it and the panel advertises it', async () => {
+      mountWithBypassAllowed()
       accessory.update(withAttributes({
         hasPermissionToChangeState: true,
-        hasOpenBypassableSensors: true,
-        extendedArmingOptions: { ArmedStay: [5], ArmedAway: [] },
+        extendedArmingOptions: { ArmedStay: [0], ArmedAway: [] },
       }))
 
       await requestTarget(HomeKitSecurityTarget.STAY_ARM)
@@ -433,10 +439,10 @@ describe('PartitionAccessory', () => {
       )
     })
 
-    it('does not ask to bypass when the panel does not advertise force arming', async () => {
+    it('never asks to bypass while the user has not opted in', async () => {
       accessory.update(withAttributes({
         hasPermissionToChangeState: true,
-        hasOpenBypassableSensors: true,
+        extendedArmingOptions: { ArmedStay: [0] },
       }))
 
       await requestTarget(HomeKitSecurityTarget.STAY_ARM)
@@ -448,11 +454,11 @@ describe('PartitionAccessory', () => {
       )
     })
 
-    it('does not ask to bypass when nothing is open', async () => {
+    it('does not ask to bypass when the panel does not advertise it', async () => {
+      mountWithBypassAllowed()
       accessory.update(withAttributes({
         hasPermissionToChangeState: true,
-        hasOpenBypassableSensors: false,
-        extendedArmingOptions: { ArmedStay: [5] },
+        extendedArmingOptions: { ArmedStay: [1] },
       }))
 
       await requestTarget(HomeKitSecurityTarget.STAY_ARM)
@@ -465,17 +471,40 @@ describe('PartitionAccessory', () => {
     })
 
     /**
-     * Regression. Force arming was read off `ArmedStay` whatever mode was
-     * requested, so a panel offering it only for away arming never received
-     * the flag and away arming failed with open sensors that the Alarm.com app
-     * would have bypassed.
+     * Regression. The decision used to require `hasOpenBypassableSensors`, and
+     * a live panel reported it false while holding an open contact that it then
+     * bypassed on request. Gating on it suppressed the flag exactly when it was
+     * needed, so arming over an open zone hung until the request timed out.
      */
-    describe('force arming is read from the mode actually being requested', () => {
+    it('ignores hasOpenBypassableSensors, which a panel reported false while bypassing', async () => {
+      mountWithBypassAllowed()
+      accessory.update(withAttributes({
+        hasPermissionToChangeState: true,
+        hasOpenBypassableSensors: false,
+        extendedArmingOptions: { ArmedStay: [0] },
+      }))
+
+      await requestTarget(HomeKitSecurityTarget.STAY_ARM)
+
+      expect(bed.commandPartition).toHaveBeenCalledWith(
+        '1234567-127',
+        'armStay',
+        expect.objectContaining({ forceBypass: true }),
+      )
+    })
+
+    /**
+     * Regression. Bypass was read off `ArmedStay` whatever mode was requested,
+     * so a panel offering it only for away arming never received the flag and
+     * away arming failed with open sensors that the Alarm.com app would have
+     * bypassed.
+     */
+    describe('bypass is read from the mode actually being requested', () => {
       it('asks to bypass for away arming when only ArmedAway allows it', async () => {
+        mountWithBypassAllowed()
         accessory.update(withAttributes({
           hasPermissionToChangeState: true,
-          hasOpenBypassableSensors: true,
-          extendedArmingOptions: { ArmedStay: [], ArmedAway: [5] },
+          extendedArmingOptions: { ArmedStay: [], ArmedAway: [0] },
         }))
 
         await requestTarget(HomeKitSecurityTarget.AWAY_ARM)
@@ -488,10 +517,10 @@ describe('PartitionAccessory', () => {
       })
 
       it('does not ask to bypass for away arming when only ArmedStay allows it', async () => {
+        mountWithBypassAllowed()
         accessory.update(withAttributes({
           hasPermissionToChangeState: true,
-          hasOpenBypassableSensors: true,
-          extendedArmingOptions: { ArmedStay: [5], ArmedAway: [] },
+          extendedArmingOptions: { ArmedStay: [0], ArmedAway: [] },
         }))
 
         await requestTarget(HomeKitSecurityTarget.AWAY_ARM)
@@ -504,10 +533,10 @@ describe('PartitionAccessory', () => {
       })
 
       it('reads night arming from ArmedNight, not from the armStay verb it is sent as', async () => {
+        mountWithBypassAllowed()
         accessory.update(withAttributes({
           hasPermissionToChangeState: true,
-          hasOpenBypassableSensors: true,
-          extendedArmingOptions: { ArmedStay: [], ArmedNight: [5, 0] },
+          extendedArmingOptions: { ArmedStay: [], ArmedNight: [0] },
         }))
 
         await requestTarget(HomeKitSecurityTarget.NIGHT_ARM)
@@ -523,6 +552,96 @@ describe('PartitionAccessory', () => {
     it('asks for a confirming read rather than trusting the command', async () => {
       await requestTarget(HomeKitSecurityTarget.AWAY_ARM)
 
+      expect(bed.requestDeviceRefresh).toHaveBeenCalledWith('1234567-127')
+    })
+  })
+
+  /**
+   * Alarm.com holds an arming request open until the panel acknowledges: 17.6s
+   * for an arm and 19.4s for a disarm when measured against a live panel, where
+   * HAP abandons a set handler at 10. Treating the deadline as a timeout
+   * therefore reported a failure for every arm that was seconds from
+   * succeeding, so it now ends the wait rather than the command.
+   */
+  describe('when the panel is slow to confirm', () => {
+    /** A command whose settlement this test controls. */
+    function deferCommand(): { resolve: () => void, reject: (error: Error) => void } {
+      let onResolve: (value: unknown) => void = () => undefined
+      let onReject: (error: Error) => void = () => undefined
+
+      bed.commandPartition.mockReturnValue(new Promise((resolve, reject) => {
+        onResolve = resolve
+        onReject = reject
+      }))
+
+      return {
+        resolve: () => onResolve(livePartition),
+        reject: (error: Error) => onReject(error),
+      }
+    }
+
+    /** Hand HomeKit its answer without letting the command finish. */
+    async function armPastTheDeadline(): Promise<void> {
+      const write = requestTarget(HomeKitSecurityTarget.AWAY_ARM)
+      await jest.advanceTimersByTimeAsync(PARTITION_COMMAND_DEADLINE_MS)
+      await write
+    }
+
+    beforeEach(() => {
+      jest.useFakeTimers()
+      accessory.update(controllable)
+    })
+
+    afterEach(() => {
+      jest.useRealTimers()
+    })
+
+    it('answers HomeKit without reporting a failure', async () => {
+      deferCommand()
+
+      await armPastTheDeadline()
+
+      expect(messagesAt(log, 'error')).toEqual([])
+      expect(messagesAt(log, 'info').join('\n')).toMatch(/Armed Away sent, waiting for the panel/)
+    })
+
+    it('holds the requested state while the panel is still settling', async () => {
+      deferCommand()
+
+      await armPastTheDeadline()
+      // A reading that still says disarmed, as the next poll would bring.
+      accessory.update(controllable)
+
+      expect(characteristicValue(service(), Characteristic.SecuritySystemTargetState))
+        .toBe(HomeKitSecurityTarget.AWAY_ARM)
+    })
+
+    it('logs the latency once a slow command finally succeeds', async () => {
+      const command = deferCommand()
+      await armPastTheDeadline()
+
+      command.resolve()
+      await jest.advanceTimersByTimeAsync(0)
+
+      expect(messagesAt(log, 'info').some((message) => /^Home: Armed Away \(Latency: \d+ms\)$/.test(message)))
+        .toBe(true)
+      expect(bed.recordCommand).toHaveBeenCalledTimes(1)
+      expect(bed.requestDeviceRefresh).toHaveBeenCalledWith('1234567-127')
+    })
+
+    it('forgets the pending target when a slow command finally fails', async () => {
+      const command = deferCommand()
+      await armPastTheDeadline()
+
+      command.reject(new Error('Alarm.com returned 500'))
+      await jest.advanceTimersByTimeAsync(0)
+
+      accessory.update(controllable)
+      expect(characteristicValue(service(), Characteristic.SecuritySystemTargetState))
+        .toBe(HomeKitSecurityTarget.DISARM)
+      expect(messagesAt(log, 'error').join('\n')).toMatch(/Failed to armAway partition 1234567-127/)
+      // HomeKit was already told the request was accepted, so only a re-read
+      // can correct the tile before the next poll.
       expect(bed.requestDeviceRefresh).toHaveBeenCalledWith('1234567-127')
     })
   })

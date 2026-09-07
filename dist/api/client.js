@@ -340,9 +340,11 @@ class AlarmComClient {
     /**
      * Send an arming command to a partition.
      *
-     * Modifiers are omitted rather than sent as `false` where Alarm.com is known
-     * to reject them: `nightArming` and `forceBypass` break the command outright
-     * on panels that do not support them, and neither applies to a disarm.
+     * Modifiers are omitted rather than sent as `false` because neither applies
+     * to a disarm and a panel need not understand them. `forceBypass: true` was
+     * measured as accepted on a panel that advertises BYPASS_SENSORS but not
+     * FORCE_ARM, so an unadvertised modifier does not necessarily break the
+     * command; whether to send it at all is decided by the caller.
      *
      * Not wrapped in {@link withRetry}: arming is not idempotent from the user's
      * point of view — a duplicate command can produce a second exit-delay
