@@ -24,6 +24,23 @@ const sanitizers_1 = require("../utils/sanitizers");
 const circuit_breaker_1 = require("./circuit-breaker");
 const http_1 = require("./http");
 const rate_limiter_1 = require("./rate-limiter");
+/**
+ * Assemble transport options, omitting anything the transport defaults itself.
+ *
+ * Extracted from the caller rather than inlined: these are all "leave the key
+ * out when it is absent" cases, and spreading them at the call site charged the
+ * request method for branches that carry no logic.
+ */
+function toTransportOptions(headers, options, fallbackSignal) {
+    const { method = 'GET', body, signal = fallbackSignal, timeoutMs } = options;
+    return {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        ...(signal ? { signal } : {}),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    };
+}
 /** Width of a correlation tag: short enough to scan, wide enough not to collide. */
 const REQUEST_TAG_HEX_DIGITS = 6;
 /**
@@ -149,7 +166,7 @@ class AlarmComClient {
      * as request latency nor charged against the pacing budget for this call.
      */
     async #send(session, url, options = {}) {
-        const { method = 'GET', body, tag = nextRequestTag(), signal = this.#signal } = options;
+        const { method = 'GET', body, tag = nextRequestTag() } = options;
         const headers = {
             Accept: settings_1.JSON_API_ACCEPT,
             Cookie: session.cookieHeader,
@@ -160,12 +177,7 @@ class AlarmComClient {
             headers['Content-Type'] = settings_1.REQUEST_CONTENT_TYPE;
         }
         const startedAt = Date.now();
-        const response = await (0, http_1.httpRequest)(url, {
-            method,
-            headers,
-            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-            ...(signal ? { signal } : {}),
-        });
+        const response = await (0, http_1.httpRequest)(url, toTransportOptions(headers, options, this.#signal));
         const durationMs = Date.now() - startedAt;
         if (!response.ok) {
             const retryAfterMs = (0, errors_1.parseRetryAfterMs)(response.headers.get('retry-after'));
@@ -374,6 +386,7 @@ class AlarmComClient {
             method: 'POST',
             body,
             tag,
+            timeoutMs: settings_1.PARTITION_COMMAND_TIMEOUT_MS,
         });
         const response = await this.#withSessionRecovery(attempt, `during command [${tag}]`, isRejectedOutright);
         return response.data;

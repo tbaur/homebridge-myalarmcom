@@ -120,15 +120,19 @@ The capability to look for when bypassing is `BYPASS_SENSORS` (`0`). `FORCE_ARM`
 
 **Verified, and not what the folklore says.** The request is held open until the panel acknowledges. The often-quoted "arming takes 20–30 seconds to settle" describes time spent *inside* the POST, not after it.
 
-| Command                              | Duration  |
-| ------------------------------------ | --------- |
-| `armStay`, real state change         | 17,595 ms |
-| `disarm`, real state change          | 19,364 ms |
+| Command                               | Duration  |
+| ------------------------------------- | --------- |
+| `armStay`, real state change          | 17,569 ms |
+| `armStay`, real state change          | 17,595 ms |
+| `disarm`, real state change           | 19,364 ms |
+| `disarm`, real state change           | 25,441 ms |
 | `disarm` on an already-disarmed panel | 1,389 ms  |
 
-A command that changes nothing returns in about a second; one that moves the panel takes the better part of twenty. The response *does* carry the new state when it finally arrives, so a client need not poll to learn the outcome — it only needs to survive the wait.
+A command that changes nothing returns in about a second; one that moves the panel takes between seventeen and twenty-six. The response *does* carry the new state when it finally arrives, so a client need not poll to learn the outcome — it only needs to survive the wait.
 
-Two consequences for a client. Any deadline shorter than about 25 seconds will fire on a command that is going to succeed, so a timeout must not be reported as a failure. And a panel that refuses to arm, over an open zone for instance, simply never answers, so the request runs to whatever ceiling the client imposes.
+The spread matters as much as the figures. Two disarms of the same panel, minutes apart and under the same conditions, took 19.4s and 25.4s, so a ceiling picked to clear the fastest observed command will eventually cut off a slower one. Budget well above the worst measurement rather than just past it; this plugin allows 60 seconds for a command and keeps 30 for reads.
+
+Two further consequences for a client. Any deadline shorter than about 30 seconds will fire on a command that is going to succeed, so a timeout must not be reported as a failure. And a panel that refuses to arm, over an open zone for instance, simply never answers, so the request runs to whatever ceiling the client imposes.
 
 ## Device state
 

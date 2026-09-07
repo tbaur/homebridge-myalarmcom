@@ -140,6 +140,22 @@ export declare const MAX_IDS_PER_REQUEST = 50;
  */
 export declare const DEFAULT_REQUEST_TIMEOUT_MS: number;
 /**
+ * Ceiling on an arming command, which is far slower than a read.
+ *
+ * Alarm.com holds a command request open until the panel acknowledges, so the
+ * panel's response time is inside the request rather than after it. Measured on
+ * a live panel: 17.6s and 19.4s to arm, 25.4s to disarm. The read ceiling of
+ * 30s left 4.6s of headroom on the worst of those, which is not enough — a
+ * command timing out is reported to the user as a failed arm while the panel
+ * carries on and arms.
+ *
+ * Doubled rather than nudged, because the cost of waiting too long is a slow
+ * log line and the cost of waiting too little is a security system whose state
+ * disagrees with what the user was told. Reads keep the shorter ceiling, since
+ * nothing about this applies to them.
+ */
+export declare const PARTITION_COMMAND_TIMEOUT_MS: number;
+/**
  * Deadline for the login postback and the login-page scrape.
  *
  * Longer than the default: the WebForms postback is the slowest thing Alarm.com
