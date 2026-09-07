@@ -97,7 +97,12 @@ class RateLimiter {
                 throw new errors_1.RequestPacingError(waitMs, this.#maxWaitMs);
             }
             if (waitMs > 0) {
-                await (0, retry_1.sleep)(waitMs, signal);
+                // Held open, unlike a backoff. A caller is already awaiting the request
+                // this wait gates, so an unreferenced timer lets a process with nothing
+                // else running exit mid-pace and strand that promise unsettled — which
+                // reads as a clean exit, not a failure. Shutdown still wins, because
+                // `signal` aborts the wait.
+                await (0, retry_1.sleep)(waitMs, signal, { shouldHoldProcess: true });
             }
             this.#timestamps.push(Date.now());
         });

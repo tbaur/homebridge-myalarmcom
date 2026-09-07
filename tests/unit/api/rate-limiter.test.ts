@@ -53,6 +53,32 @@ describe('RateLimiter', () => {
     expect(tracked.isSettled()).toBe(true)
   })
 
+  /**
+   * Regression: pacing reused the shared backoff sleep, which unreferences its
+   * timer. Inside Homebridge the bridge kept the loop alive so the wait always
+   * elapsed, hiding it. Anything else embedding the client — the repo's own
+   * `scripts/verify.mjs` among them — exited silently on its second request,
+   * because the gap was the only thing left holding the process open.
+   */
+  it('paces with a timer that keeps the process alive', async () => {
+    const limiter = new RateLimiter({ minIntervalMs: 1_000 })
+    await limiter.acquire()
+
+    const unref = jest.fn()
+    const schedule = jest.spyOn(global, 'setTimeout')
+      .mockReturnValue({ unref } as unknown as NodeJS.Timeout)
+
+    try {
+      void limiter.acquire()
+      await jest.advanceTimersByTimeAsync(0)
+
+      expect(schedule).toHaveBeenCalled()
+      expect(unref).not.toHaveBeenCalled()
+    } finally {
+      schedule.mockRestore()
+    }
+  })
+
   it('serves a burst in arrival order rather than letting callers race', async () => {
     const limiter = new RateLimiter({ minIntervalMs: 1_000 })
     const order: number[] = []

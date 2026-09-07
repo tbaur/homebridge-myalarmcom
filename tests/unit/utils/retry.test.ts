@@ -284,4 +284,23 @@ describe('sleep', () => {
       jest.useRealTimers()
     }
   })
+
+  /**
+   * The opposite case, for a wait a caller is blocked on rather than one that
+   * merely delays a retry. Unreferencing that one lets a process with no other
+   * work exit before the wait elapses, leaving the caller's promise unsettled.
+   */
+  it('holds the event loop open when asked to', () => {
+    jest.useFakeTimers()
+    try {
+      const unref = jest.fn()
+      jest.spyOn(global, 'setTimeout').mockReturnValue({ unref } as unknown as NodeJS.Timeout)
+
+      void sleep(60_000, undefined, { shouldHoldProcess: true })
+
+      expect(unref).not.toHaveBeenCalled()
+    } finally {
+      jest.useRealTimers()
+    }
+  })
 })

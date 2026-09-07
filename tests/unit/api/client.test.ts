@@ -296,8 +296,10 @@ describe('AlarmComClient', () => {
     const partitionId = '1234567-127'
     const partitionResponse = { data: fixtureAt(partitionsFixture.data, 0, 'partitions') }
 
-    // Alarm.com negotiates on application/vnd.api+json, which nock does not
-    // recognise as JSON, so the request body arrives as raw text.
+    // Both forms are handled because nock decides by content type. It hands
+    // over a parsed object now that the body is labelled application/json, and
+    // handed over raw text back when it was mislabelled application/vnd.api+json
+    // — a media type nock does not recognise as JSON either.
     async function captureCommandBody(
       run: (client: AlarmComClient) => Promise<Resource<PartitionAttributes>>,
       action: string,
@@ -308,7 +310,9 @@ describe('AlarmComClient', () => {
       nock(BASE_URL)
         .post(`/web/api/devices/partitions/${partitionId}/${action}`)
         .reply(200, (_uri, requestBody) => {
-          body = JSON.parse(String(requestBody)) as Record<string, unknown>
+          body = (typeof requestBody === 'string'
+            ? JSON.parse(requestBody)
+            : requestBody) as Record<string, unknown>
           return partitionResponse
         })
 
@@ -325,6 +329,24 @@ describe('AlarmComClient', () => {
       const partition = await client.commandPartition(partitionId, 'armAway')
 
       expect(partition.id).toBe(partitionId)
+    })
+
+    // Regression test for issue #65. Labelling the body application/vnd.api+json
+    // — the value the Accept header uses — made Alarm.com answer 500 to every
+    // arm and disarm while reads carried on working, because it replies in that
+    // media type but has no reader for it. Measured against a live panel: the
+    // same command is accepted as application/json and refused as vnd.api+json.
+    it('labels the request body as JSON while still asking for JSON:API back', async () => {
+      const { client } = createClient()
+      nock(BASE_URL)
+        .matchHeader('content-type', 'application/json; charset=UTF-8')
+        .matchHeader('accept', 'application/vnd.api+json')
+        .post(`/web/api/devices/partitions/${partitionId}/armAway`)
+        .reply(200, partitionResponse)
+
+      await expect(client.commandPartition(partitionId, 'armAway')).resolves.toMatchObject({
+        id: partitionId,
+      })
     })
 
     it('re-authenticates once when a command hits a lapsed session', async () => {

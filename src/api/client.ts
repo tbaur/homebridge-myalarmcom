@@ -32,6 +32,7 @@ import {
   JSON_API_ACCEPT,
   MAX_IDS_PER_REQUEST,
   PARTITIONS_URL,
+  REQUEST_CONTENT_TYPE,
   SENSORS_URL,
   SYSTEM_URL,
   WEBSOCKET_TOKEN_URL,
@@ -278,7 +279,7 @@ export class AlarmComClient {
     }
 
     if (body !== undefined) {
-      headers['Content-Type'] = JSON_API_ACCEPT
+      headers['Content-Type'] = REQUEST_CONTENT_TYPE
     }
 
     const startedAt = Date.now()

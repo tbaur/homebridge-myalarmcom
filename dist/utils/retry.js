@@ -23,14 +23,15 @@ const JITTER_FACTOR = 0.25;
 /**
  * Resolve after the given delay, or reject if the signal aborts first.
  *
- * The timer is `unref`'d so a pending backoff cannot hold Node open past
- * shutdown. That matters here because the waits are long: retry backoff runs to
- * a minute and the initial-discovery backoff to five, and a child bridge that
- * refuses to exit for five minutes looks like a hang.
+ * The timer is `unref`'d unless {@link SleepOptions.shouldHoldProcess} asks
+ * otherwise, so a pending backoff cannot hold Node open past shutdown. That
+ * matters here because the waits are long: retry backoff runs to a minute and
+ * the initial-discovery backoff to five, and a child bridge that refuses to
+ * exit for five minutes looks like a hang.
  *
  * @throws {OperationAbortedError} The signal aborted before the delay elapsed.
  */
-const sleep = (ms, signal) => {
+const sleep = (ms, signal, options = {}) => {
     if (signal?.aborted === true) {
         return Promise.reject(new errors_1.OperationAbortedError('Wait cancelled before it started'));
     }
@@ -39,7 +40,9 @@ const sleep = (ms, signal) => {
             signal?.removeEventListener('abort', onAbort);
             resolve();
         }, ms);
-        timer.unref?.();
+        if (options.shouldHoldProcess !== true) {
+            timer.unref?.();
+        }
         const onAbort = () => {
             clearTimeout(timer);
             reject(new errors_1.OperationAbortedError('Wait cancelled'));

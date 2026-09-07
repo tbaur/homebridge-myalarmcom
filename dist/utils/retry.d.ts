@@ -23,17 +23,29 @@ export interface RetryOptions {
     /** Abandons the retry loop, and any wait in progress, on shutdown. */
     signal?: AbortSignal;
 }
+export interface SleepOptions {
+    /**
+     * Keep the process alive until the delay elapses.
+     *
+     * Off by default, which is what a backoff wants: nothing depends on the wait
+     * finishing except a retry that shutdown is about to cancel anyway. Turn it
+     * on for a wait that gates an operation a caller is already awaiting, where
+     * exiting mid-wait strands that caller's promise unsettled.
+     */
+    shouldHoldProcess?: boolean;
+}
 /**
  * Resolve after the given delay, or reject if the signal aborts first.
  *
- * The timer is `unref`'d so a pending backoff cannot hold Node open past
- * shutdown. That matters here because the waits are long: retry backoff runs to
- * a minute and the initial-discovery backoff to five, and a child bridge that
- * refuses to exit for five minutes looks like a hang.
+ * The timer is `unref`'d unless {@link SleepOptions.shouldHoldProcess} asks
+ * otherwise, so a pending backoff cannot hold Node open past shutdown. That
+ * matters here because the waits are long: retry backoff runs to a minute and
+ * the initial-discovery backoff to five, and a child bridge that refuses to
+ * exit for five minutes looks like a hang.
  *
  * @throws {OperationAbortedError} The signal aborted before the delay elapsed.
  */
-export declare const sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+export declare const sleep: (ms: number, signal?: AbortSignal, options?: SleepOptions) => Promise<void>;
 /**
  * Compute the delay before a given attempt.
  *

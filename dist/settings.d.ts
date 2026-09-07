@@ -70,8 +70,23 @@ export declare const WEBSOCKET_TOKEN_URL = "https://www.alarm.com/web/api/websoc
  * like they came from it.
  */
 export declare const HOME_REFERER = "https://www.alarm.com/web/system/home";
-/** JSON:API content type Alarm.com negotiates on. */
+/** JSON:API content type Alarm.com answers in, sent as `Accept`. */
 export declare const JSON_API_ACCEPT = "application/vnd.api+json";
+/**
+ * Content type for a request *body*, which is not the one we ask for back.
+ *
+ * The asymmetry is real and was measured, not assumed. Alarm.com replies in
+ * `application/vnd.api+json` but has no reader for it: label a command body
+ * that way and the endpoint answers `500`, whether the body is the flat object
+ * it expects or a JSON:API document. Send `application/json` and the identical
+ * command is accepted. The charset carries no weight — bare `application/json`
+ * works too — and it is kept only because it is the exact string every client
+ * known to drive a real panel sends.
+ *
+ * Reusing {@link JSON_API_ACCEPT} for both headers is what made every arm and
+ * disarm fail with `500` while reads succeeded, which is issue #65.
+ */
+export declare const REQUEST_CONTENT_TYPE = "application/json; charset=UTF-8";
 /**
  * Hidden ASP.NET WebForms inputs scraped from the login page and echoed back on
  * the postback. If Alarm.com reworks its login page, these break first.

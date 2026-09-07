@@ -18,8 +18,8 @@
  * failure counters) stays in that module, next to the code that reasons about it.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PARTITION_COMMAND_DEADLINE_MS = exports.PARTITION_TARGET_SETTLE_MS = exports.TRANSIENT_HINT_RESET_MS = exports.REFRESH_DEBOUNCE_MS = exports.MAX_RETRY_BACKOFF_MS = exports.MAX_API_RETRY_ATTEMPTS = exports.INITIAL_DISCOVERY_RETRY_MAX_MS = exports.INITIAL_DISCOVERY_RETRY_BASE_MS = exports.POLL_FAILURE_WARN_THRESHOLD = exports.POLL_CYCLE_DEADLINE_MS = exports.MAX_LOGIN_FLOOR_WAIT_MS = exports.KEEPALIVE_INTERVAL_MS = exports.MIN_DIAGNOSTICS_INTERVAL_SEC = exports.MAX_DIAGNOSTICS_INTERVAL_SEC = exports.MAX_AUTH_INTERVAL_MIN = exports.DEFAULT_AUTH_INTERVAL_MIN = exports.MIN_AUTH_INTERVAL_MIN = exports.MAX_POLL_INTERVAL_SEC = exports.DEFAULT_POLL_INTERVAL_SEC = exports.MIN_POLL_INTERVAL_SEC = exports.KEEPALIVE_REQUEST_TIMEOUT_MS = exports.LOGIN_REQUEST_TIMEOUT_MS = exports.DEFAULT_REQUEST_TIMEOUT_MS = exports.MAX_IDS_PER_REQUEST = exports.CSRF_HEADER_NAME = exports.CSRF_COOKIE_NAME = exports.MFA_COOKIE_NAME = exports.EVENT_FIELD_SENTINEL = exports.IS_FROM_NEW_SITE_FIELD = exports.PASSWORD_FIELD = exports.USERNAME_FIELD = exports.LOGIN_FORM_FIELDS = exports.JSON_API_ACCEPT = exports.HOME_REFERER = exports.WEBSOCKET_TOKEN_URL = exports.SENSORS_URL = exports.PARTITIONS_URL = exports.SYSTEM_URL = exports.KEEPALIVE_URL = exports.IDENTITIES_URL = exports.LOGIN_POST_URL = exports.LOGIN_PAGE_URL = exports.ALLOWED_API_ORIGIN = exports.BASE_URL = exports.MS_PER_MINUTE = exports.MS_PER_SECOND = exports.MANUFACTURER = exports.UUID_PREFIX = exports.PLATFORM_NAME = exports.PLUGIN_NAME = void 0;
-exports.WEBSOCKET_REFRESH_JITTER_MS = exports.WEBSOCKET_REFRESH_INTERVAL_MS = exports.WEBSOCKET_RECOVERY_INTERVAL_MS = exports.WEBSOCKET_MAX_FAILURES = exports.WEBSOCKET_RECONNECT_MAX_MS = exports.WEBSOCKET_RECONNECT_BASE_MS = exports.WEBSOCKET_HANDSHAKE_TIMEOUT_MS = exports.ALARM_COM_APEX_HOST = exports.WEBSOCKET_HOST_SUFFIX = exports.DEFAULT_WEBSOCKET_ENDPOINT = exports.REDISCOVERY_INTERVAL_MS = void 0;
+exports.PARTITION_TARGET_SETTLE_MS = exports.TRANSIENT_HINT_RESET_MS = exports.REFRESH_DEBOUNCE_MS = exports.MAX_RETRY_BACKOFF_MS = exports.MAX_API_RETRY_ATTEMPTS = exports.INITIAL_DISCOVERY_RETRY_MAX_MS = exports.INITIAL_DISCOVERY_RETRY_BASE_MS = exports.POLL_FAILURE_WARN_THRESHOLD = exports.POLL_CYCLE_DEADLINE_MS = exports.MAX_LOGIN_FLOOR_WAIT_MS = exports.KEEPALIVE_INTERVAL_MS = exports.MIN_DIAGNOSTICS_INTERVAL_SEC = exports.MAX_DIAGNOSTICS_INTERVAL_SEC = exports.MAX_AUTH_INTERVAL_MIN = exports.DEFAULT_AUTH_INTERVAL_MIN = exports.MIN_AUTH_INTERVAL_MIN = exports.MAX_POLL_INTERVAL_SEC = exports.DEFAULT_POLL_INTERVAL_SEC = exports.MIN_POLL_INTERVAL_SEC = exports.KEEPALIVE_REQUEST_TIMEOUT_MS = exports.LOGIN_REQUEST_TIMEOUT_MS = exports.DEFAULT_REQUEST_TIMEOUT_MS = exports.MAX_IDS_PER_REQUEST = exports.CSRF_HEADER_NAME = exports.CSRF_COOKIE_NAME = exports.MFA_COOKIE_NAME = exports.EVENT_FIELD_SENTINEL = exports.IS_FROM_NEW_SITE_FIELD = exports.PASSWORD_FIELD = exports.USERNAME_FIELD = exports.LOGIN_FORM_FIELDS = exports.REQUEST_CONTENT_TYPE = exports.JSON_API_ACCEPT = exports.HOME_REFERER = exports.WEBSOCKET_TOKEN_URL = exports.SENSORS_URL = exports.PARTITIONS_URL = exports.SYSTEM_URL = exports.KEEPALIVE_URL = exports.IDENTITIES_URL = exports.LOGIN_POST_URL = exports.LOGIN_PAGE_URL = exports.ALLOWED_API_ORIGIN = exports.BASE_URL = exports.MS_PER_MINUTE = exports.MS_PER_SECOND = exports.MANUFACTURER = exports.UUID_PREFIX = exports.PLATFORM_NAME = exports.PLUGIN_NAME = void 0;
+exports.WEBSOCKET_REFRESH_JITTER_MS = exports.WEBSOCKET_REFRESH_INTERVAL_MS = exports.WEBSOCKET_RECOVERY_INTERVAL_MS = exports.WEBSOCKET_MAX_FAILURES = exports.WEBSOCKET_RECONNECT_MAX_MS = exports.WEBSOCKET_RECONNECT_BASE_MS = exports.WEBSOCKET_HANDSHAKE_TIMEOUT_MS = exports.ALARM_COM_APEX_HOST = exports.WEBSOCKET_HOST_SUFFIX = exports.DEFAULT_WEBSOCKET_ENDPOINT = exports.REDISCOVERY_INTERVAL_MS = exports.PARTITION_COMMAND_DEADLINE_MS = void 0;
 /** Name used to register the plugin with Homebridge (must match package.json name). */
 exports.PLUGIN_NAME = 'homebridge-myalarmcom';
 /** Platform identifier referenced in the user's Homebridge config. */
@@ -80,8 +80,23 @@ exports.WEBSOCKET_TOKEN_URL = `${exports.BASE_URL}/web/api/websockets/token`;
  * like they came from it.
  */
 exports.HOME_REFERER = `${exports.BASE_URL}/web/system/home`;
-/** JSON:API content type Alarm.com negotiates on. */
+/** JSON:API content type Alarm.com answers in, sent as `Accept`. */
 exports.JSON_API_ACCEPT = 'application/vnd.api+json';
+/**
+ * Content type for a request *body*, which is not the one we ask for back.
+ *
+ * The asymmetry is real and was measured, not assumed. Alarm.com replies in
+ * `application/vnd.api+json` but has no reader for it: label a command body
+ * that way and the endpoint answers `500`, whether the body is the flat object
+ * it expects or a JSON:API document. Send `application/json` and the identical
+ * command is accepted. The charset carries no weight — bare `application/json`
+ * works too — and it is kept only because it is the exact string every client
+ * known to drive a real panel sends.
+ *
+ * Reusing {@link JSON_API_ACCEPT} for both headers is what made every arm and
+ * disarm fail with `500` while reads succeeded, which is issue #65.
+ */
+exports.REQUEST_CONTENT_TYPE = 'application/json; charset=UTF-8';
 // ---------------------------------------------------------------------------
 // Login form
 // ---------------------------------------------------------------------------

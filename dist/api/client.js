@@ -157,7 +157,7 @@ class AlarmComClient {
             Referer: settings_1.HOME_REFERER,
         };
         if (body !== undefined) {
-            headers['Content-Type'] = settings_1.JSON_API_ACCEPT;
+            headers['Content-Type'] = settings_1.REQUEST_CONTENT_TYPE;
         }
         const startedAt = Date.now();
         const response = await (0, http_1.httpRequest)(url, {
