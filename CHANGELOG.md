@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.5](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.4...v2.0.5) (2026-09-07)
+
+
+### Bug Fixes
+
+* correct five defects found auditing the command and discovery paths ([#81](https://github.com/tbaur/homebridge-myalarmcom/issues/81)) ([3c6be02](https://github.com/tbaur/homebridge-myalarmcom/commit/3c6be02b5ba8591ee79b526ed7eb9165be26ea98))
+* show a panel night-armed at the keypad instead of a stuck tile ([#78](https://github.com/tbaur/homebridge-myalarmcom/issues/78)) ([622a52c](https://github.com/tbaur/homebridge-myalarmcom/commit/622a52ce8adfd2fd71b2111e44317d4ad5a7abe2))
+
 ## [2.0.4](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.3...v2.0.4) (2026-09-07)
 
 
