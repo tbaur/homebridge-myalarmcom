@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.2](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.1...v2.0.2) (2026-09-07)
+
+
+### Bug Fixes
+
+* allow 60s for arming commands and log errors raised before sending ([#70](https://github.com/tbaur/homebridge-myalarmcom/issues/70)) ([faf9e07](https://github.com/tbaur/homebridge-myalarmcom/commit/faf9e073269d0e696db0b72ef208419e37bfa612))
+
 ## [2.0.1](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.0...v2.0.1) (2026-09-07)
 
 
