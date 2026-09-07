@@ -29,6 +29,9 @@
  *   node scripts/probe-command.mjs                 report capabilities, send nothing
  *   node scripts/probe-command.mjs --compare       no-op disarm once per Content-Type
  *   node scripts/probe-command.mjs --arm stay      one real arm, watch it, disarm again
+ *   node scripts/probe-command.mjs --arm stay --force-bypass
+ *                                                 the same, with forceBypass set,
+ *                                                 to test arming over an open zone
  *
  * A scrubbed report is written to probe-output/, which is never committed.
  * Console output names your panel; treat it as sensitive if you paste it.
@@ -63,6 +66,9 @@ Find out which request shape Alarm.com's partition command endpoint accepts.
                        the panel settle, then disarm again.
   --content-type <ct>  Content-Type for --arm. Defaults to the winner of
                        --compare, or to application/json; charset=UTF-8.
+  --force-bypass       Add "forceBypass": true to the --arm body. Only tells
+                       you anything with a contact sensor held open, which is
+                       the case the plugin currently cannot arm through.
   --partition <id>     Which partition to use, when the account has several.
   --settle <seconds>   How long to watch an --arm settle (default: 60).
   --force              Allow --compare against a panel that is not already
@@ -147,11 +153,28 @@ const stateName = (value) => `${value} (${PARTITION_STATE_NAMES[value] ?? 'unrec
 /** Whether the server took the command. */
 const isAccepted = (result) => result.status >= 200 && result.status < 300
 
-/** The command body the plugin builds today, which is what needs confirming. */
-function commandBody(action) {
-  return action === 'disarm'
-    ? { statePollOnly: false }
-    : { statePollOnly: false, noEntryDelay: false, silentArming: false }
+/**
+ * The command body the plugin builds today, which is what needs confirming.
+ *
+ * `forceBypass` is opt-in rather than derived, because the question it answers
+ * is about the derivation itself. The plugin sends the flag only when the panel
+ * advertises FORCE_ARM (5), and the panels seen so far advertise BYPASS_SENSORS
+ * (0) and SELECTIVELY_BYPASS_SENSORS (4) instead — so the flag never goes out,
+ * and arming over an open zone hangs until the request times out. Sending it
+ * regardless, with a zone open, is what separates "this panel cannot bypass"
+ * from "the plugin is checking for the wrong capability".
+ */
+function commandBody(action, { isForceBypass = false } = {}) {
+  if (action === 'disarm') {
+    return { statePollOnly: false }
+  }
+
+  const body = { statePollOnly: false, noEntryDelay: false, silentArming: false }
+  if (isForceBypass) {
+    body.forceBypass = true
+  }
+
+  return body
 }
 
 /**
@@ -434,7 +457,7 @@ function reportAttempt(label, attempt) {
 
 /** Send one command and record everything about the exchange. */
 async function sendCommand(session, partition, action, variant) {
-  const flat = commandBody(action)
+  const flat = commandBody(action, { isForceBypass: variant.isForceBypass === true })
   const body = variant.isEnveloped ? asJsonApiDocument(partition, flat) : flat
   const url = `${PARTITIONS_URL}/${encodeURIComponent(partition.id)}/${action}`
 
@@ -445,6 +468,7 @@ async function sendCommand(session, partition, action, variant) {
     action,
     contentType: variant.contentType,
     isEnveloped: variant.isEnveloped,
+    isForceBypass: variant.isForceBypass === true,
     requestBody: body,
     status: result.status,
     durationMs: result.durationMs,
@@ -577,9 +601,10 @@ async function watchUntilSettled(session, partitionId, settleSeconds) {
  * outcome, and a second Ctrl-C during that disarm is ignored rather than
  * allowed to kill the process mid-command.
  */
-async function runArmCycle(session, partition, { mode, contentType, settleSeconds }) {
+async function runArmCycle(session, partition, { mode, contentType, settleSeconds, isForceBypass }) {
   const action = mode === 'away' ? 'armAway' : 'armStay'
-  const variant = { id: 'arm', contentType, isEnveloped: false }
+  const variant = { id: 'arm', contentType, isEnveloped: false, isForceBypass }
+  const isAnythingOpen = partition.attributes?.hasOpenBypassableSensors === true
 
   if (partition.attributes?.hasPermissionToChangeState !== true) {
     throw new Error('This account cannot change the arming state.')
@@ -587,8 +612,22 @@ async function runArmCycle(session, partition, { mode, contentType, settleSecond
 
   stdout.write('\n-- Real arming command --\n')
   stdout.write(`  POST ${PARTITIONS_URL}/${partition.id}/${action}\n`)
-  stdout.write(`  body ${JSON.stringify(commandBody(action))}\n`)
+  stdout.write(`  body ${JSON.stringify(commandBody(action, { isForceBypass }))}\n`)
   stdout.write(`  Content-Type: ${contentType}\n`)
+
+  if (isForceBypass) {
+    // Reported, but not trusted. A live panel read this false while holding an
+    // open bypassable contact that it then bypassed on request, so it cannot
+    // tell you whether this run is a meaningful test. Your own eyes on the
+    // door, and the bypass notice the Alarm.com app sends, can.
+    stdout.write(`  hasOpenBypassableSensors  ${partition.attributes?.hasOpenBypassableSensors}`)
+    stdout.write(isAnythingOpen ? '\n' : '  (unreliable; it has read false with a door open)\n')
+    stdout.write('  With nothing genuinely open the panel arms either way, so the result\n')
+    stdout.write('  says nothing about forceBypass. Confirm a contact is open before arming.\n')
+  } else if (isAnythingOpen) {
+    stdout.write('  A zone is open and forceBypass is NOT being sent, so expect a refusal.\n')
+  }
+
   stdout.write('  This really arms your panel. It is disarmed again afterwards, including on Ctrl-C.\n')
 
   if (!(await confirmPhrase('\nSend it?', action))) {
@@ -746,9 +785,16 @@ async function main() {
 
   if (armMode !== undefined) {
     const contentType = chooseArmContentType(attempts)
-    const cycle = await runArmCycle(session, partition, { mode: armMode, contentType, settleSeconds })
+    const isForceBypass = hasFlag('--force-bypass')
+    const cycle = await runArmCycle(session, partition, {
+      mode: armMode,
+      contentType,
+      settleSeconds,
+      isForceBypass,
+    })
     report.armCycle = {
       contentType,
+      isForceBypass,
       armed: cycle.armed,
       transitions: cycle.transitions,
       disarmed: cycle.disarmed,

@@ -5,7 +5,7 @@ User-facing options and troubleshooting: [docs/README-DETAILED.md](../docs/READM
 | Script | Purpose |
 | --- | --- |
 | `probe.mjs` | Signs in to Alarm.com once, reports what the account exposes, probes for a better authentication path, and writes scrubbed JSON:API payloads to `probe-output/` for use as test fixtures. |
-| `probe-command.mjs` | Settles which request shape the partition command endpoint accepts, by sending the same command once per candidate `Content-Type`. Writes to a live panel; read the safety notes below. |
+| `probe-command.mjs` | Settles what the partition command endpoint accepts and how long it takes: the same command once per candidate `Content-Type`, an optional real arm/disarm cycle, and `--force-bypass` for arming over an open zone. Writes to a live panel; read the safety notes below. |
 | `verify.mjs` | Drives the **compiled plugin** in `dist/` against a live account and prints how each device maps to HomeKit. |
 | `watch-arming.mjs` | Streams events while polling partition and sensor state, printing every change with a diff. Built for watching a real arm/disarm driven from the mobile app. |
 | `diagnose-stream.mjs` | Connects to the event stream four ways (two clients × raw and encoded token) and reports which combinations work. Run it when the stream stops connecting. |

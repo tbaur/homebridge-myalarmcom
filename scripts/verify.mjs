@@ -169,12 +169,17 @@ async function watchPartition(client, partitionId, isDone, timeoutMs) {
 
 /** Send one command and report precisely how Alarm.com answered. */
 async function sendCommand(client, partitionId, action) {
+  // Timed and printed because the figure drives a real decision: Alarm.com
+  // holds the request open until the panel acknowledges, so this is how long
+  // HomeKit would be waiting, not how long the network took.
+  const startedAt = Date.now()
+
   try {
     const result = await client.commandPartition(partitionId, action, {})
-    stdout.write(`  ACCEPTED. Immediate response state=${result?.attributes?.state}, desired=${result?.attributes?.desiredState}\n`)
+    stdout.write(`  ACCEPTED in ${Date.now() - startedAt}ms. Immediate response state=${result?.attributes?.state}, desired=${result?.attributes?.desiredState}\n`)
     return true
   } catch (error) {
-    stdout.write(`  REFUSED: ${error?.constructor?.name ?? 'Error'}\n`)
+    stdout.write(`  REFUSED after ${Date.now() - startedAt}ms: ${error?.constructor?.name ?? 'Error'}\n`)
     stdout.write(`    code       ${error?.code ?? '(none)'}\n`)
     stdout.write(`    httpStatus ${error?.httpStatus ?? '(none)'}\n`)
     stdout.write(`    message    ${redactFreeText(error?.message ?? '(none)')}\n`)
