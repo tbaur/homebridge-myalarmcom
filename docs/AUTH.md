@@ -8,13 +8,15 @@ That cookie is **not** the six-digit code from your authenticator app. It is a l
 
 ## Getting the cookie
 
-1. Sign in to [alarm.com](https://www.alarm.com) in a desktop browser and complete two-factor verification.
+1. Sign in to [alarm.com](https://www.alarm.com) in a desktop browser, complete two-factor verification, and **tick the option to remember or trust this device** when it is offered.
 2. Open developer tools (F12, or Cmd-Option-I on macOS).
 3. Open the cookies panel: **Application → Cookies →** `https://www.alarm.com` in Chrome or Edge, or **Storage → Cookies** in Firefox and Safari.
 4. Find the row named `twoFactorAuthenticationId` and copy its **value**.
 5. Paste that value into the plugin's Two-Factor Cookie field (or into `ADC_MFA_TOKEN` for the development scripts).
 
-You do not need to mark the browser as trusted, and you do not need to trust your Homebridge machine. The cookie is scoped to your Alarm.com *account*, not to a device.
+Trusting the browser at step 1 is required, and it is the step people miss. Alarm.com sets a `twoFactorAuthenticationId` cookie whether or not you tick the box, so the value looks right either way. Only the trusted version is durable: an untrusted one works in the browser that created it and nowhere else. Replay it from Homebridge and Alarm.com answers `409 TwoFactorAuthenticationRequired` even though the sign-in itself appears to succeed.
+
+You still do not need to trust your Homebridge machine. Once the cookie exists it carries the verification with it, and Alarm.com honours it from a host it reports as untrusted. Trust the browser you copy *from*, not the machine you replay *on*.
 
 Copy only that one cookie's value. Not the whole `Cookie` header, and not several cookies joined by semicolons.
 

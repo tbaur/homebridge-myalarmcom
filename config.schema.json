@@ -36,7 +36,7 @@
         "x-schema-form": {
           "type": "password"
         },
-        "description": "The value of the `twoFactorAuthenticationId` browser cookie from a signed-in Alarm.com session. Treat this as a password: it bypasses two-factor authentication on its own. A six-digit authenticator code is rejected, as is a whole cookie header — paste only this one cookie’s value. Leave blank only if the account has two-factor disabled."
+        "description": "The value of the `twoFactorAuthenticationId` browser cookie, captured from a sign-in where you ticked “remember/trust this device”. Alarm.com sets the cookie either way, but an untrusted one works only in the browser that made it and fails here. Treat this as a password: it bypasses two-factor authentication on its own. A six-digit authenticator code is rejected, as is a whole cookie header — paste only this one cookie’s value. Leave blank only if the account has two-factor disabled."
       },
       "pollIntervalSeconds": {
         "title": "Poll Interval (seconds)",

@@ -42,9 +42,11 @@ Sending a *superset* of the correct cookies causes Alarm.com to demand two-facto
 
 ### The two-factor cookie
 
-**Verified.** `twoFactorAuthenticationId` is scoped to the Alarm.com *user account*, not to a device, a browser, or an IP address. It can be copied out of any signed-in browser and replayed from anywhere.
+**Verified.** Once minted, `twoFactorAuthenticationId` replays from anywhere. It is not bound to a device, a browser, or an IP address, and a probe run confirmed `isCurrentDeviceTrusted: false` for the machine doing the replaying while the replay worked anyway. **The replaying host does not need to be trusted.** A trusted-device list that does not include your Homebridge machine is not the cause of your problem.
 
-This is worth stating plainly because the natural assumption is the opposite. Alarm.com has a visible "trusted device" feature, and a probe run confirmed `isCurrentDeviceTrusted: false` for the machine doing the replaying — while the replay worked anyway. **Device trust is not required.** A trusted-device list that does not include your Homebridge machine is not the cause of your problem.
+**Verified, and the correction to an earlier reading of the above.** Minting is a different matter from replaying. The cookie has to come from a browser session where the *remember/trust this device* option was ticked. Alarm.com sets the cookie either way, so both versions look alike, but only the trusted one carries verification off the machine that made it. Replaying an untrusted one gives `409 TwoFactorAuthenticationRequired` on every route past `identities`, with the two-factor document reporting `isCurrentDeviceTrusted: false`.
+
+Both halves were measured on one account, back to back, with only the trust tick differing. The earlier note here generalised the replay observation into "device trust is not required" without separating the two, which sent people looking at their trusted-device list — the one place the answer was not.
 
 The corollary is a genuine security property of this design: the cookie is a durable, account-wide two-factor bypass sitting in plaintext config. Rotating the account password is what invalidates it.
 
@@ -83,9 +85,28 @@ Device resource IDs are formed as `{unitId}-{deviceNumber}`, for example `123456
 
 ### Commands
 
-**Inferred.** Arming is `POST /web/api/devices/partitions/{id}/{action}` where action is `armStay`, `armAway`, or `disarm`. The body carries `statePollOnly: false` plus optional modifiers.
+**Verified.** Arming is `POST /web/api/devices/partitions/{id}/{action}` where action is `armStay`, `armAway`, or `disarm`. The body carries `statePollOnly: false` plus optional modifiers.
 
-It is the *request shape* that is inferred. Arming itself has been watched end to end, but always driven from the mobile app: the account used for development is provisioned read-only (`hasPermissionToChangeState: false`), so this codebase has never sent one of these requests to a real panel. The shape matches what a long-running community client sends, and everything downstream of it — the events, the state transitions, the timing below — is verified. The `POST` is not.
+**Verified, and the one that bit us.** A command body must be labelled `Content-Type: application/json`, *not* the `application/vnd.api+json` the response comes back in. Alarm.com answers in that media type but has no reader for it, and rather than the `415` you would expect, it returns `500` with a bodyless error document:
+
+```json
+{ "errors": [{ "status": "500", "code": 500 }] }
+```
+
+Measured on a writable panel, same command four times, varying only the label:
+
+| Request `Content-Type`                        | Result |
+| --------------------------------------------- | ------ |
+| `application/json; charset=UTF-8`              | `200`  |
+| `application/json`                             | `200`  |
+| `application/vnd.api+json`                     | `500`  |
+| `application/vnd.api+json`, JSON:API body      | `500`  |
+
+The fourth row is what rules out the tempting explanation. Wrapping the body as a proper JSON:API document under that label fails identically, so the server is rejecting the label rather than objecting to the body's shape. The charset is decorative; it is sent only because it is the exact string every client known to drive a real panel uses. `Accept` stays `application/vnd.api+json` — that half was always right.
+
+This is issue #65. Reads carry no body and so never set the header, which is why they kept working while every arm and disarm failed. Reproduce with `node scripts/probe-command.mjs --compare`.
+
+A refused command comes back in roughly half the time an accepted one takes (~0.5s against ~1.4s), which is the shape of a request dying in the web framework before it reaches anything that knows what a panel is.
 
 Two modifiers must be **omitted rather than sent as `false`** when not wanted: `nightArming` and `forceBypass` break the command outright on panels that do not support them. Neither applies to a disarm.
 

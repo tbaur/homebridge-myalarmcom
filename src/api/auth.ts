@@ -249,7 +249,7 @@ function warnOnReplacedTrustToken(
     && returnedTrustToken !== credentials.twoFactorAuthenticationId
   ) {
     log.warn(
-      'Alarm.com issued a new two-factor trust token, which means the configured one was not accepted. Re-copy the cookie from a signed-in browser if requests start failing.',
+      'Alarm.com issued a new two-factor trust token, which means the configured one was not accepted. Re-copy the cookie from a browser you signed in to with "remember this device" ticked, if requests start failing.',
     )
   }
 }

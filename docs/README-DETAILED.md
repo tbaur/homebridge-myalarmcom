@@ -84,7 +84,7 @@ Architecture: [DEVELOPMENT.md](../DEVELOPMENT.md). Wire-level notes: [PROTOCOL.m
 
 ## Troubleshooting
 
-1. **`TwoFactorRequiredError`.** Cookie missing, expired, or for a different account. Capture a fresh one ([AUTH.md](AUTH.md)), then restart Homebridge. Configuration is read once at startup.
+1. **`TwoFactorRequiredError`.** Cookie missing, expired, for a different account, or captured from a browser sign-in where "remember/trust this device" was not ticked. That last one is the common case and the hardest to spot, because Alarm.com sets the cookie either way and an untrusted one looks perfectly correct. Capture a fresh one ([AUTH.md](AUTH.md)), then restart Homebridge. Configuration is read once at startup.
 2. **Rejected username or password.** Fix credentials before restarting repeatedly. Alarm.com locks accounts after failed sign-ins. The plugin will not retry a rejected credential on its own.
 3. **Login form parse error.** Alarm.com changed its sign-in page. Please open an issue.
 4. **Sensor missing.** Check discovery logs: unsupported type, monitoring disabled (unless `includeUnmonitoredSensors`), or listed in `ignoredDeviceIds`.
