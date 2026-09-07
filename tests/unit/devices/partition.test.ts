@@ -391,15 +391,33 @@ describe('PartitionAccessory', () => {
 
       expect(bed.commandPartition).toHaveBeenCalledWith('1234567-127', 'armAway', expect.any(Object))
       expect(bed.recordCommand).toHaveBeenCalledTimes(1)
-      expect(messagesAt(log, 'info').some((message) => /^Home: Armed Away \(Latency: \d+ms\)$/.test(message)))
+      expect(messagesAt(log, 'info').some((message) => /^Home: Armed Away, confirmed by the panel in [\d.]+s$/.test(message)))
         .toBe(true)
+    })
+
+    /**
+     * Regression. One arm produced three info lines: the announcement, the
+     * outcome, and then a bare repeat of the outcome. The repeat came from
+     * priming the change logger by *reporting* to it, which logs — so the call
+     * meant to stop the confirming poll duplicating the line emitted the
+     * duplicate itself, immediately, before the poll even ran.
+     */
+    it('reports a completed arm exactly once, including the confirming read', async () => {
+      await requestTarget(HomeKitSecurityTarget.AWAY_ARM)
+      accessory.update({ ...controllable, attributes: { ...controllable.attributes, state: 3 } })
+
+      const armedLines = messagesAt(log, 'info').filter((message) => message.includes('Armed Away'))
+
+      expect(armedLines).toEqual(['Home: requesting Armed Away', expect.stringContaining(
+        'Home: Armed Away, confirmed by the panel in',
+      )])
     })
 
     it('disarms', async () => {
       await requestTarget(HomeKitSecurityTarget.DISARM)
 
       expect(bed.commandPartition).toHaveBeenCalledWith('1234567-127', 'disarm', expect.any(Object))
-      expect(messagesAt(log, 'info').some((message) => /^Home: Disarmed \(Latency: \d+ms\)$/.test(message)))
+      expect(messagesAt(log, 'info').some((message) => /^Home: Disarmed, confirmed by the panel in [\d.]+s$/.test(message)))
         .toBe(true)
     })
 
@@ -602,7 +620,10 @@ describe('PartitionAccessory', () => {
       await armPastTheDeadline()
 
       expect(messagesAt(log, 'error')).toEqual([])
-      expect(messagesAt(log, 'info').join('\n')).toMatch(/Armed Away sent, waiting for the panel/)
+      // Announced when the request went out, not when the wait gave up: the
+      // deadline line landed nine seconds late and made the duration reported
+      // afterwards disagree with the gap between the two timestamps.
+      expect(messagesAt(log, 'info')).toContain('Home: requesting Armed Away')
     })
 
     it('holds the requested state while the panel is still settling', async () => {
@@ -623,7 +644,7 @@ describe('PartitionAccessory', () => {
       command.resolve()
       await jest.advanceTimersByTimeAsync(0)
 
-      expect(messagesAt(log, 'info').some((message) => /^Home: Armed Away \(Latency: \d+ms\)$/.test(message)))
+      expect(messagesAt(log, 'info').some((message) => /^Home: Armed Away, confirmed by the panel in [\d.]+s$/.test(message)))
         .toBe(true)
       expect(bed.recordCommand).toHaveBeenCalledTimes(1)
       expect(bed.requestDeviceRefresh).toHaveBeenCalledWith('1234567-127')
@@ -639,7 +660,7 @@ describe('PartitionAccessory', () => {
       accessory.update(controllable)
       expect(characteristicValue(service(), Characteristic.SecuritySystemTargetState))
         .toBe(HomeKitSecurityTarget.DISARM)
-      expect(messagesAt(log, 'error').join('\n')).toMatch(/Failed to armAway partition 1234567-127/)
+      expect(messagesAt(log, 'error').join('\n')).toMatch(/^Home: could not reach Armed Away — /)
       // HomeKit was already told the request was accepted, so only a re-read
       // can correct the tile before the next poll.
       expect(bed.requestDeviceRefresh).toHaveBeenCalledWith('1234567-127')
@@ -682,7 +703,7 @@ describe('PartitionAccessory', () => {
       await expect(requestTarget(HomeKitSecurityTarget.AWAY_ARM))
         .rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
 
-      expect(messagesAt(log, 'error').join('\n')).toMatch(/Failed to armAway partition 1234567-127/)
+      expect(messagesAt(log, 'error').join('\n')).toMatch(/^Home: could not reach Armed Away — /)
     })
 
     it('reports a communication failure and forgets the pending target', async () => {
@@ -695,7 +716,7 @@ describe('PartitionAccessory', () => {
       accessory.update(controllable)
       expect(characteristicValue(service(), Characteristic.SecuritySystemTargetState))
         .toBe(HomeKitSecurityTarget.DISARM)
-      expect(messagesAt(log, 'error').join('\n')).toMatch(/Failed to armAway partition 1234567-127/)
+      expect(messagesAt(log, 'error').join('\n')).toMatch(/^Home: could not reach Armed Away — /)
     })
 
     /**

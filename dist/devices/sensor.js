@@ -108,7 +108,7 @@ class SensorAccessory {
     applyImmediateState(isTriggered, isTransient = false) {
         this.#clearTransientReset();
         this.#service.updateCharacteristic(this.#primaryCharacteristic(), (0, mappers_1.toCharacteristicValue)(this.#kind, isTriggered));
-        this.#logChange(this.#name, (0, mappers_1.toImmediateSensorLabel)(this.#kind, isTriggered));
+        this.#logChange.report(this.#name, (0, mappers_1.toImmediateSensorLabel)(this.#kind, isTriggered));
         if (isTransient && isTriggered) {
             this.#transientResetTimer = setTimeout(() => {
                 this.#transientResetTimer = null;
@@ -172,7 +172,7 @@ class SensorAccessory {
         // currently supervised", which is exactly what disabled monitoring means.
         this.#service.updateCharacteristic(Characteristic.StatusActive, attributes.isMonitoringEnabled !== false);
         (0, status_fault_1.applyStatusFault)(this.#service, Characteristic, attributes.isMalfunctioning);
-        this.#logChange(name, mapped.label);
+        this.#logChange.report(name, mapped.label);
     }
 }
 exports.SensorAccessory = SensorAccessory;
