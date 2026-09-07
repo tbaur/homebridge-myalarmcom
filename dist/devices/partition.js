@@ -146,6 +146,14 @@ class PartitionAccessory {
      * its extended arming options. Offering the mode when the panel lacks it
      * produces a command the panel rejects, which the user experiences as the
      * Home app silently snapping back.
+     *
+     * The list must also cover any state the panel can *report*, which is not the
+     * same set. Night arming is generally available at the keypad whatever the
+     * options advertise, and a panel night-armed that way reports state 4 to an
+     * account that cannot command it. Withholding the value then left the tile
+     * unable to describe the panel at all: HAP refused the matching target as out
+     * of range and the Home app showed a system stuck mid-transition. This is the
+     * same trap {@link #targetToShow} documents for `ALARM_TRIGGERED`.
      */
     #applyValidTargetStates(attributes) {
         const { Characteristic } = this.#platform;
@@ -154,7 +162,7 @@ class PartitionAccessory {
             mappers_1.HomeKitSecurityTarget.AWAY_ARM,
             mappers_1.HomeKitSecurityTarget.DISARM,
         ];
-        if ((0, alarm_1.supportsNightArming)(attributes)) {
+        if ((0, alarm_1.supportsNightArming)(attributes) || (0, alarm_1.isNightArmed)(attributes)) {
             validValues.push(mappers_1.HomeKitSecurityTarget.NIGHT_ARM);
         }
         const { Perms } = this.#platform.api.hap;
@@ -193,7 +201,14 @@ class PartitionAccessory {
      */
     #syncTargetStateProps(attributes) {
         const canChangeState = this.#canChangeState(attributes);
-        const signature = `${String(canChangeState)}:${String((0, alarm_1.supportsNightArming)(attributes))}`;
+        // Every input to the properties belongs in the signature. Night arming is
+        // two of them, because the panel entering that state changes the offered
+        // values just as advertising it does.
+        const signature = [
+            canChangeState,
+            (0, alarm_1.supportsNightArming)(attributes),
+            (0, alarm_1.isNightArmed)(attributes),
+        ].map(String).join(':');
         if (signature === this.#propsSignature) {
             return;
         }

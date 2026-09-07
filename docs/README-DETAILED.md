@@ -59,7 +59,7 @@ Invalid configuration never takes the bridge down. A missing credential, a six-d
 
 | Alarm.com device | HomeKit accessory | Notes |
 | --- | --- | --- |
-| Partition (panel) | Security System | Arm/disarm, plus a true triggered-alarm state. Night arming is offered only when the panel advertises `ArmedNight`. |
+| Partition (panel) | Security System | Arm/disarm, plus a true triggered-alarm state. Night arming is offered as a control only when the panel advertises `ArmedNight`, but is always displayed when the panel reports it, since it can be set at the keypad. |
 | Contact sensor | Contact Sensor | Doors, windows, garage door position |
 | Motion sensor | Motion Sensor | |
 | Smoke detector | Smoke Sensor | |

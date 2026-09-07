@@ -17,6 +17,7 @@ import {
 import {
   ArmingModifier,
   acceptsArmingModifier,
+  isNightArmed,
   supportsNightArming,
   type PartitionAttributes,
   type PartitionAction,
@@ -199,6 +200,14 @@ export class PartitionAccessory {
    * its extended arming options. Offering the mode when the panel lacks it
    * produces a command the panel rejects, which the user experiences as the
    * Home app silently snapping back.
+   *
+   * The list must also cover any state the panel can *report*, which is not the
+   * same set. Night arming is generally available at the keypad whatever the
+   * options advertise, and a panel night-armed that way reports state 4 to an
+   * account that cannot command it. Withholding the value then left the tile
+   * unable to describe the panel at all: HAP refused the matching target as out
+   * of range and the Home app showed a system stuck mid-transition. This is the
+   * same trap {@link #targetToShow} documents for `ALARM_TRIGGERED`.
    */
   #applyValidTargetStates(attributes: PartitionAttributes): void {
     const { Characteristic } = this.#platform
@@ -209,7 +218,7 @@ export class PartitionAccessory {
       HomeKitSecurityTarget.DISARM,
     ]
 
-    if (supportsNightArming(attributes)) {
+    if (supportsNightArming(attributes) || isNightArmed(attributes)) {
       validValues.push(HomeKitSecurityTarget.NIGHT_ARM)
     }
 
@@ -252,7 +261,14 @@ export class PartitionAccessory {
    */
   #syncTargetStateProps(attributes: PartitionAttributes): void {
     const canChangeState = this.#canChangeState(attributes)
-    const signature = `${String(canChangeState)}:${String(supportsNightArming(attributes))}`
+    // Every input to the properties belongs in the signature. Night arming is
+    // two of them, because the panel entering that state changes the offered
+    // values just as advertising it does.
+    const signature = [
+      canChangeState,
+      supportsNightArming(attributes),
+      isNightArmed(attributes),
+    ].map(String).join(':')
 
     if (signature === this.#propsSignature) {
       return

@@ -220,8 +220,26 @@ export interface PartitionAttributes {
  * withheld from HomeKit instead of being offered and failing at the panel.
  * Do not confuse this with `supportsNightArmingSchedules`, which concerns
  * scheduling and is true even here.
+ *
+ * This answers only whether the mode can be *commanded*. Whether the panel can
+ * be *in* it is {@link isNightArmed}, and the answer there can be yes while the
+ * answer here is no.
  */
 export declare function supportsNightArming(attributes: PartitionAttributes): boolean;
+/**
+ * Whether the panel is reporting itself night-armed.
+ *
+ * Deliberately separate from {@link supportsNightArming}, which answers a
+ * different question. That one says whether the *API* will accept a night-arm
+ * command; this one says what the panel *is*. A panel that omits `ArmedNight`
+ * from its options can still be night-armed from its own keypad, and Alarm.com
+ * reports state 4 when it is.
+ *
+ * Read from `state` rather than the mapped HomeKit value on purpose: an active
+ * alarm replaces the displayed state with "triggered", which would hide the
+ * arming mode underneath at exactly the moment it matters.
+ */
+export declare function isNightArmed(attributes: PartitionAttributes): boolean;
 /** Whether a panel accepts a given modifier for a given arming mode. */
 export declare function acceptsArmingModifier(attributes: PartitionAttributes, mode: ArmingModeName, modifier: ArmingModifier): boolean;
 //# sourceMappingURL=alarm.d.ts.map

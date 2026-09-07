@@ -14,7 +14,7 @@ Expose your [Alarm.com](https://www.alarm.com) security panel and sensors in App
 ### Device Support
 - **Security System:** panel arm / disarm, including a true triggered-alarm state
 - **Contact, motion, and smoke sensors**
-- **Night arming** only when the panel advertises `ArmedNight`
+- **Night arming** offered when the panel advertises `ArmedNight`, and still displayed when a panel is night-armed at its keypad
 - **Read-only accounts:** the panel is exposed as read-only when the login cannot change arming state
 
 ### Reliability
