@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.3](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.2...v2.0.3) (2026-09-07)
+
+
+### Bug Fixes
+
+* report one clear line per command instead of three confusing ones ([#72](https://github.com/tbaur/homebridge-myalarmcom/issues/72)) ([efe20ab](https://github.com/tbaur/homebridge-myalarmcom/commit/efe20abfe7c222b31d2e7d4c3962aed4808bf7d6))
+
 ## [2.0.2](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.1...v2.0.2) (2026-09-07)
 
 
