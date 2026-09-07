@@ -162,7 +162,9 @@ Device types confirmed on live hardware: `1` contact, `2` motion, `5` smoke.
 
 **Verified.** `state` uses a separate enum: `0` unknown, `1` disarmed, `2` armed stay, `3` armed away, `4` armed night. `1` and `2` were both observed live, by arming and disarming the panel and [watching the account](#arming-timing).
 
-Armed away and armed night are still inferred, for different reasons now. The test account can issue arming commands — it has done so — so `3` is simply a reading nobody has taken yet, and one live away-arm would settle it. `4` cannot be settled on this hardware at all: the panel does not list `ArmedNight` among its `extendedArmingOptions`, so it will not enter that state to be observed. Confirming it needs a different panel.
+Armed away and armed night are still inferred, and both are now observable. The test account can issue arming commands — it has done so — so `3` is a reading nobody has taken yet, and one live away-arm settles it. `4` cannot be commanded on that panel, which omits `ArmedNight` from its `extendedArmingOptions`, but night arming is typically available at the keypad regardless, so arming night by hand and then reading the partition would settle it too.
+
+**Do not read the absence of `ArmedNight` as "this panel has no night mode."** It says the API will not command one. The panel can still be night-armed at the keypad and will report `4` when it is. A client that treats the advertisement as a statement about reachable states — by trimming it from the HomeKit target's `validValues`, for instance — ends up unable to represent a panel sitting right in front of it.
 
 **Verified.** `hasActiveAlarm` is a **separate boolean** from `state`. While an alarm is sounding, `state` continues to report the arming mode. A client that maps only `state` can never display a triggered alarm — it will show a calm armed tile during a break-in. Read both.
 
@@ -184,7 +186,9 @@ The codes are `0` bypass sensors, `1` no entry delay, `2` silent arming, `3` nig
 
 `invalidExtendedArmingOptions` has the same keys but its values are arrays of *combinations* that are rejected, so it is one dimension deeper.
 
-**Verified.** Night arming availability is signalled by the **presence of an `ArmedNight` key**, not by a boolean. The test panel omits the key entirely. Do not confuse this with the neighbouring `supportsNightArmingSchedules`, which concerns scheduling and was `true` on the same panel that cannot night-arm at all.
+**Verified.** Night arming availability is signalled by the **presence of an `ArmedNight` key**, not by a boolean. The test panel omits the key entirely. Do not confuse this with the neighbouring `supportsNightArmingSchedules`, which concerns scheduling and was `true` on the same panel that will not accept a night-arm command.
+
+The key answers what the API accepts, not what the panel can do. See the [partition state note](#partitions) for why that distinction matters to a client.
 
 ## Event stream
 

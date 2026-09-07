@@ -266,6 +266,31 @@ describe('PartitionAccessory', () => {
       expect(targetCharacteristic().props.validValues).toContain(HomeKitSecurityTarget.NIGHT_ARM)
     })
 
+    /**
+     * A panel can be in a state its API will not command. Night arming is
+     * usually available at the keypad whatever `extendedArmingOptions` says,
+     * and Alarm.com then reports state 4 regardless.
+     *
+     * Withholding NIGHT_ARM from `validValues` on that basis left the tile
+     * unable to describe the panel in front of it: the current state said
+     * Night, HAP rejected the matching target as out of range, and the Home app
+     * showed a system stuck mid-transition. What the panel accepts as a command
+     * and what it can report are different questions, and only the first of
+     * them is what the advertisement answers.
+     */
+    it('can still show a panel night-armed from the keypad', () => {
+      accessory.update({
+        ...controllable,
+        attributes: { ...controllable.attributes, state: 4 },
+      })
+
+      expect(targetCharacteristic().props.validValues).toContain(HomeKitSecurityTarget.NIGHT_ARM)
+      expect(characteristicValue(service(), Characteristic.SecuritySystemCurrentState))
+        .toBe(HomeKitSecurityState.NIGHT_ARM)
+      expect(characteristicValue(service(), Characteristic.SecuritySystemTargetState))
+        .toBe(HomeKitSecurityTarget.NIGHT_ARM)
+    })
+
     it('makes a panel the account cannot control read-only, and says why once', () => {
       accessory.update(livePartition)
       accessory.update(livePartition)

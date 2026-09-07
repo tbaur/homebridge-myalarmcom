@@ -12,7 +12,9 @@
 import {
   acceptsArmingModifier,
   ArmingModifier,
+  isNightArmed,
   OpenClosedStatus,
+  PartitionState,
   readSensorState,
   SensorDeviceType,
   SensorState,
@@ -218,6 +220,47 @@ describe('supportsNightArming', () => {
     const { extendedArmingOptions: _omitted, ...attributes } = livePanel
 
     expect(supportsNightArming(attributes)).toBe(false)
+  })
+})
+
+/**
+ * The distinction this pair exists to draw. Conflating them cost the tile its
+ * ability to show a night-armed panel: the advertisement says what the API will
+ * accept, and a panel set from its keypad answers a different question.
+ */
+describe('isNightArmed', () => {
+  it('is true for a panel reporting state 4 that cannot be commanded there', () => {
+    const attributes: PartitionAttributes = { ...livePanel, state: PartitionState.ARMED_NIGHT }
+
+    expect(isNightArmed(attributes)).toBe(true)
+    expect(supportsNightArming(attributes)).toBe(false)
+  })
+
+  it('is false for every other arming state', () => {
+    const others = [
+      PartitionState.UNKNOWN,
+      PartitionState.DISARMED,
+      PartitionState.ARMED_STAY,
+      PartitionState.ARMED_AWAY,
+    ]
+
+    for (const state of others) {
+      expect(isNightArmed({ ...livePanel, state })).toBe(false)
+    }
+  })
+
+  /**
+   * Read from `state`, not the displayed value. An active alarm shows as
+   * "triggered" and would otherwise mask the arming mode underneath.
+   */
+  it('still reports night arming while an alarm is sounding', () => {
+    const attributes: PartitionAttributes = {
+      ...livePanel,
+      state: PartitionState.ARMED_NIGHT,
+      hasActiveAlarm: true,
+    }
+
+    expect(isNightArmed(attributes)).toBe(true)
   })
 })
 
