@@ -240,6 +240,13 @@ describe('discovering an Alarm.com account', () => {
 
     expect(api.unregistered).toContain(ignored)
     expect(api.registeredNames).not.toContain('Front Door')
+    // Say why it went. The ignored set was not passed to the removal on this
+    // path, so a device the user chose to skip was withdrawn as "no longer on
+    // the account" — which is false, and sends them to their panel looking for
+    // a fault that is not there.
+    const removal = expectOneMessage(log.infoMessages, 'Removing "Front Door"')
+    expect(removal).toContain('which this plugin is not publishing')
+    expect(removal).not.toContain('no longer on the account')
   })
 
   it('reports a sign-in failure without publishing anything', async () => {

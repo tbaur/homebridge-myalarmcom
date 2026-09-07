@@ -92,10 +92,6 @@ class CircuitBreaker {
             handler(from, to);
         };
     }
-    /** Whether the breaker is currently rejecting requests outright. */
-    get isOpen() {
-        return this.#state === CircuitState.OPEN;
-    }
     /** Transition state, notifying observers only on an actual change. */
     #transitionTo(next) {
         if (this.#state === next) {

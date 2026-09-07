@@ -17,6 +17,7 @@ import type { HttpRequestOptions } from '../../../src/api/http'
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   PARTITION_COMMAND_TIMEOUT_MS,
+  PARTITION_TARGET_SETTLE_MS,
 } from '../../../src/settings'
 import { createRecordingLogger } from '../../helpers/logger'
 import partitionsFixture from '../../fixtures/partitions.json'
@@ -79,6 +80,18 @@ describe('request deadlines', () => {
 
     expect(lastTimeoutMs()).toBe(PARTITION_COMMAND_TIMEOUT_MS)
     expect(PARTITION_COMMAND_TIMEOUT_MS).toBeGreaterThan(DEFAULT_REQUEST_TIMEOUT_MS)
+  })
+
+  /**
+   * Both clocks start at the same instant: the pending target is stamped
+   * immediately before the command is sent. A settle window merely equal to the
+   * command ceiling therefore gives a slow success nowhere to land — the target
+   * is retired before the confirming read arrives and the user is told the arm
+   * failed when it did not. The two were briefly both 60s after the ceiling was
+   * raised, which is how that happened.
+   */
+  it('leaves a command room to confirm before its target is abandoned', () => {
+    expect(PARTITION_TARGET_SETTLE_MS).toBeGreaterThan(PARTITION_COMMAND_TIMEOUT_MS)
   })
 
   it('leaves a read on the transport default', async () => {

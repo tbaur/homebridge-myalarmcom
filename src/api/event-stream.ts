@@ -549,9 +549,9 @@ export class EventStream {
       return
     }
 
-    // Drop already owns recovery. Do not WARN about the abandoned refresh
-    // token fetch — that would set #hasReportedFailure and mask the next
-    // real connect failure reason.
+    // Drop already owns recovery, so the abandoned refresh fetch is bookkeeping
+    // rather than an outage. Warning here would report a problem the plugin has
+    // already handled, on a path that runs whenever a socket is replaced.
     if (attempt.shouldDeferDispose && (this.#reconnectTimer || !this.isConnected)) {
       this.#isConnecting = false
       this.#log.debug(`abandoned refresh token fetch after drop: ${sanitizeError(error)}`)
@@ -561,8 +561,8 @@ export class EventStream {
     this.#isConnecting = false
 
     // Refresh failed but the old socket is still healthy — keep it and retry
-    // the cutover soon. Log at debug only; a WARN would set #hasReportedFailure
-    // and mask a later real outage reason while push updates are still flowing.
+    // the cutover soon. Debug only: push updates are still arriving, so nothing
+    // the user could act on has gone wrong, and the retry is automatic.
     if (attempt.shouldDeferDispose && this.isConnected) {
       this.#log.debug(
         `refresh token fetch failed; keeping the live socket: ${sanitizeError(error)}`,

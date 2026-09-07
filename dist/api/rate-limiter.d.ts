@@ -35,7 +35,6 @@ export interface RateLimiterConfig {
  * exactly when it should.
  */
 export declare const DEFAULT_RATE_LIMITER_CONFIG: RateLimiterConfig;
-/** Snapshot of limiter state, for diagnostics. */
 /**
  * Snapshot of pacing state, for diagnostics.
  *

@@ -117,8 +117,9 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
    * Cancels in-flight network work at shutdown.
    *
    * Without it, clearing the timers only stopped *new* work: a request already
-   * in flight ran to its 30-second deadline, then its retries, then their
-   * backoff, all against a platform that was supposed to be gone.
+   * in flight ran to its own deadline — up to a minute for an arming command —
+   * then its retries, then their backoff, all against a platform that was
+   * supposed to be gone.
    */
   readonly #abortController = new AbortController()
   /** Prevents stacked poll cycles when a refresh outlasts the poll interval. */
@@ -406,7 +407,14 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     // cannot leave ghosts until the next hourly rediscovery.
     const requestedPartitionIds = this.#withoutIgnored(devices.partitionIds)
     const requestedSensorIds = this.#withoutIgnored(devices.sensorIds)
-    this.#removeStaleAccessories(new Set([...requestedPartitionIds, ...requestedSensorIds]))
+    // The ignored set is passed so the removal says *why*. Without it these
+    // accessories were withdrawn as "no longer on the account", which is untrue
+    // for a device the user asked the plugin to skip and sends them looking at
+    // their panel for a fault that is not there.
+    this.#removeStaleAccessories(
+      new Set([...requestedPartitionIds, ...requestedSensorIds]),
+      this.#config.ignoredDeviceIds,
+    )
 
     await this.#publishDevices(requestedPartitionIds, requestedSensorIds, reason, signal)
   }
@@ -807,9 +815,9 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   /**
    * Re-read a specific set of devices and push their state to HomeKit.
    *
-   * @returns How many devices were actually read. Zero means no request was
-   *   made, which matters because the caller must not read that as evidence
-   *   that Alarm.com is reachable.
+   * @returns How many devices a request was issued for, counted before
+   *   Alarm.com answers. Zero means no request was made, which matters because
+   *   the caller must not read that as evidence that Alarm.com is reachable.
    */
   async #refreshDevices(deviceIds: readonly string[], signal?: AbortSignal): Promise<number> {
     const partitionIds: string[] = []

@@ -47,7 +47,6 @@ export const DEFAULT_RATE_LIMITER_CONFIG: RateLimiterConfig = {
   maxWaitMs: 30 * MS_PER_SECOND,
 }
 
-/** Snapshot of limiter state, for diagnostics. */
 /**
  * Snapshot of pacing state, for diagnostics.
  *
@@ -153,5 +152,4 @@ export class RateLimiter {
     await this.acquire(signal)
     return operation()
   }
-
 }
