@@ -22,15 +22,20 @@ exports.createChangeLogger = createChangeLogger;
  */
 function createChangeLogger(log) {
     let lastLabel = null;
-    return (name, label) => {
-        const isChange = lastLabel !== null && lastLabel !== label;
-        lastLabel = label;
-        if (isChange) {
-            log.info(`${name}: ${label}`);
-        }
-        else if (log.isDebugEnabled) {
-            log.debug(`${name}: ${label}`);
-        }
+    return {
+        report(name, label) {
+            const isChange = lastLabel !== null && lastLabel !== label;
+            lastLabel = label;
+            if (isChange) {
+                log.info(`${name}: ${label}`);
+            }
+            else if (log.isDebugEnabled) {
+                log.debug(`${name}: ${label}`);
+            }
+        },
+        markReported(label) {
+            lastLabel = label;
+        },
     };
 }
 //# sourceMappingURL=change-log.js.map

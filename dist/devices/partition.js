@@ -234,7 +234,7 @@ class PartitionAccessory {
             this.#service.updateCharacteristic(Characteristic.SecuritySystemTargetState, targetToShow);
         }
         (0, status_fault_1.applyStatusFault)(this.#service, Characteristic, attributes.isMalfunctioning);
-        this.#logChange(this.#name, (0, mappers_1.toSecurityStateLabel)(displayedState));
+        this.#logChange.report(this.#name, (0, mappers_1.toSecurityStateLabel)(displayedState));
     }
     /**
      * Stop overriding the target once the panel confirms it, or gives up.
@@ -325,14 +325,19 @@ class PartitionAccessory {
      */
     async #sendCommand(action, target, options) {
         const startedAt = Date.now();
+        // Announced here rather than when the wait gives up, so its timestamp is
+        // the moment the request left. Logging it at the deadline instead put a
+        // "sent" line nine seconds late, and the duration on the following line
+        // then disagreed with the gap between the two.
+        this.#log.info(`${this.#name}: requesting ${(0, mappers_1.toSecurityStateLabel)(target)}`);
         const outcome = this.#startCommand(action, options, target, startedAt);
         const settled = await this.#awaitWithinHapWindow(outcome);
         if (settled === null) {
-            this.#log.info(`${this.#name}: ${(0, mappers_1.toSecurityStateLabel)(target)} sent, waiting for the panel to confirm`);
-            void outcome.then((late) => this.#recordOutcome(late, action, target, startedAt));
+            this.#log.debug(`${this.#name}: ${action} still in flight at the HAP deadline, answering HomeKit without it`);
+            void outcome.then((late) => this.#recordOutcome(late, target, startedAt));
             return;
         }
-        this.#recordOutcome(settled, action, target, startedAt);
+        this.#recordOutcome(settled, target, startedAt);
         if (!settled.isOk) {
             throw new this.#platform.api.hap.HapStatusError(settled.error instanceof errors_1.TimeoutError
                 ? -70408 /* HAPStatus.OPERATION_TIMED_OUT */
@@ -359,7 +364,7 @@ class PartitionAccessory {
                 .then(() => ({ isOk: true }), (error) => ({ isOk: false, error }));
         }
         catch (error) {
-            this.#recordOutcome({ isOk: false, error }, action, target, startedAt);
+            this.#recordOutcome({ isOk: false, error }, target, startedAt);
             throw new this.#platform.api.hap.HapStatusError(-70402 /* HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
         }
     }
@@ -382,27 +387,49 @@ class PartitionAccessory {
         }
     }
     /** Log a finished command and reconcile the pending target against it. */
-    #recordOutcome(outcome, action, target, startedAt) {
+    #recordOutcome(outcome, target, startedAt) {
         const elapsedMs = Date.now() - startedAt;
+        const label = (0, mappers_1.toSecurityStateLabel)(target);
         if (!outcome.isOk) {
             this.#targetState = null;
-            this.#log.error(`Failed to ${action} partition ${this.deviceId} after ${elapsedMs}ms: ${(0, sanitizers_1.sanitizeError)(outcome.error)}`);
+            this.#log.error(`${this.#name}: could not reach ${label} — ${describeCommandFailure(outcome.error, elapsedMs)}`);
             // Read back even on failure. HomeKit may already have been told the
             // request was accepted, so the panel's real state is the only thing that
             // corrects the tile before the next poll comes round.
             this.#platform.requestDeviceRefresh(this.deviceId);
             return;
         }
-        this.#log.info(`${this.#name}: ${(0, mappers_1.toSecurityStateLabel)(target)} (Latency: ${elapsedMs}ms)`);
-        // Recorded through the change logger so the confirming poll, which will
-        // report the same state, does not emit a second identical info line
-        // without the latency figure.
-        this.#logChange(this.#name, (0, mappers_1.toSecurityStateLabel)(target));
+        this.#log.info(`${this.#name}: ${label}, confirmed by the panel in ${toSeconds(elapsedMs)}`);
+        // Marked without logging so the confirming poll, which reports this same
+        // state, does not repeat it. Priming by reporting emitted a second, nearly
+        // identical line immediately after this one.
+        this.#logChange.markReported(label);
         this.#platform.recordCommand();
         this.#platform.requestDeviceRefresh(this.deviceId);
     }
 }
 exports.PartitionAccessory = PartitionAccessory;
+/** A duration as someone reading a log would say it, not a millisecond count. */
+function toSeconds(ms) {
+    return `${(ms / settings_1.MS_PER_SECOND).toFixed(1).replace(/\.0$/, '')}s`;
+}
+/**
+ * Say what went wrong in terms of what the user can do about it.
+ *
+ * A timeout here is nearly always a refusal rather than a network fault.
+ * Alarm.com holds the request open until the panel replies, and a panel that
+ * will not arm simply never replies — most often because a sensor is open. The
+ * raw error says none of that: it reported the timeout twice, once wrapped in
+ * the other, alongside the full request URL, and left the reader to guess.
+ */
+function describeCommandFailure(error, elapsedMs) {
+    if (error instanceof errors_1.TimeoutError) {
+        return `the panel never answered, and the request was abandoned after ${toSeconds(elapsedMs)}. `
+            + 'A panel that refuses to arm goes quiet like this, usually because a sensor is open. '
+            + 'Close it, or turn on "Allow arming with open sensors" to have the panel bypass it.';
+    }
+    return (0, sanitizers_1.sanitizeError)(error);
+}
 /**
  * Choose the modifiers to send with an arming command.
  *

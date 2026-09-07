@@ -21,6 +21,7 @@ import {
   toImmediateSensorLabel,
 } from '../utils/mappers'
 import { createChangeLogger } from './change-log'
+import type { ChangeLogger } from './change-log'
 import { applyStatusFault } from './status-fault'
 import type { MyAlarmComPlatform } from '../platform'
 
@@ -39,7 +40,7 @@ export class SensorAccessory {
   readonly #kind: SensorServiceKind
   readonly #service: Service
   /** Reports a reading at info only when it differs from the previous one. */
-  readonly #logChange: (name: string, label: string) => void
+  readonly #logChange: ChangeLogger
   /** Latest name Alarm.com reported, so push and poll lines agree. */
   #name: string
   /** Whether an unresolvable reading has already been reported for this sensor. */
@@ -143,7 +144,7 @@ export class SensorAccessory {
       toCharacteristicValue(this.#kind, isTriggered),
     )
 
-    this.#logChange(this.#name, toImmediateSensorLabel(this.#kind, isTriggered))
+    this.#logChange.report(this.#name, toImmediateSensorLabel(this.#kind, isTriggered))
 
     if (isTransient && isTriggered) {
       this.#transientResetTimer = setTimeout(() => {
@@ -229,6 +230,6 @@ export class SensorAccessory {
 
     applyStatusFault(this.#service, Characteristic, attributes.isMalfunctioning)
 
-    this.#logChange(name, mapped.label)
+    this.#logChange.report(name, mapped.label)
   }
 }
