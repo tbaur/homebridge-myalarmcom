@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.1](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.0...v2.0.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* **api:** send command bodies as application/json ([451a34a](https://github.com/tbaur/homebridge-myalarmcom/commit/451a34aeb8152f273d083dcb99e5382bbff2eb32)), closes [#65](https://github.com/tbaur/homebridge-myalarmcom/issues/65)
+* **partition:** make arming work when it is slow or needs a bypass ([89374b5](https://github.com/tbaur/homebridge-myalarmcom/commit/89374b56d3cfae3c01fb1f53a73c584c046fe48f)), closes [#66](https://github.com/tbaur/homebridge-myalarmcom/issues/66) [#67](https://github.com/tbaur/homebridge-myalarmcom/issues/67)
+
 ## [2.0.0](https://github.com/tbaur/homebridge-myalarmcom/compare/v1.0.6...v2.0.0) (2026-09-05)
 
 
