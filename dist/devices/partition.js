@@ -325,12 +325,7 @@ class PartitionAccessory {
      */
     async #sendCommand(action, target, options) {
         const startedAt = Date.now();
-        // Given a handler exactly once, here. Both branches below read this rather
-        // than the raw command, so a rejection arriving long after the deadline is
-        // still owned and never surfaces as an unhandled rejection.
-        const outcome = this.#platform.client
-            .commandPartition(this.deviceId, action, options)
-            .then(() => ({ isOk: true }), (error) => ({ isOk: false, error }));
+        const outcome = this.#startCommand(action, options, target, startedAt);
         const settled = await this.#awaitWithinHapWindow(outcome);
         if (settled === null) {
             this.#log.info(`${this.#name}: ${(0, mappers_1.toSecurityStateLabel)(target)} sent, waiting for the panel to confirm`);
@@ -342,6 +337,30 @@ class PartitionAccessory {
             throw new this.#platform.api.hap.HapStatusError(settled.error instanceof errors_1.TimeoutError
                 ? -70408 /* HAPStatus.OPERATION_TIMED_OUT */
                 : -70402 /* HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
+        }
+    }
+    /**
+     * Start the command and give it a handler, once, here.
+     *
+     * Both callers read the returned promise rather than the raw command, so a
+     * rejection arriving long after the deadline is still owned and never
+     * surfaces as an unhandled rejection.
+     *
+     * The call is wrapped because it can throw *synchronously*, before any
+     * promise exists: reading `platform.client` raises `ConfigurationError` when
+     * the configuration is unusable. Left uncaught that escaped the set handler
+     * as a bare error, so HomeKit reverted the tile with nothing written to the
+     * log to say why.
+     */
+    #startCommand(action, options, target, startedAt) {
+        try {
+            return this.#platform.client
+                .commandPartition(this.deviceId, action, options)
+                .then(() => ({ isOk: true }), (error) => ({ isOk: false, error }));
+        }
+        catch (error) {
+            this.#recordOutcome({ isOk: false, error }, action, target, startedAt);
+            throw new this.#platform.api.hap.HapStatusError(-70402 /* HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
         }
     }
     /**

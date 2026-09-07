@@ -18,8 +18,8 @@
  * failure counters) stays in that module, next to the code that reasons about it.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.PARTITION_TARGET_SETTLE_MS = exports.TRANSIENT_HINT_RESET_MS = exports.REFRESH_DEBOUNCE_MS = exports.MAX_RETRY_BACKOFF_MS = exports.MAX_API_RETRY_ATTEMPTS = exports.INITIAL_DISCOVERY_RETRY_MAX_MS = exports.INITIAL_DISCOVERY_RETRY_BASE_MS = exports.POLL_FAILURE_WARN_THRESHOLD = exports.POLL_CYCLE_DEADLINE_MS = exports.MAX_LOGIN_FLOOR_WAIT_MS = exports.KEEPALIVE_INTERVAL_MS = exports.MIN_DIAGNOSTICS_INTERVAL_SEC = exports.MAX_DIAGNOSTICS_INTERVAL_SEC = exports.MAX_AUTH_INTERVAL_MIN = exports.DEFAULT_AUTH_INTERVAL_MIN = exports.MIN_AUTH_INTERVAL_MIN = exports.MAX_POLL_INTERVAL_SEC = exports.DEFAULT_POLL_INTERVAL_SEC = exports.MIN_POLL_INTERVAL_SEC = exports.KEEPALIVE_REQUEST_TIMEOUT_MS = exports.LOGIN_REQUEST_TIMEOUT_MS = exports.DEFAULT_REQUEST_TIMEOUT_MS = exports.MAX_IDS_PER_REQUEST = exports.CSRF_HEADER_NAME = exports.CSRF_COOKIE_NAME = exports.MFA_COOKIE_NAME = exports.EVENT_FIELD_SENTINEL = exports.IS_FROM_NEW_SITE_FIELD = exports.PASSWORD_FIELD = exports.USERNAME_FIELD = exports.LOGIN_FORM_FIELDS = exports.REQUEST_CONTENT_TYPE = exports.JSON_API_ACCEPT = exports.HOME_REFERER = exports.WEBSOCKET_TOKEN_URL = exports.SENSORS_URL = exports.PARTITIONS_URL = exports.SYSTEM_URL = exports.KEEPALIVE_URL = exports.IDENTITIES_URL = exports.LOGIN_POST_URL = exports.LOGIN_PAGE_URL = exports.ALLOWED_API_ORIGIN = exports.BASE_URL = exports.MS_PER_MINUTE = exports.MS_PER_SECOND = exports.MANUFACTURER = exports.UUID_PREFIX = exports.PLATFORM_NAME = exports.PLUGIN_NAME = void 0;
-exports.WEBSOCKET_REFRESH_JITTER_MS = exports.WEBSOCKET_REFRESH_INTERVAL_MS = exports.WEBSOCKET_RECOVERY_INTERVAL_MS = exports.WEBSOCKET_MAX_FAILURES = exports.WEBSOCKET_RECONNECT_MAX_MS = exports.WEBSOCKET_RECONNECT_BASE_MS = exports.WEBSOCKET_HANDSHAKE_TIMEOUT_MS = exports.ALARM_COM_APEX_HOST = exports.WEBSOCKET_HOST_SUFFIX = exports.DEFAULT_WEBSOCKET_ENDPOINT = exports.REDISCOVERY_INTERVAL_MS = exports.PARTITION_COMMAND_DEADLINE_MS = void 0;
+exports.TRANSIENT_HINT_RESET_MS = exports.REFRESH_DEBOUNCE_MS = exports.MAX_RETRY_BACKOFF_MS = exports.MAX_API_RETRY_ATTEMPTS = exports.INITIAL_DISCOVERY_RETRY_MAX_MS = exports.INITIAL_DISCOVERY_RETRY_BASE_MS = exports.POLL_FAILURE_WARN_THRESHOLD = exports.POLL_CYCLE_DEADLINE_MS = exports.MAX_LOGIN_FLOOR_WAIT_MS = exports.KEEPALIVE_INTERVAL_MS = exports.MIN_DIAGNOSTICS_INTERVAL_SEC = exports.MAX_DIAGNOSTICS_INTERVAL_SEC = exports.MAX_AUTH_INTERVAL_MIN = exports.DEFAULT_AUTH_INTERVAL_MIN = exports.MIN_AUTH_INTERVAL_MIN = exports.MAX_POLL_INTERVAL_SEC = exports.DEFAULT_POLL_INTERVAL_SEC = exports.MIN_POLL_INTERVAL_SEC = exports.KEEPALIVE_REQUEST_TIMEOUT_MS = exports.LOGIN_REQUEST_TIMEOUT_MS = exports.PARTITION_COMMAND_TIMEOUT_MS = exports.DEFAULT_REQUEST_TIMEOUT_MS = exports.MAX_IDS_PER_REQUEST = exports.CSRF_HEADER_NAME = exports.CSRF_COOKIE_NAME = exports.MFA_COOKIE_NAME = exports.EVENT_FIELD_SENTINEL = exports.IS_FROM_NEW_SITE_FIELD = exports.PASSWORD_FIELD = exports.USERNAME_FIELD = exports.LOGIN_FORM_FIELDS = exports.REQUEST_CONTENT_TYPE = exports.JSON_API_ACCEPT = exports.HOME_REFERER = exports.WEBSOCKET_TOKEN_URL = exports.SENSORS_URL = exports.PARTITIONS_URL = exports.SYSTEM_URL = exports.KEEPALIVE_URL = exports.IDENTITIES_URL = exports.LOGIN_POST_URL = exports.LOGIN_PAGE_URL = exports.ALLOWED_API_ORIGIN = exports.BASE_URL = exports.MS_PER_MINUTE = exports.MS_PER_SECOND = exports.MANUFACTURER = exports.UUID_PREFIX = exports.PLATFORM_NAME = exports.PLUGIN_NAME = void 0;
+exports.WEBSOCKET_REFRESH_JITTER_MS = exports.WEBSOCKET_REFRESH_INTERVAL_MS = exports.WEBSOCKET_RECOVERY_INTERVAL_MS = exports.WEBSOCKET_MAX_FAILURES = exports.WEBSOCKET_RECONNECT_MAX_MS = exports.WEBSOCKET_RECONNECT_BASE_MS = exports.WEBSOCKET_HANDSHAKE_TIMEOUT_MS = exports.ALARM_COM_APEX_HOST = exports.WEBSOCKET_HOST_SUFFIX = exports.DEFAULT_WEBSOCKET_ENDPOINT = exports.REDISCOVERY_INTERVAL_MS = exports.PARTITION_COMMAND_DEADLINE_MS = exports.PARTITION_TARGET_SETTLE_MS = void 0;
 /** Name used to register the plugin with Homebridge (must match package.json name). */
 exports.PLUGIN_NAME = 'homebridge-myalarmcom';
 /** Platform identifier referenced in the user's Homebridge config. */
@@ -160,6 +160,22 @@ exports.MAX_IDS_PER_REQUEST = 50;
  * forever. {@link httpRequest} keeps the abort armed until the body is read.
  */
 exports.DEFAULT_REQUEST_TIMEOUT_MS = 30 * exports.MS_PER_SECOND;
+/**
+ * Ceiling on an arming command, which is far slower than a read.
+ *
+ * Alarm.com holds a command request open until the panel acknowledges, so the
+ * panel's response time is inside the request rather than after it. Measured on
+ * a live panel: 17.6s and 19.4s to arm, 25.4s to disarm. The read ceiling of
+ * 30s left 4.6s of headroom on the worst of those, which is not enough — a
+ * command timing out is reported to the user as a failed arm while the panel
+ * carries on and arms.
+ *
+ * Doubled rather than nudged, because the cost of waiting too long is a slow
+ * log line and the cost of waiting too little is a security system whose state
+ * disagrees with what the user was told. Reads keep the shorter ceiling, since
+ * nothing about this applies to them.
+ */
+exports.PARTITION_COMMAND_TIMEOUT_MS = 60 * exports.MS_PER_SECOND;
 /**
  * Deadline for the login postback and the login-page scrape.
  *

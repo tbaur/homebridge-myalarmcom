@@ -31,6 +31,7 @@ import {
   IDENTITIES_URL,
   JSON_API_ACCEPT,
   MAX_IDS_PER_REQUEST,
+  PARTITION_COMMAND_TIMEOUT_MS,
   PARTITIONS_URL,
   REQUEST_CONTENT_TYPE,
   SENSORS_URL,
@@ -117,12 +118,42 @@ interface RequestOptions {
   /** Correlation tag, so every line about one request can be tied together. */
   tag?: string
   /**
+   * Ceiling for this call, overriding {@link DEFAULT_REQUEST_TIMEOUT_MS}.
+   *
+   * Set by arming commands, which Alarm.com holds open until the panel answers
+   * and which therefore run far longer than any read.
+   */
+  timeoutMs?: number
+  /**
    * Cancels this call specifically, in addition to shutdown.
    *
    * Used by the poll cycle, whose own deadline has to be able to stop the work
    * it started rather than merely stop waiting for it.
    */
   signal?: AbortSignal
+}
+
+/**
+ * Assemble transport options, omitting anything the transport defaults itself.
+ *
+ * Extracted from the caller rather than inlined: these are all "leave the key
+ * out when it is absent" cases, and spreading them at the call site charged the
+ * request method for branches that carry no logic.
+ */
+function toTransportOptions(
+  headers: Record<string, string>,
+  options: RequestOptions,
+  fallbackSignal: AbortSignal | undefined,
+): Parameters<typeof httpRequest>[1] {
+  const { method = 'GET', body, signal = fallbackSignal, timeoutMs } = options
+
+  return {
+    method,
+    headers,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(signal ? { signal } : {}),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  }
 }
 
 /** Width of a correlation tag: short enough to scan, wide enough not to collide. */
@@ -269,7 +300,7 @@ export class AlarmComClient {
    * as request latency nor charged against the pacing budget for this call.
    */
   async #send<T>(session: Session, url: string, options: RequestOptions = {}): Promise<T> {
-    const { method = 'GET', body, tag = nextRequestTag(), signal = this.#signal } = options
+    const { method = 'GET', body, tag = nextRequestTag() } = options
 
     const headers: Record<string, string> = {
       Accept: JSON_API_ACCEPT,
@@ -283,12 +314,7 @@ export class AlarmComClient {
     }
 
     const startedAt = Date.now()
-    const response = await httpRequest(url, {
-      method,
-      headers,
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      ...(signal ? { signal } : {}),
-    })
+    const response = await httpRequest(url, toTransportOptions(headers, options, this.#signal))
     const durationMs = Date.now() - startedAt
 
     if (!response.ok) {
@@ -567,6 +593,7 @@ export class AlarmComClient {
       method: 'POST',
       body,
       tag,
+      timeoutMs: PARTITION_COMMAND_TIMEOUT_MS,
     })
 
     const response = await this.#withSessionRecovery(

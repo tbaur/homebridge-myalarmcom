@@ -46,6 +46,8 @@ Verify the compiled plugin against a live Alarm.com account.
                        confirmation.
   --arm-cycle          Arm stay, watch it settle, then disarm. Always attempts a
                        disarm on the way out, including after an interrupt.
+  --force-bypass       Resolve arming modifiers as the accessory does with
+                       allowSensorBypass enabled, and send what it would send.
   --verbose            Include the plugin's debug lines.
   -h, --help           Show this message.
 
@@ -167,15 +169,49 @@ async function watchPartition(client, partitionId, isDone, timeoutMs) {
   return null
 }
 
+/**
+ * Resolve arming modifiers the way `PartitionAccessory` does.
+ *
+ * Mirrored rather than imported, because the accessory's version is private and
+ * the point here is to run the same decision against live data. The call is
+ * guarded on purpose: `acceptsArmingModifier` reads `extendedArmingOptions`
+ * straight out of an unvalidated `JSON.parse`, so a mode whose value is not an
+ * array turns `.includes` into a `TypeError`. In the accessory that throw
+ * happens before anything is logged and before the request is sent, which
+ * HomeKit shows as the tile snapping back with an empty log.
+ *
+ * It is only reachable with bypass enabled, because the accessory short-circuits
+ * on the setting first.
+ */
+function resolveCommandOptions(attributes, mode, isBypassAllowed) {
+  try {
+    return {
+      nightArming: false,
+      forceBypass: isBypassAllowed
+        && alarmTypes.acceptsArmingModifier(
+          attributes,
+          mode,
+          alarmTypes.ArmingModifier.BYPASS_SENSORS,
+        ),
+    }
+  } catch (error) {
+    stdout.write(`\n  acceptsArmingModifier THREW for ${mode}: ${error?.message}\n`)
+    stdout.write(`  extendedArmingOptions.${mode} = ${JSON.stringify(attributes?.extendedArmingOptions?.[mode])}\n`)
+    stdout.write('  That is the accessory\'s silent failure: it throws here, before the\n')
+    stdout.write('  request is sent and before anything is logged.\n')
+    throw error
+  }
+}
+
 /** Send one command and report precisely how Alarm.com answered. */
-async function sendCommand(client, partitionId, action) {
+async function sendCommand(client, partitionId, action, options = {}) {
   // Timed and printed because the figure drives a real decision: Alarm.com
   // holds the request open until the panel acknowledges, so this is how long
   // HomeKit would be waiting, not how long the network took.
   const startedAt = Date.now()
 
   try {
-    const result = await client.commandPartition(partitionId, action, {})
+    const result = await client.commandPartition(partitionId, action, options)
     stdout.write(`  ACCEPTED in ${Date.now() - startedAt}ms. Immediate response state=${result?.attributes?.state}, desired=${result?.attributes?.desiredState}\n`)
     return true
   } catch (error) {
@@ -195,9 +231,10 @@ async function sendCommand(client, partitionId, action) {
  * development script exited badly is not an acceptable outcome, so the armed
  * window is kept as short as the panel allows.
  */
-async function armCycle(client, partition) {
+async function armCycle(client, partition, isBypassAllowed = false) {
   const partitionId = partition.id
   const name = partition.attributes.description ?? partitionId
+  const armOptions = resolveCommandOptions(partition.attributes, 'ArmedStay', isBypassAllowed)
 
   stdout.write('\n── Arm / disarm cycle ──\n')
   stdout.write(`  This will really arm "${name}" in STAY mode, then disarm it.\n`)
@@ -247,9 +284,9 @@ async function armCycle(client, partition) {
   process.on('SIGINT', onInterrupt)
 
   try {
-    stdout.write('\n  Arming (stay)...\n')
+    stdout.write(`\n  Arming (stay), options ${JSON.stringify(armOptions)}...\n`)
     wasArmAttempted = true
-    if (await sendCommand(client, partitionId, 'armStay')) {
+    if (await sendCommand(client, partitionId, 'armStay', armOptions)) {
       const settled = await watchPartition(
         client,
         partitionId,
@@ -280,9 +317,16 @@ async function armCycle(client, partition) {
  * itself the useful result: it pins down the error shape so the plugin can
  * handle it precisely instead of guessing.
  */
-async function attemptArm(client, partition, mode) {
+async function attemptArm(client, partition, mode, isBypassAllowed = false) {
   const action = mode === 'disarm' ? 'disarm' : mode === 'away' ? 'armAway' : 'armStay'
   const name = partition.attributes.description ?? partition.id
+  const options = action === 'disarm'
+    ? {}
+    : resolveCommandOptions(
+      partition.attributes,
+      action === 'armAway' ? 'ArmedAway' : 'ArmedStay',
+      isBypassAllowed,
+    )
 
   stdout.write('\n── Arming attempt ──\n')
 
@@ -300,9 +344,9 @@ async function attemptArm(client, partition, mode) {
   }
 
   try {
-    const result = await client.commandPartition(partition.id, action, {})
+    stdout.write(`  options ${JSON.stringify(options)}\n`)
+    const result = await client.commandPartition(partition.id, action, options)
     stdout.write(`  ACCEPTED. Panel reports state ${result?.attributes?.state}.\n`)
-    stdout.write('  Arming takes 20-30s to settle; watch the events below.\n')
 
     if (action !== 'disarm') {
       // Said plainly, because this path installs no interrupt handler: unlike
@@ -396,6 +440,7 @@ async function main() {
   const listenSeconds = readNumericFlag('--listen', { fallback: 90, min: 0, max: 3_600 })
   const armMode = readFlag('--arm', 'stay') ?? null
   const isArmCycle = hasFlag('--arm-cycle')
+  const isBypassAllowed = hasFlag('--force-bypass')
   const log = createTerminalLogger('verify', hasFlag('--verbose'))
 
   if (armMode && !['stay', 'away', 'disarm'].includes(armMode)) {
@@ -455,12 +500,12 @@ async function main() {
     // cycle runs rather than being missed while it settles.
     const handle = await startListening(client, context, log)
     try {
-      await armCycle(client, partitions[0])
+      await armCycle(client, partitions[0], isBypassAllowed)
     } finally {
       handle.stop()
     }
   } else if (armMode && partitions[0]) {
-    await attemptArm(client, partitions[0], armMode)
+    await attemptArm(client, partitions[0], armMode, isBypassAllowed)
   }
 
   if (listenSeconds > 0) {

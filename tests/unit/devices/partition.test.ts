@@ -663,6 +663,28 @@ describe('PartitionAccessory', () => {
       expect(bed.commandPartition).not.toHaveBeenCalled()
     })
 
+    /**
+     * Regression. Reading `platform.client` throws synchronously when the
+     * configuration is unusable, and that call sat outside the try, so the
+     * error left the set handler as a bare throw. HomeKit reverted the tile and
+     * the log said nothing at all, which is indistinguishable from the plugin
+     * having never received the tap.
+     */
+    it('logs and converts a failure raised before the request is sent', async () => {
+      accessory.update(controllable)
+      Object.defineProperty(bed.platform, 'client', {
+        configurable: true,
+        get() {
+          throw new Error('MyAlarmCom has no usable configuration')
+        },
+      })
+
+      await expect(requestTarget(HomeKitSecurityTarget.AWAY_ARM))
+        .rejects.toBe(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+
+      expect(messagesAt(log, 'error').join('\n')).toMatch(/Failed to armAway partition 1234567-127/)
+    })
+
     it('reports a communication failure and forgets the pending target', async () => {
       accessory.update(controllable)
       bed.commandPartition.mockRejectedValue(new Error('Alarm.com returned 500'))

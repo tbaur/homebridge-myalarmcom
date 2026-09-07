@@ -431,17 +431,7 @@ export class PartitionAccessory {
     options: { nightArming: boolean, forceBypass: boolean },
   ): Promise<void> {
     const startedAt = Date.now()
-
-    // Given a handler exactly once, here. Both branches below read this rather
-    // than the raw command, so a rejection arriving long after the deadline is
-    // still owned and never surfaces as an unhandled rejection.
-    const outcome: Promise<CommandOutcome> = this.#platform.client
-      .commandPartition(this.deviceId, action, options)
-      .then(
-        (): CommandOutcome => ({ isOk: true }),
-        (error: unknown): CommandOutcome => ({ isOk: false, error }),
-      )
-
+    const outcome = this.#startCommand(action, options, target, startedAt)
     const settled = await this.#awaitWithinHapWindow(outcome)
 
     if (settled === null) {
@@ -459,6 +449,40 @@ export class PartitionAccessory {
         settled.error instanceof TimeoutError
           ? HAPStatus.OPERATION_TIMED_OUT
           : HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+      )
+    }
+  }
+
+  /**
+   * Start the command and give it a handler, once, here.
+   *
+   * Both callers read the returned promise rather than the raw command, so a
+   * rejection arriving long after the deadline is still owned and never
+   * surfaces as an unhandled rejection.
+   *
+   * The call is wrapped because it can throw *synchronously*, before any
+   * promise exists: reading `platform.client` raises `ConfigurationError` when
+   * the configuration is unusable. Left uncaught that escaped the set handler
+   * as a bare error, so HomeKit reverted the tile with nothing written to the
+   * log to say why.
+   */
+  #startCommand(
+    action: PartitionAction,
+    options: { nightArming: boolean, forceBypass: boolean },
+    target: number,
+    startedAt: number,
+  ): Promise<CommandOutcome> {
+    try {
+      return this.#platform.client
+        .commandPartition(this.deviceId, action, options)
+        .then(
+          (): CommandOutcome => ({ isOk: true }),
+          (error: unknown): CommandOutcome => ({ isOk: false, error }),
+        )
+    } catch (error) {
+      this.#recordOutcome({ isOk: false, error }, action, target, startedAt)
+      throw new this.#platform.api.hap.HapStatusError(
+        HAPStatus.SERVICE_COMMUNICATION_FAILURE,
       )
     }
   }
