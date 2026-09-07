@@ -38,6 +38,7 @@ import {
   waitFor,
   type RecordingLogging,
 } from '../helpers/homekit'
+import { expectOneMessage } from '../helpers/logger'
 import identitiesFixture from '../fixtures/identities.json'
 import partitionsFixture from '../fixtures/partitions.json'
 import sensorsFixture from '../fixtures/sensors.json'
@@ -240,7 +241,9 @@ describe('re-enumerating the account while running', () => {
   it('logs periodic rediscovery at debug, not info', async () => {
     // Scoped debug is dropped unless config.debug is on.
     await launch({ debug: true })
-    expect(log.infoMessages.some((message) => message.includes('Discovered '))).toBe(true)
+    // One line, from the startup pass. The rest of this test counts info lines
+    // to prove rediscovery stays quiet, so a duplicate here would undercut it.
+    expectOneMessage(log.infoMessages, 'Discovered ')
 
     const infoBefore = log.infoMessages.length
     nock(BASE_URL).persist().get(SYSTEM_PATH).reply(200, systemFixture)

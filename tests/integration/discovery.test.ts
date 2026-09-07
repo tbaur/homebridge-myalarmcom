@@ -20,6 +20,7 @@ import {
   waitFor,
   type RecordingLogging,
 } from '../helpers/homekit'
+import { expectOneMessage } from '../helpers/logger'
 import identitiesFixture from '../fixtures/identities.json'
 import partitionsFixture from '../fixtures/partitions.json'
 import sensorsFixture from '../fixtures/sensors.json'
@@ -132,7 +133,13 @@ describe('discovering an Alarm.com account', () => {
       'Hallway Motion',
       'Basement Motion',
     ])
-    expect(log.infoMessages.some((message) => message.includes('Discovered '))).toBe(true)
+    // Pinned in full, not just to the word "Discovered". The summary counts
+    // what the account holds, so it says six sensors where four accessories
+    // were published: the other two are filtered as unsupported or unmonitored.
+    // Those two numbers are meant to disagree, and asserting both together is
+    // what would catch the filter silently swallowing a supported sensor.
+    expect(expectOneMessage(log.infoMessages, 'Discovered '))
+      .toBe('Discovered 1 partition(s) and 6 sensor(s)')
   })
 
   it('skips a device type it does not support yet', async () => {
@@ -258,7 +265,9 @@ describe('discovering an Alarm.com account', () => {
     await launch()
 
     expect(log.warnings.join('\n')).toMatch(/Initial discovery failed:.*Retrying/)
-    expect(log.infoMessages.some((message) => message.includes('Ready'))).toBe(true)
+    // Exactly one, because a retry that announced readiness twice would mean
+    // the recovered attempt ran alongside the original rather than replacing it.
+    expectOneMessage(log.infoMessages, 'Ready')
     expect(api.registered.length).toBeGreaterThan(0)
   })
 

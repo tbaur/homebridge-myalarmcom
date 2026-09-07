@@ -160,7 +160,9 @@ Device types confirmed on live hardware: `1` contact, `2` motion, `5` smoke.
 
 ### Partitions
 
-**Verified.** `state` uses a separate enum: `0` unknown, `1` disarmed, `2` armed stay, `3` armed away, `4` armed night. `1` and `2` were both observed live, by arming and disarming from the mobile app while [watching the account](#arming-timing). Armed away and armed night remain inferred: the test account cannot issue those commands, and the panel was never put into either state by hand.
+**Verified.** `state` uses a separate enum: `0` unknown, `1` disarmed, `2` armed stay, `3` armed away, `4` armed night. `1` and `2` were both observed live, by arming and disarming the panel and [watching the account](#arming-timing).
+
+Armed away and armed night are still inferred, for different reasons now. The test account can issue arming commands — it has done so — so `3` is simply a reading nobody has taken yet, and one live away-arm would settle it. `4` cannot be settled on this hardware at all: the panel does not list `ArmedNight` among its `extendedArmingOptions`, so it will not enter that state to be observed. Confirming it needs a different panel.
 
 **Verified.** `hasActiveAlarm` is a **separate boolean** from `state`. While an alarm is sounding, `state` continues to report the arming mode. A client that maps only `state` can never display a triggered alarm — it will show a calm armed tile during a break-in. Read both.
 

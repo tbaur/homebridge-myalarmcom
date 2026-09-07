@@ -19,6 +19,7 @@ import {
   waitFor,
   type RecordingLogging,
 } from '../helpers/homekit'
+import { expectOneMessage } from '../helpers/logger'
 import identitiesFixture from '../fixtures/identities.json'
 import partitionsFixture from '../fixtures/partitions.json'
 import sensorsFixture from '../fixtures/sensors.json'
@@ -173,7 +174,9 @@ describe('platform diagnostics', () => {
 
     api.emit('shutdown')
 
-    expect(log.infoMessages.some((message) => message.includes('Diagnostics stop'))).toBe(true)
+    // One snapshot per shutdown. Emitting it from more than one teardown path
+    // is a plausible regression and would otherwise pass unnoticed.
+    expectOneMessage(log.infoMessages, 'Diagnostics stop')
   })
 
   it('emits Diagnostics stop only once when shutdown is signaled twice', async () => {
@@ -199,7 +202,9 @@ describe('platform diagnostics', () => {
     log.warnings.length = 0
     diagnosticsHeartbeat!()
 
-    expect(log.warnings.some((message) => message.includes('Health degraded'))).toBe(true)
+    // One warning per heartbeat. A degraded system that warns repeatedly on a
+    // single cycle floods the log precisely when it is hardest to read.
+    expectOneMessage(log.warnings, 'Health degraded')
   })
 
   it('does not throw when a diagnostics reader fails during a heartbeat', async () => {
