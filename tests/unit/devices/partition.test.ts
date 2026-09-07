@@ -393,8 +393,13 @@ describe('PartitionAccessory', () => {
 
       expect(bed.commandPartition).toHaveBeenCalledWith('1234567-127', 'armAway', expect.any(Object))
       expect(bed.recordCommand).toHaveBeenCalledTimes(1)
-      expect(messagesAt(log, 'info').some((message) => /^Home: Armed Away, confirmed by the panel in [\d.]+s$/.test(message)))
-        .toBe(true)
+      // Asserted as the whole list rather than "some line matches". The latter
+      // is blind to anything printed alongside, which is how one arm came to
+      // log three lines, two of them near-duplicates, past a green suite.
+      expect(messagesAt(log, 'info')).toEqual([
+        'Home: requesting Armed Away',
+        expect.stringMatching(/^Home: Armed Away, confirmed by the panel in [\d.]+s$/),
+      ])
     })
 
     /**
@@ -485,8 +490,10 @@ describe('PartitionAccessory', () => {
       await requestTarget(HomeKitSecurityTarget.DISARM)
 
       expect(bed.commandPartition).toHaveBeenCalledWith('1234567-127', 'disarm', expect.any(Object))
-      expect(messagesAt(log, 'info').some((message) => /^Home: Disarmed, confirmed by the panel in [\d.]+s$/.test(message)))
-        .toBe(true)
+      expect(messagesAt(log, 'info')).toEqual([
+        'Home: requesting Disarmed',
+        expect.stringMatching(/^Home: Disarmed, confirmed by the panel in [\d.]+s$/),
+      ])
     })
 
     it('sends night arming as a stay command carrying the modifier', async () => {
@@ -712,8 +719,10 @@ describe('PartitionAccessory', () => {
       command.resolve()
       await jest.advanceTimersByTimeAsync(0)
 
-      expect(messagesAt(log, 'info').some((message) => /^Home: Armed Away, confirmed by the panel in [\d.]+s$/.test(message)))
-        .toBe(true)
+      expect(messagesAt(log, 'info')).toEqual([
+        'Home: requesting Armed Away',
+        expect.stringMatching(/^Home: Armed Away, confirmed by the panel in [\d.]+s$/),
+      ])
       expect(bed.recordCommand).toHaveBeenCalledTimes(1)
       expect(bed.requestDeviceRefresh).toHaveBeenCalledWith('1234567-127')
     })

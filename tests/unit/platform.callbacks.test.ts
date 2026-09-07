@@ -33,6 +33,7 @@ import identitiesFixture from '../fixtures/identities.json'
 import partitionsFixture from '../fixtures/partitions.json'
 import sensorsFixture from '../fixtures/sensors.json'
 import systemFixture from '../fixtures/system.json'
+import { fixtureAt } from '../helpers/fixtures'
 
 jest.mock('../../src/utils/retry', () => {
   const actual = jest.requireActual<typeof import('../../src/utils/retry')>('../../src/utils/retry')
@@ -206,6 +207,46 @@ describe('platform collaborator callbacks', () => {
       // Hallway Motion is activated in the fixture. Motion does not stop a
       // panel arming, so counting it would refuse arms that would have worked.
       expect(platform.listOpenContacts()).toEqual(['Kitchen Window'])
+    })
+
+    /**
+     * Alarm.com reports sensors per system, not per partition, so on a system
+     * with several partitions an open door cannot be attributed to the one
+     * being armed. Answering anyway would refuse an arm the panel would have
+     * accepted, and being unable to arm the house is a worse failure than the
+     * wait this check exists to remove.
+     */
+    it('answers with nothing when the account has more than one partition', async () => {
+      nock.cleanAll()
+      interceptSignIn()
+      nock(BASE_URL).get('/web/api/identities').reply(200, identitiesFixture)
+      nock(BASE_URL).get('/web/api/websockets/token').optionally()
+        .reply(200, { value: 'stream-token', metaData: {} })
+
+      const first = fixtureAt(partitionsFixture.data, 0, 'partitions')
+      const second = { ...first, id: '1234567-128' }
+
+      nock(BASE_URL).get('/web/api/systems/systems/7654321').reply(200, {
+        ...systemFixture,
+        data: {
+          ...systemFixture.data,
+          relationships: {
+            ...systemFixture.data.relationships,
+            partitions: {
+              data: [first, second].map(({ id }) => ({ id, type: 'devices/partition' })),
+            },
+          },
+        },
+      })
+      nock(BASE_URL).persist().get('/web/api/devices/partitions').query(true)
+        .reply(200, { data: [first, second] })
+      nock(BASE_URL).persist().get('/web/api/devices/sensors').query(true)
+        .reply(200, replyWithRequested(sensorsFixture.data))
+
+      const platform = await launch()
+
+      // Kitchen Window is still open; it is simply no longer attributable.
+      expect(platform.listOpenContacts()).toEqual([])
     })
   })
 
