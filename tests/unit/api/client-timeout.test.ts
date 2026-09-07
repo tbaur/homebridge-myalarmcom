@@ -13,6 +13,7 @@ import { AlarmComClient } from '../../../src/api/client'
 import { RateLimiter } from '../../../src/api/rate-limiter'
 import type { SessionManager } from '../../../src/api/session-manager'
 import { httpRequest } from '../../../src/api/http'
+import type { HttpRequestOptions } from '../../../src/api/http'
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   PARTITION_COMMAND_TIMEOUT_MS,
@@ -50,13 +51,13 @@ function respondWith(payload: unknown): void {
     status: 200,
     text: JSON.stringify(payload),
     headers: new Headers(),
-  } as unknown as Awaited<ReturnType<typeof httpRequest>>)
+  })
 }
 
 /** The deadline handed to the transport for the most recent call. */
 function lastTimeoutMs(): number | undefined {
-  const call = mockedRequest.mock.calls.at(-1)
-  return (call?.[1] as { timeoutMs?: number } | undefined)?.timeoutMs
+  const options: HttpRequestOptions | undefined = mockedRequest.mock.calls.at(-1)?.[1]
+  return options?.timeoutMs
 }
 
 describe('request deadlines', () => {
