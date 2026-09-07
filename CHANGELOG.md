@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.4](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.3...v2.0.4) (2026-09-07)
+
+
+### Bug Fixes
+
+* refuse an arm over an open sensor at once instead of after a minute ([#74](https://github.com/tbaur/homebridge-myalarmcom/issues/74)) ([c2a7d22](https://github.com/tbaur/homebridge-myalarmcom/commit/c2a7d2298d900d9eb95ca26a4ca9eec7c464f576))
+
 ## [2.0.3](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.2...v2.0.3) (2026-09-07)
 
 
