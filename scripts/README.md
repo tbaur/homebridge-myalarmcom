@@ -6,7 +6,8 @@ User-facing options and troubleshooting: [docs/README-DETAILED.md](../docs/READM
 | --- | --- |
 | `probe.mjs` | Signs in to Alarm.com once, reports what the account exposes, probes for a better authentication path, and writes scrubbed JSON:API payloads to `probe-output/` for use as test fixtures. |
 | `probe-command.mjs` | Settles what the partition command endpoint accepts and how long it takes: the same command once per candidate `Content-Type`, an optional real arm/disarm cycle, and `--force-bypass` for arming over an open zone. Writes to a live panel; read the safety notes below. |
-| `verify.mjs` | Drives the **compiled plugin** in `dist/` against a live account and prints how each device maps to HomeKit. |
+| `verify.mjs` | Drives the **compiled plugin's client** in `dist/` against a live account and prints how each device maps to HomeKit. |
+| `probe-accessory.mjs` | Drives the **compiled `PartitionAccessory`** on real HAP services, so the HomeKit-facing decisions — refusing an arm, sending a bypass flag, silencing a superseded command, choosing valid target values — run against a live panel. Writes to a live panel; read the safety notes below. |
 | `watch-arming.mjs` | Streams events while polling partition and sensor state, printing every change with a diff. Built for watching a real arm/disarm driven from the mobile app. |
 | `diagnose-stream.mjs` | Connects to the event stream four ways (two clients × raw and encoded token) and reports which combinations work. Run it when the stream stops connecting. |
 | `lib/session.mjs` | Minimal Alarm.com web-session client (WebForms login, cookie jar, anti-CSRF header) used by the scripts that reimplement the protocol. |
@@ -19,7 +20,7 @@ Every script takes `--help`, and `--help` works before the project is built. Eac
 
 `probe --ws` needs the global `WebSocket`, which arrived in Node 22 — the same floor the package declares. On a build without it, the script says so and skips the event capture rather than failing after the login.
 
-They answer different questions. `probe.mjs` reimplements the protocol in order to *discover* it, and is the right tool when Alarm.com changes something and you need to find out what. `verify.mjs` exercises the code that actually ships, and is the right tool for confirming a change behaves correctly against real hardware. `watch-arming.mjs` observes rather than interprets, which is what you want when the question is "what does Alarm.com actually send when I do this?" `probe-command.mjs` answers a narrower question than any of them: of several request shapes that all look reasonable, which one does the server take?
+They answer different questions. `probe.mjs` reimplements the protocol in order to *discover* it, and is the right tool when Alarm.com changes something and you need to find out what. `verify.mjs` exercises the code that actually ships, and is the right tool for confirming a change behaves correctly against real hardware. `watch-arming.mjs` observes rather than interprets, which is what you want when the question is "what does Alarm.com actually send when I do this?" `probe-command.mjs` answers a narrower question than any of them: of several request shapes that all look reasonable, which one does the server take? `probe-accessory.mjs` is the only one that runs the accessory itself, and is the right tool when the question is what a HomeKit user would experience.
 
 ## Verifying the plugin against real hardware
 
@@ -32,6 +33,31 @@ node scripts/verify.mjs --arm-cycle   # arm stay, watch it settle, then disarm a
 ```
 
 These need a build. `npm run verify` builds first; running the file directly does not, and will tell you so.
+
+## Verifying the accessory, not just the client
+
+`verify.mjs` stops at the client. Every HomeKit-facing decision lives in
+`PartitionAccessory`, and none of it is reachable from a script that only calls
+`client.commandPartition` — `verify.mjs` goes as far as hand-copying
+`buildCommandOptions`, so it can agree with a bug in the original. Use
+`probe-accessory.mjs` when the question is about behaviour the user would see.
+
+```bash
+node scripts/probe-accessory.mjs --night-display  # read-only: sends nothing
+node scripts/probe-accessory.mjs --refusal        # expects NO command to be sent
+node scripts/probe-accessory.mjs --bypass         # really arms, then disarms
+node scripts/probe-accessory.mjs --supersede      # really arms, then disarms
+node scripts/probe-accessory.mjs --all            # all four, in that order
+```
+
+Services and characteristics are the genuine hap-nodejs classes, so a write goes
+through the same validation and the same `HapStatusError` path it would in a
+running Homebridge. Only the Homebridge shell is faked.
+
+`--refusal` and `--bypass` need a contact sensor held open, and the script says
+so and stops if everything is shut. `--refusal` is the odd one: a correct run
+sends nothing at all, so it still asks for confirmation because an *incorrect*
+run arms your panel.
 
 It prints each sensor's raw `state` and `openClosedStatus` alongside the HomeKit value the plugin derives, so a mapping error is visible by reading it against what you can see with your own eyes. Anything the plugin cannot resolve confidently is flagged `AMBIGUOUS`.
 
