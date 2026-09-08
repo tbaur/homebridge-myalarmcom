@@ -523,21 +523,29 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
     : '  <- no reading caught it arming (a short exit delay could hide between samples)\n')
   stdout.write(`  re-read requested  ${refreshedAfterSupersede}\n`)
 
-  // The re-read is part of the verdict now. It was printed and then left out,
-  // so the one behaviour this scenario was extended to check could fail
-  // silently while the run reported PASS.
-  const isPass = errors.length === 0
+  // What the user asked for last was Disarmed, so the only acceptable ending
+  // is a disarmed panel. This was computed, printed in capitals, and then left
+  // out of the verdict, which is how a run that ended with the panel ARMED
+  // while HomeKit had been told "Disarmed, confirmed" was reported as PASS.
+  const isPanelWhereAsked = stateAfter === PartitionState.DISARMED && !everLeftDisarmed
+  const isReportedHonestly = errors.length === 0
     && superseded.length === 1
     && disarmConfirmed
     && refreshedAfterSupersede
+  const isPass = isPanelWhereAsked && isReportedHonestly
+
+  let summary
+  if (isPass) {
+    summary = 'the panel ended where it was last told to, and the tile was told the truth'
+  } else if (!isPanelWhereAsked) {
+    summary = 'THE PANEL DID NOT END WHERE IT WAS LAST TOLD. Alarm.com applied the '
+      + 'abandoned arm after the disarm, and HomeKit was told Disarmed'
+  } else {
+    summary = 'the panel ended correctly but the reporting did not; see the counts above'
+  }
 
   return {
-    isPass: verdict(
-      isPass,
-      isPass
-        ? 'the abandoned arm kept quiet, the disarm was reported, and the panel was re-read'
-        : 'the superseded command did not behave; see the counts above',
-    ),
+    isPass: verdict(isPass, summary),
     detail: {
       errors,
       superseded,
