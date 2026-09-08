@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.6](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.5...v2.0.6) (2026-09-08)
+
+
+### Bug Fixes
+
+* send partition commands one at a time ([#82](https://github.com/tbaur/homebridge-myalarmcom/issues/82)) ([cfc49e6](https://github.com/tbaur/homebridge-myalarmcom/commit/cfc49e6ede4d7ddbd81e53cc3925e9d51b1b6c33))
+
 ## [2.0.5](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.4...v2.0.5) (2026-09-07)
 
 
