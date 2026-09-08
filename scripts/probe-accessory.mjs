@@ -150,7 +150,9 @@ function createRecordingLog() {
  * because the refusal is only meaningful if the door really is open. The real
  * platform applies the same single-partition condition, which is mirrored here.
  */
-function mountAccessory({ client, partitionId, displayName, isBypassAllowed, openContacts }) {
+function mountAccessory({
+  client, partitionId, displayName, isBypassAllowed, openContacts, disarmAfter,
+}) {
   const log = createRecordingLog()
   const accessory = new FakePlatformAccessory(displayName, uuid.generate(`probe-${partitionId}`))
   accessory.context = { deviceId: partitionId, kind: 'partition', displayName }
@@ -167,10 +169,20 @@ function mountAccessory({ client, partitionId, displayName, isBypassAllowed, ope
     client: {
       commandPartition: (id, action, options) => {
         sent.push({ id, action, options, atMs: Date.now() })
+        // Armed here, at the one place a command really leaves, rather than at
+        // each call site. Set per scenario it was missing from --refusal, whose
+        // whole point is that nothing should be sent — so the one run whose
+        // failure mode is an unexpected arm was the one run with no cleanup.
+        if (disarmAfter) {
+          disarmAfter.armed = true
+        }
         return client.commandPartition(id, action, options)
       },
     },
-    requestDeviceRefresh: (id) => refreshes.push(id),
+    // Timestamped, because "a refresh happened" is trivially true after any
+    // successful command. The question is whether one happened *after* a
+    // particular outcome landed.
+    requestDeviceRefresh: (id) => refreshes.push({ id, atMs: Date.now() }),
     recordCommand: () => { commandCount += 1 },
     isSensorBypassAllowed: isBypassAllowed,
     listOpenContacts: () => openContacts,
@@ -336,7 +348,7 @@ function probeNightDisplay(partition) {
  * Confirmation is still required even though a correct run sends nothing,
  * because an incorrect one sends an arm.
  */
-async function probeRefusal({ client, partition, openContacts }) {
+async function probeRefusal({ client, partition, openContacts, disarmAfter }) {
   stdout.write('\n── Refusal: bypass off, a contact open ──\n')
   stdout.write(`  open contacts   ${openContacts.join(', ')}\n`)
   stdout.write('  expected        refusal in about a second, nothing sent to the panel\n')
@@ -352,6 +364,7 @@ async function probeRefusal({ client, partition, openContacts }) {
     displayName: partition.attributes.description ?? partition.id,
     isBypassAllowed: false,
     openContacts,
+    disarmAfter,
   })
   mounted.accessory.update(partition)
 
@@ -401,6 +414,7 @@ async function probeBypass({ client, partition, openContacts, disarmAfter }) {
     displayName: partition.attributes.description ?? partition.id,
     isBypassAllowed: true,
     openContacts,
+    disarmAfter,
   })
   mounted.accessory.update(partition)
 
@@ -460,6 +474,7 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
     displayName: partition.attributes.description ?? partition.id,
     isBypassAllowed: true,
     openContacts,
+    disarmAfter,
   })
   mounted.accessory.update(partition)
 
@@ -484,7 +499,13 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
     (sample) => sample.state !== PartitionState.DISARMED
       || sample.desiredState !== PartitionState.DISARMED,
   )
-  const refreshedAfterSupersede = mounted.refreshes.length > 0
+  // Must land *after* the superseded outcome, not merely at some point. Every
+  // successful command requests a refresh, so counting them answered "did
+  // anything ever refresh", which is true whatever the branch under test does.
+  const supersededAt = mounted.log.entries
+    .find((entry) => entry.text.includes('superseded'))?.atMs
+  const refreshedAfterSupersede = supersededAt !== undefined
+    && mounted.refreshes.some((refresh) => refresh.atMs >= supersededAt)
 
   const errors = mounted.log.entries.filter((entry) => entry.level === 'error')
   const superseded = mounted.log.entries.filter((entry) => entry.text.includes('superseded'))
@@ -502,12 +523,20 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
     : '  <- no reading caught it arming (a short exit delay could hide between samples)\n')
   stdout.write(`  re-read requested  ${refreshedAfterSupersede}\n`)
 
+  // The re-read is part of the verdict now. It was printed and then left out,
+  // so the one behaviour this scenario was extended to check could fail
+  // silently while the run reported PASS.
+  const isPass = errors.length === 0
+    && superseded.length === 1
+    && disarmConfirmed
+    && refreshedAfterSupersede
+
   return {
     isPass: verdict(
-      errors.length === 0 && superseded.length === 1 && disarmConfirmed,
-      errors.length === 0 && superseded.length === 1 && disarmConfirmed
-        ? 'the abandoned arm kept quiet and the disarm was reported cleanly'
-        : 'the superseded command interfered; see the counts above',
+      isPass,
+      isPass
+        ? 'the abandoned arm kept quiet, the disarm was reported, and the panel was re-read'
+        : 'the superseded command did not behave; see the counts above',
     ),
     detail: {
       errors,
@@ -523,13 +552,22 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
 }
 
 /** Names of contacts a live read says are open, matching the platform's rule. */
-function openContactNames(sensors) {
+function openContactNames(sensors, partitionCount) {
+  // The real one gives up on multi-partition systems, because it cannot tell
+  // which partition a sensor belongs to. Without this the stub hands over a
+  // list the shipping plugin would never produce, and --refusal reports PASS
+  // for a refusal that would not happen in a real install — the exact "agrees
+  // with a bug rather than catching it" failure this script exists to avoid.
+  if (partitionCount !== 1) {
+    return []
+  }
+
   return sensors
     .filter((sensor) => {
       const mapped = mappers.toHomeKitSensorState(sensor.attributes)
       return mapped?.kind === 'contact' && mapped.isTriggered === true
     })
-    .map((sensor) => String(sensor.attributes.description))
+    .map((sensor) => String(sensor.attributes.description ?? `Sensor ${sensor.id}`))
     .sort()
 }
 
@@ -599,8 +637,21 @@ async function main() {
   }
 
   const { client, partition, sensors, partitionCount } = await connect()
-  const openContacts = openContactNames(sensors)
+  const openContacts = openContactNames(sensors, partitionCount)
   reportDiscovery({ partition, partitionCount, openContacts })
+
+  // Refuse to run against a panel somebody armed on purpose. The cleanup
+  // disarms unconditionally, so starting from armed means the tool unarms a
+  // house and then reports success. Every arming scenario also assumes a
+  // disarmed start; from armed, the arm is a no-op that confirms inside the
+  // deadline and --supersede fails for a reason that has nothing to do with
+  // the code under test.
+  const isArmingScenario = wantsRefusal || wantsBypass || wantsSupersede
+  if (isArmingScenario && partition.attributes.state !== PartitionState.DISARMED) {
+    stdout.write(`\n  The panel is in state ${partition.attributes.state}, not disarmed.\n`)
+    stdout.write('  Refusing to run: this would disarm a panel you armed deliberately.\n')
+    return
+  }
 
   const needsOpenContact = wantsRefusal || wantsBypass
   if (needsOpenContact && openContacts.length === 0) {
@@ -610,30 +661,66 @@ async function main() {
   }
 
   const results = {}
-  // Set the moment an arm goes out, so the cleanup runs even if the assertions
-  // below never do.
+  // Armed inside the commandPartition wrapper, so it is set the instant a
+  // command really leaves rather than wherever someone remembered to set it.
   const disarmAfter = { armed: false }
+  let isCleaningUp = false
 
+  /**
+   * Return the panel to disarmed, and confirm it rather than assume it.
+   *
+   * The flag is cleared only once a read agrees, because clearing it up front
+   * meant a single transient failure permanently disabled both this and the
+   * interrupt handler, leaving a printed sentence as the only safeguard on a
+   * live security panel.
+   */
   const putItBack = async () => {
-    if (!disarmAfter.armed) {return}
-    disarmAfter.armed = false
+    if (!disarmAfter.armed || isCleaningUp) {return}
+    isCleaningUp = true
     stdout.write('\n── Putting it back ──\n')
+
     try {
-      await client.commandPartition(partition.id, 'disarm', { nightArming: false, forceBypass: false })
-      const [after] = await client.getPartitions([partition.id])
-      stdout.write(`  final state ${after?.attributes?.state}\n`)
-    } catch (error) {
-      stdout.write(`  DISARM FAILED: ${error instanceof Error ? error.message : String(error)}\n`)
-      stdout.write('  Disarm at the keypad or in the Alarm.com app.\n')
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await client.commandPartition(partition.id, 'disarm', { nightArming: false, forceBypass: false })
+        } catch (error) {
+          stdout.write(`  disarm attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)}\n`)
+        }
+
+        const [after] = await client.getPartitions([partition.id])
+        const state = after?.attributes?.state
+        stdout.write(`  state after attempt ${attempt}: ${state}\n`)
+
+        if (state === PartitionState.DISARMED) {
+          disarmAfter.armed = false
+          return
+        }
+        await sleep(5_000)
+      }
+
+      stdout.write('\n  COULD NOT DISARM. The panel may still be armed.\n')
+      stdout.write('  Disarm at the keypad or in the Alarm.com app now.\n')
+    } finally {
+      isCleaningUp = false
     }
   }
 
-  process.on('SIGINT', () => { void putItBack().then(() => process.exit(130)) })
+  // A second interrupt must not cut short the disarm the first one started.
+  process.on('SIGINT', () => {
+    if (isCleaningUp) {
+      stdout.write('\n  Still disarming — interrupt again only if you will disarm by hand.\n')
+      return
+    }
+    void putItBack().then(() => process.exit(130))
+  })
 
   try {
     if (wantsNight) {results.night = probeNightDisplay(partition)}
     if (wantsRefusal && openContacts.length > 0) {
-      results.refusal = await probeRefusal({ client, partition, openContacts })
+      results.refusal = await probeRefusal({ client, partition, openContacts, disarmAfter })
+      // Runs even though a correct refusal sends nothing. The scenario exists
+      // to catch a regression, and the regression it catches arms the panel.
+      await putItBack()
     }
     if (wantsBypass && openContacts.length > 0) {
       results.bypass = await probeBypass({ client, partition, openContacts, disarmAfter })

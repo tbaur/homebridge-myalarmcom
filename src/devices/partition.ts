@@ -568,7 +568,15 @@ export class PartitionAccessory {
       this.#log.debug(
         `${this.#name}: ${action} still in flight at the HAP deadline, answering HomeKit without it`,
       )
-      void outcome.then((late) => this.#recordOutcome(late, attempt))
+      // Both the command's rejection and the handler's are owned. The handler
+      // logs, refreshes and records, any of which can throw; an unhandled
+      // rejection from here has no caller left to catch it and takes the
+      // process down, which for a child bridge means every accessory on it.
+      void outcome
+        .then((late) => this.#recordOutcome(late, attempt))
+        .catch((error: unknown) => {
+          this.#log.debug(`${this.#name}: failed to record a late ${action}: ${String(error)}`)
+        })
       return
     }
 
