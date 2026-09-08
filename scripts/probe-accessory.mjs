@@ -561,7 +561,11 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
   // Two waits, in order, because either alone reports too early. The held
   // disarm is not even sent until the arm finishes, so the log line comes
   // first; the panel then takes several more seconds to act on it.
-  stdout.write('\n  waiting for both commands and the panel to finish (about a minute)\n')
+  // Says "then" because the accessory's log is replayed once the waits finish,
+  // timestamped from the start. Without that it reads as though everything
+  // happened at the moment the waiting line was printed.
+  stdout.write('\n  waiting for both commands and the panel to finish (about a minute),\n')
+  stdout.write('  then printing what happened, timed from the start\n')
   const isDisarmReported = await waitForLogLine(mounted.log, 'Disarmed, accepted in', 150_000)
   const isQuiet = await waitForPanelToSettle(watcher, { quietMs: 15_000, timeoutMs: 90_000 })
   const isSettled = isDisarmReported && isQuiet
@@ -577,13 +581,10 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
     (sample) => sample.state !== PartitionState.DISARMED
       || sample.desiredState !== PartitionState.DISARMED,
   )
-  // Must land *after* the superseded outcome, not merely at some point. Every
-  // successful command requests a refresh, so counting them answered "did
-  // anything ever refresh", which is true whatever the branch under test does.
-  const supersededAt = mounted.log.entries
-    .find((entry) => entry.text.includes('superseded'))?.atMs
-  const refreshedAfterSupersede = supersededAt !== undefined
-    && mounted.refreshes.some((refresh) => refresh.atMs >= supersededAt)
+  // No refresh assertion. The superseded branch deliberately does not read any
+  // more: the held command is sent straight after and reads back itself. Timing
+  // a refresh against the superseded line only ever caught that command's own
+  // read, which is true no matter what the branch under test does.
 
   const errors = mounted.log.entries.filter((entry) => entry.level === 'error')
   const superseded = mounted.log.entries.filter((entry) => entry.text.includes('superseded'))
@@ -602,7 +603,6 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
   stdout.write(everLeftDisarmed
     ? '  <- expected: the arm completes before the held disarm is sent\n'
     : '  <- the arm never reached the panel\n')
-  stdout.write(`  re-read requested  ${refreshedAfterSupersede}\n`)
 
   // What the user asked for last was Disarmed, so the only acceptable ending
   // is a disarmed panel. This was computed, printed in capitals, and then left
@@ -612,7 +612,6 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
   const isReportedHonestly = errors.length === 0
     && superseded.length === 1
     && disarmConfirmed
-    && refreshedAfterSupersede
   const isPass = isPanelWhereAsked && isReportedHonestly
 
   let summary

@@ -563,18 +563,14 @@ class PartitionAccessory {
         if (attempt.token !== this.#commandSequence) {
             this.#log.debug(`${this.#name}: superseded ${label} request settled after ${toSeconds(elapsedMs)} `
                 + `(${outcome.isOk ? 'accepted' : 'failed'}); a newer request owns the tile`);
-            // Owning the tile is not the same as knowing the panel. A superseded
-            // command is still accepted by Alarm.com and still reports "accepted"
-            // after the command replacing it has finished: measured live at 17s for
-            // an arm whose replacing disarm had already confirmed at 13.6s.
-            //
-            // That panel resolved the race in the user's favour and stayed disarmed,
-            // so this is not known to have shown a wrong state to anyone. But the
-            // response says nothing about which command the panel honoured, the
-            // newer command's own read has already run by this point, and every
-            // other exit from this method reads back. Guessing from a hollow
-            // "accepted" is the part to avoid; one debounced read settles it.
-            this.#platform.requestDeviceRefresh(this.deviceId);
+            // Deliberately no read here, unlike every other exit from this method.
+            // A command can only be superseded by a newer target being held, and
+            // that held command is sent the moment this returns, so it reads back on
+            // its own. Reading now would be reading a panel that is still moving:
+            // measured live, an away arm returned accepted at 18.4s and the panel
+            // did not report armed until 20.0s. A reading taken in that gap can
+            // match the pending target by coincidence and retire it while the real
+            // command is still running.
             return;
         }
         if (!outcome.isOk) {
@@ -582,15 +578,10 @@ class PartitionAccessory {
             this.#log.error(`${this.#name}: could not reach ${label} — ${describeCommandFailure(outcome.error, elapsedMs)}`);
             // Read back even on failure. HomeKit may already have been told the
             // request was accepted, so the panel's real state is the only thing that
-            // corrects the tile before the next poll comes round.
-            //
-            // Skipped when a held command is about to go out, because that command
-            // will read back on its own and this read would land while the panel is
-            // still moving. A reading taken then can match the pending target by
-            // coincidence and retire it while the real command is still running.
-            if (this.#queued === null) {
-                this.#platform.requestDeviceRefresh(this.deviceId);
-            }
+            // corrects the tile before the next poll comes round. Nothing can be
+            // held at this point: holding one bumps the sequence, which would have
+            // sent this outcome down the superseded branch above.
+            this.#platform.requestDeviceRefresh(this.deviceId);
             return;
         }
         // "Accepted", not "confirmed by the panel". The response says Alarm.com
