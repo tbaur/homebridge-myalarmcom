@@ -39,6 +39,26 @@ class PartitionAccessory {
      * the tile is still its to speak for.
      */
     #commandSequence = 0;
+    /**
+     * The command currently out at Alarm.com, or null when nothing is running.
+     *
+     * Alarm.com applies commands in *completion* order, not request order, so two
+     * in flight at once means the panel lands on whichever finishes last. Measured
+     * live: an away arm and a disarm sent twelve seconds apart, the disarm
+     * returning accepted in 1.1s against a panel still inside its exit delay — and
+     * so still reporting disarmed — and the arm it was meant to replace landing
+     * afterwards. The panel finished armed while HomeKit had been told disarmed.
+     */
+    #inFlight = null;
+    /**
+     * The newest target requested while something was already running.
+     *
+     * One slot, latest wins. Nobody wants the third of four taps replayed; they
+     * want the last one. Holding it costs nothing visible because HomeKit has
+     * already been answered at the HAP deadline and the pending target keeps the
+     * tile on the requested state either way.
+     */
+    #queued = null;
     /** Reports a state at info only when it differs from the previous one. */
     #logChange;
     /** Whether an active alarm was already reported, so it is warned about once. */
@@ -409,6 +429,19 @@ class PartitionAccessory {
      * the real outcome is logged and reconciled whenever it arrives.
      */
     async #sendCommand(action, target, options) {
+        if (this.#inFlight !== null) {
+            // Held rather than sent. Sending both is what let the panel finish on the
+            // countermanded one; sending them in order makes the panel land on what
+            // was asked for last, which is the only ordering that matches intent.
+            this.#queued = { action, target, options };
+            // Claiming a token here retires the running command's ownership of the
+            // tile, so it cannot report "confirmed" for a state the user has since
+            // changed their mind about.
+            this.#commandSequence++;
+            this.#log.info(`${this.#name}: holding ${(0, mappers_1.toSecurityStateLabel)(target)} until the command already `
+                + 'running finishes, so the panel ends where you last asked');
+            return;
+        }
         // The token is claimed before anything is sent. Answering HomeKit at the
         // deadline frees it to accept another write while this command is still
         // running, so an outcome landing later has to be able to tell whether it is
@@ -424,18 +457,55 @@ class PartitionAccessory {
         // then disagreed with the gap between the two.
         this.#log.info(`${this.#name}: requesting ${(0, mappers_1.toSecurityStateLabel)(target)}`);
         const outcome = this.#startCommand(action, options, attempt);
+        this.#inFlight = outcome;
         const settled = await this.#awaitWithinHapWindow(outcome);
         if (settled === null) {
             this.#log.debug(`${this.#name}: ${action} still in flight at the HAP deadline, answering HomeKit without it`);
-            void outcome.then((late) => this.#recordOutcome(late, attempt));
+            // Both the command's rejection and the handler's are owned. The handler
+            // logs, refreshes and records, any of which can throw; an unhandled
+            // rejection from here has no caller left to catch it and takes the
+            // process down, which for a child bridge means every accessory on it.
+            void outcome
+                .then((late) => this.#settle(late, attempt))
+                .catch((error) => {
+                this.#log.debug(`${this.#name}: failed to record a late ${action}: ${String(error)}`);
+                this.#releaseAndDrain();
+            });
             return;
         }
-        this.#recordOutcome(settled, attempt);
+        this.#settle(settled, attempt);
         if (!settled.isOk) {
             throw new this.#platform.api.hap.HapStatusError(settled.error instanceof errors_1.TimeoutError
                 ? -70408 /* HAPStatus.OPERATION_TIMED_OUT */
                 : -70402 /* HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
         }
+    }
+    /**
+     * Report an outcome, then let whatever was waiting behind it go.
+     *
+     * Reporting is wrapped so that a throw on the way out — the logger and the
+     * refresh both call into Homebridge — cannot strand `#inFlight` and leave the
+     * partition unable to send anything for the rest of the process's life.
+     */
+    #settle(outcome, attempt) {
+        try {
+            this.#recordOutcome(outcome, attempt);
+        }
+        finally {
+            this.#releaseAndDrain();
+        }
+    }
+    /** Mark the slot free and send the newest target that was held for it. */
+    #releaseAndDrain() {
+        this.#inFlight = null;
+        const next = this.#queued;
+        if (next === null) {
+            return;
+        }
+        this.#queued = null;
+        // HomeKit stopped waiting for this long ago, so there is nobody to throw
+        // to; #recordOutcome has already put the outcome in the log either way.
+        void this.#sendCommand(next.action, next.target, next.options).catch(() => { });
     }
     /**
      * Start the command and give it a handler, once, here.
@@ -493,6 +563,14 @@ class PartitionAccessory {
         if (attempt.token !== this.#commandSequence) {
             this.#log.debug(`${this.#name}: superseded ${label} request settled after ${toSeconds(elapsedMs)} `
                 + `(${outcome.isOk ? 'accepted' : 'failed'}); a newer request owns the tile`);
+            // Deliberately no read here, unlike every other exit from this method.
+            // A command can only be superseded by a newer target being held, and
+            // that held command is sent the moment this returns, so it reads back on
+            // its own. Reading now would be reading a panel that is still moving:
+            // measured live, an away arm returned accepted at 18.4s and the panel
+            // did not report armed until 20.0s. A reading taken in that gap can
+            // match the pending target by coincidence and retire it while the real
+            // command is still running.
             return;
         }
         if (!outcome.isOk) {
@@ -500,11 +578,17 @@ class PartitionAccessory {
             this.#log.error(`${this.#name}: could not reach ${label} — ${describeCommandFailure(outcome.error, elapsedMs)}`);
             // Read back even on failure. HomeKit may already have been told the
             // request was accepted, so the panel's real state is the only thing that
-            // corrects the tile before the next poll comes round.
+            // corrects the tile before the next poll comes round. Nothing can be
+            // held at this point: holding one bumps the sequence, which would have
+            // sent this outcome down the superseded branch above.
             this.#platform.requestDeviceRefresh(this.deviceId);
             return;
         }
-        this.#log.info(`${this.#name}: ${label}, confirmed by the panel in ${toSeconds(elapsedMs)}`);
+        // "Accepted", not "confirmed by the panel". The response says Alarm.com
+        // took the request, and measured live it says that in 1.1s for a disarm
+        // the panel never carried out. The poll is what confirms; if the panel
+        // ends somewhere else, the change logger reports that state instead.
+        this.#log.info(`${this.#name}: ${label}, accepted in ${toSeconds(elapsedMs)}`);
         // Marked without logging so the confirming poll, which reports this same
         // state, does not repeat it. Priming by reporting emitted a second, nearly
         // identical line immediately after this one.

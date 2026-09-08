@@ -436,7 +436,7 @@ describe('PartitionAccessory', () => {
       // log three lines, two of them near-duplicates, past a green suite.
       expect(messagesAt(log, 'info')).toEqual([
         'Home: requesting Armed Away',
-        expect.stringMatching(/^Home: Armed Away, confirmed by the panel in [\d.]+s$/),
+        expect.stringMatching(/^Home: Armed Away, accepted in [\d.]+s$/),
       ])
     })
 
@@ -454,7 +454,7 @@ describe('PartitionAccessory', () => {
       const armedLines = messagesAt(log, 'info').filter((message) => message.includes('Armed Away'))
 
       expect(armedLines).toEqual(['Home: requesting Armed Away', expect.stringContaining(
-        'Home: Armed Away, confirmed by the panel in',
+        'Home: Armed Away, accepted in',
       )])
     })
 
@@ -571,7 +571,7 @@ describe('PartitionAccessory', () => {
       expect(bed.commandPartition).toHaveBeenCalledWith('1234567-127', 'disarm', expect.any(Object))
       expect(messagesAt(log, 'info')).toEqual([
         'Home: requesting Disarmed',
-        expect.stringMatching(/^Home: Disarmed, confirmed by the panel in [\d.]+s$/),
+        expect.stringMatching(/^Home: Disarmed, accepted in [\d.]+s$/),
       ])
     })
 
@@ -800,7 +800,7 @@ describe('PartitionAccessory', () => {
 
       expect(messagesAt(log, 'info')).toEqual([
         'Home: requesting Armed Away',
-        expect.stringMatching(/^Home: Armed Away, confirmed by the panel in [\d.]+s$/),
+        expect.stringMatching(/^Home: Armed Away, accepted in [\d.]+s$/),
       ])
       expect(bed.recordCommand).toHaveBeenCalledTimes(1)
       expect(bed.requestDeviceRefresh).toHaveBeenCalledWith('1234567-127')
@@ -870,6 +870,98 @@ describe('PartitionAccessory', () => {
         expect.stringContaining('Armed Away, confirmed'),
       )
       expect(bed.recordCommand).not.toHaveBeenCalled()
+    })
+
+    /**
+     * The incident this serialising exists for, as measured on a real panel.
+     *
+     * An away arm and a disarm went out twelve seconds apart. The disarm
+     * returned accepted in 1.1s, because the panel was still inside its exit
+     * delay and so still reporting disarmed, and the plugin reported it. The
+     * arm it was meant to replace came back accepted at 17.3s and the panel
+     * reached armed-away at 25.2s. Alarm.com applies commands in completion
+     * order, so the panel finished on the countermanded one while HomeKit had
+     * been told disarmed — the false-safety case.
+     *
+     * Holding the second command until the first finishes is what makes the
+     * panel land on the target the user asked for last.
+     */
+    it('holds a second command instead of racing it against the first', async () => {
+      deferCommand()
+      await armPastTheDeadline()
+      expect(bed.commandPartition).toHaveBeenCalledTimes(1)
+
+      const secondWrite = requestTarget(HomeKitSecurityTarget.DISARM)
+      await jest.advanceTimersByTimeAsync(PARTITION_COMMAND_DEADLINE_MS)
+      await secondWrite
+
+      // The disarm must not be out at Alarm.com yet. Sending it here is what
+      // let the panel finish on whichever command completed last.
+      expect(bed.commandPartition).toHaveBeenCalledTimes(1)
+      expect(messagesAt(log, 'info')).toContainEqual(
+        expect.stringContaining('holding Disarmed until the command already running finishes'),
+      )
+    })
+
+    it('sends the held command once the running one finishes', async () => {
+      const away = deferCommand()
+      await armPastTheDeadline()
+
+      const secondWrite = requestTarget(HomeKitSecurityTarget.DISARM)
+      await jest.advanceTimersByTimeAsync(PARTITION_COMMAND_DEADLINE_MS)
+      await secondWrite
+
+      bed.commandPartition.mockResolvedValue(livePartition)
+      away.resolve()
+      await jest.advanceTimersByTimeAsync(0)
+
+      expect(bed.commandPartition).toHaveBeenCalledTimes(2)
+      expect(bed.commandPartition).toHaveBeenLastCalledWith(
+        '1234567-127',
+        'disarm',
+        expect.anything(),
+      )
+    })
+
+    it('keeps only the newest of several held targets', async () => {
+      const away = deferCommand()
+      await armPastTheDeadline()
+
+      for (const target of [HomeKitSecurityTarget.DISARM, HomeKitSecurityTarget.STAY_ARM]) {
+        const write = requestTarget(target)
+        await jest.advanceTimersByTimeAsync(PARTITION_COMMAND_DEADLINE_MS)
+        await write
+      }
+
+      bed.commandPartition.mockResolvedValue(livePartition)
+      away.resolve()
+      await jest.advanceTimersByTimeAsync(0)
+
+      // Two, not three: nobody wants the tap they already changed their mind
+      // about replayed at their panel.
+      expect(bed.commandPartition).toHaveBeenCalledTimes(2)
+      expect(bed.commandPartition).toHaveBeenLastCalledWith(
+        '1234567-127',
+        'armStay',
+        expect.anything(),
+      )
+    })
+
+    it('still sends the held command when the running one fails', async () => {
+      const away = deferCommand()
+      await armPastTheDeadline()
+
+      const secondWrite = requestTarget(HomeKitSecurityTarget.DISARM)
+      await jest.advanceTimersByTimeAsync(PARTITION_COMMAND_DEADLINE_MS)
+      await secondWrite
+
+      bed.commandPartition.mockResolvedValue(livePartition)
+      away.reject(new Error('panel unreachable'))
+      await jest.advanceTimersByTimeAsync(0)
+
+      // A failed arm is the case where reaching the requested state matters
+      // most; the slot must not stay stuck behind it.
+      expect(bed.commandPartition).toHaveBeenCalledTimes(2)
     })
   })
 
