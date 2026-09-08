@@ -8,6 +8,7 @@ User-facing options and troubleshooting: [docs/README-DETAILED.md](../docs/READM
 | `probe-command.mjs` | Settles what the partition command endpoint accepts and how long it takes: the same command once per candidate `Content-Type`, an optional real arm/disarm cycle, and `--force-bypass` for arming over an open zone. Writes to a live panel; read the safety notes below. |
 | `verify.mjs` | Drives the **compiled plugin's client** in `dist/` against a live account and prints how each device maps to HomeKit. |
 | `probe-accessory.mjs` | Drives the **compiled `PartitionAccessory`** on real HAP services, so the HomeKit-facing decisions — refusing an arm, sending a bypass flag, silencing a superseded command, choosing valid target values — run against a live panel. Writes to a live panel; read the safety notes below. |
+| `rehearse-probe.mjs` | Exercises `probe-accessory.mjs`'s waiting helpers against a fake panel. No account, no hardware, about a minute. **Run it before any live run after changing the probe.** |
 | `watch-arming.mjs` | Streams events while polling partition and sensor state, printing every change with a diff. Built for watching a real arm/disarm driven from the mobile app. |
 | `diagnose-stream.mjs` | Connects to the event stream four ways (two clients × raw and encoded token) and reports which combinations work. Run it when the stream stops connecting. |
 | `lib/session.mjs` | Minimal Alarm.com web-session client (WebForms login, cookie jar, anti-CSRF header) used by the scripts that reimplement the protocol. |
@@ -41,6 +42,23 @@ These need a build. `npm run verify` builds first; running the file directly doe
 `client.commandPartition` — `verify.mjs` goes as far as hand-copying
 `buildCommandOptions`, so it can agree with a bug in the original. Use
 `probe-accessory.mjs` when the question is about behaviour the user would see.
+
+### Rehearse before you spend a live run
+
+```bash
+node scripts/rehearse-probe.mjs
+```
+
+Deciding when a scenario has finished is the part of this script that is worth
+testing, because getting it wrong costs an arm/disarm cycle on a real house to
+discover. Three runs were spent that way. The worst of them waited for the panel
+to be "disarmed" and so returned instantly, the panel being disarmed already: the
+run wrote its report twelve seconds in and exited while the arm was still on its
+way, leaving the panel to arm itself with nobody left to disarm it.
+
+The shape that catches this is a panel that starts and ends in the same state
+with a different one in between, which is exactly what `--supersede` does. Wait
+for the readings to go *quiet*, never for a value.
 
 ```bash
 node scripts/probe-accessory.mjs --night-display  # read-only: sends nothing

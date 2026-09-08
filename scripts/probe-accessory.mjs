@@ -39,6 +39,7 @@ import { createRequire } from 'node:module'
 import { stdout } from 'node:process'
 import { join } from 'node:path'
 import { mkdir, writeFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 import { Characteristic, HapStatusError, Perms, Service, uuid } from '@homebridge/hap-nodejs'
 
@@ -217,19 +218,70 @@ function targetCharacteristic(service) {
  * `desiredState` has already moved to the mode it is heading for.
  */
 /**
- * Wait until the panel is observed in `state`, or give up.
+ * Poll the partition until its state stops changing, and return that state.
  *
- * The panel moves several seconds after the command response, so "the command
- * came back" is not the moment to read a final state.
- *
- * @returns Whether the panel got there before the deadline.
+ * @returns The settled state, or the last one seen if it never went quiet.
  */
-async function waitForPanelState(watcher, state, timeoutMs) {
+async function readUntilSettled(client, partitionId, { quietMs = 12_000, timeoutMs = 90_000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  let state
+  let lastChangeAt = Date.now()
+
+  while (Date.now() < deadline) {
+    try {
+      const [resource] = await client.getPartitions([partitionId])
+      const current = resource?.attributes?.state
+      if (current !== state) {
+        state = current
+        lastChangeAt = Date.now()
+      } else if (Date.now() - lastChangeAt >= quietMs) {
+        return state
+      }
+    } catch {
+      // One failed read is not a reason to stop confirming a security panel.
+    }
+    await sleep(3_000)
+  }
+  return state
+}
+
+/**
+ * Wait for a line to appear in the accessory's own log.
+ *
+ * @returns Whether it appeared before the deadline.
+ */
+async function waitForLogLine(log, fragment, timeoutMs) {
   const deadline = Date.now() + timeoutMs
 
   while (Date.now() < deadline) {
-    const latest = watcher.samples[watcher.samples.length - 1]
-    if (latest?.state === state && latest.desiredState === state) {
+    if (log.entries.some((entry) => entry.text.includes(fragment))) {
+      return true
+    }
+    await sleep(1_000)
+  }
+  return false
+}
+
+/**
+ * Wait until the panel stops changing.
+ *
+ * Waiting for a *value* is the trap: the panel starts disarmed and ends
+ * disarmed, so "wait until disarmed" returned immediately and the run reported
+ * a final state twelve seconds in, while the arm was still on its way. Quiet is
+ * the only signal that distinguishes "finished" from "has not started".
+ *
+ * @returns Whether it went quiet before the deadline.
+ */
+async function waitForPanelToSettle(watcher, { quietMs = 15_000, timeoutMs = 150_000 }) {
+  const deadline = Date.now() + timeoutMs
+  let lastSeen = watcher.samples.length
+  let lastChangeAt = Date.now()
+
+  while (Date.now() < deadline) {
+    if (watcher.samples.length !== lastSeen) {
+      lastSeen = watcher.samples.length
+      lastChangeAt = Date.now()
+    } else if (Date.now() - lastChangeAt >= quietMs) {
       return true
     }
     await sleep(2_000)
@@ -506,11 +558,13 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
   await sleep(waitSeconds * 1_000 - (Date.now() - startedAt))
   await writeTarget(mounted.service, HomeKitSecurityTarget.DISARM)
 
-  // Waited for, not slept through. The held disarm goes out only once the arm
-  // finishes, so this scenario runs about fifty seconds now rather than twenty,
-  // and a fixed sleep stopped sampling twenty-six seconds before the disarm
-  // landed — then reported the panel's state at that moment as its final one.
-  const isSettled = await waitForPanelState(watcher, PartitionState.DISARMED, 120_000)
+  // Two waits, in order, because either alone reports too early. The held
+  // disarm is not even sent until the arm finishes, so the log line comes
+  // first; the panel then takes several more seconds to act on it.
+  stdout.write('\n  waiting for both commands and the panel to finish (about a minute)\n')
+  const isDisarmReported = await waitForLogLine(mounted.log, 'Disarmed, accepted in', 150_000)
+  const isQuiet = await waitForPanelToSettle(watcher, { quietMs: 15_000, timeoutMs: 90_000 })
+  const isSettled = isDisarmReported && isQuiet
   await watcher.stop()
 
   reportLog(mounted.log, startedAt)
@@ -722,15 +776,17 @@ async function main() {
           stdout.write(`  disarm attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)}\n`)
         }
 
-        const [after] = await client.getPartitions([partition.id])
-        const state = after?.attributes?.state
+        // Read until it stops moving, not once. A single read lands inside the
+        // several seconds the panel takes to act, so it returns the state from
+        // before the command — which is how a run once reported a disarmed
+        // panel and then armed itself after the script had exited.
+        const state = await readUntilSettled(client, partition.id)
         stdout.write(`  state after attempt ${attempt}: ${state}\n`)
 
         if (state === PartitionState.DISARMED) {
           disarmAfter.armed = false
           return
         }
-        await sleep(5_000)
       }
 
       stdout.write('\n  COULD NOT DISARM. The panel may still be armed.\n')
@@ -784,7 +840,16 @@ async function main() {
   stdout.write(`\n  Scrubbed report written to ${path}\n`)
 }
 
-main().catch((error) => {
-  stdout.write(`\nFailed: ${error instanceof Error ? error.message : String(error)}\n`)
-  process.exitCode = 1
-})
+// Exported so the waiting helpers can be rehearsed against a fake panel rather
+// than against a real one. Three live runs were spent on helpers that returned
+// too early, one of which left the panel arming after the script had exited.
+export { readUntilSettled, waitForLogLine, waitForPanelToSettle }
+
+// Only when run directly, so importing this file to test those helpers does not
+// try to sign in to Alarm.com.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    stdout.write(`\nFailed: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.exitCode = 1
+  })
+}
