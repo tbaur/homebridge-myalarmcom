@@ -19,6 +19,7 @@ import { stdout } from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
 
 import {
+  coordinateCleanup,
   readUntilSettled,
   waitForLogLine,
   waitForPanelToSettle,
@@ -101,6 +102,51 @@ async function rehearseLogWaiting() {
   check('waitForLogLine gives up when the line never comes', isMissing === false)
 }
 
+/**
+ * An interrupt, a crash and the normal exit all want the panel put back, and
+ * they can arrive together. Starting a second disarm, or exiting through the
+ * first, both end with an armed panel.
+ */
+async function rehearseCleanupCoordination() {
+  let slot = null
+  const readSlot = () => slot
+  const writeSlot = (value) => { slot = value }
+
+  let runCount = 0
+  let isNeeded = true
+  const runCleanup = async () => {
+    runCount++
+    await sleep(300)
+    isNeeded = false
+  }
+
+  const call = () => coordinateCleanup(readSlot, writeSlot, () => isNeeded, runCleanup)
+
+  // Three arrivals at once: the disarm must run once and all three must wait
+  // for it, so nobody calls process.exit while it is still going.
+  await Promise.all([call(), call(), call()])
+  check('concurrent callers join one cleanup', runCount === 1, `ran ${runCount}x`)
+
+  // Nothing armed, nothing to do.
+  await call()
+  check('cleanup is skipped when nothing is armed', runCount === 1)
+
+  // A later scenario arms again, so the slot must have been freed.
+  isNeeded = true
+  await call()
+  check('the slot frees for the next armed scenario', runCount === 2, `ran ${runCount}x`)
+
+  // A failing cleanup must not wedge the slot shut forever.
+  isNeeded = true
+  slot = null
+  let hasRejected = false
+  const failing = coordinateCleanup(readSlot, writeSlot, () => true, async () => {
+    throw new Error('disarm failed')
+  })
+  await failing.catch(() => { hasRejected = true })
+  check('a failed cleanup rejects and frees the slot', hasRejected && slot === null)
+}
+
 stdout.write('\nRehearsing the probe\'s waiting helpers against a fake panel.\n')
 stdout.write('Takes about a minute; no account and no panel involved.\n\n')
 
@@ -108,6 +154,7 @@ await rehearseSettlingThroughAnArm()
 await rehearseGivingUp()
 await rehearseWaitingForQuiet()
 await rehearseLogWaiting()
+await rehearseCleanupCoordination()
 
 stdout.write(failureCount === 0
   ? '\nAll rehearsals passed. A live run will measure to its end.\n'
