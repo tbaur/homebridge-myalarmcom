@@ -216,6 +216,27 @@ function targetCharacteristic(service) {
  * them. A panel counting down an exit delay still reports `state` 1 while
  * `desiredState` has already moved to the mode it is heading for.
  */
+/**
+ * Wait until the panel is observed in `state`, or give up.
+ *
+ * The panel moves several seconds after the command response, so "the command
+ * came back" is not the moment to read a final state.
+ *
+ * @returns Whether the panel got there before the deadline.
+ */
+async function waitForPanelState(watcher, state, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    const latest = watcher.samples[watcher.samples.length - 1]
+    if (latest?.state === state && latest.desiredState === state) {
+      return true
+    }
+    await sleep(2_000)
+  }
+  return false
+}
+
 function watchPartitionStates(client, partitionId, startedAt) {
   const samples = []
   let isStopped = false
@@ -485,8 +506,11 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
   await sleep(waitSeconds * 1_000 - (Date.now() - startedAt))
   await writeTarget(mounted.service, HomeKitSecurityTarget.DISARM)
 
-  // Both commands have to finish before the evidence is complete.
-  await sleep(40_000)
+  // Waited for, not slept through. The held disarm goes out only once the arm
+  // finishes, so this scenario runs about fifty seconds now rather than twenty,
+  // and a fixed sleep stopped sampling twenty-six seconds before the disarm
+  // landed — then reported the panel's state at that moment as its final one.
+  const isSettled = await waitForPanelState(watcher, PartitionState.DISARMED, 120_000)
   await watcher.stop()
 
   reportLog(mounted.log, startedAt)
@@ -510,24 +534,27 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
   const errors = mounted.log.entries.filter((entry) => entry.level === 'error')
   const superseded = mounted.log.entries.filter((entry) => entry.text.includes('superseded'))
   const disarmConfirmed = mounted.log.entries.some(
-    (entry) => entry.text.includes('Disarmed, confirmed by the panel'),
+    (entry) => entry.text.includes('Disarmed, accepted in'),
   )
 
   stdout.write(`\n  errors             ${errors.length}\n`)
   stdout.write(`  superseded notices ${superseded.length}\n`)
   stdout.write(`  disarm confirmed   ${disarmConfirmed}\n`)
-  stdout.write(`  panel state at end ${stateAfter}\n`)
-  stdout.write(`  ever left disarmed ${everLeftDisarmed}`)
+  stdout.write(`  panel state at end ${stateAfter}${isSettled ? '' : ' (never settled; timed out)'}\n`)
+  stdout.write(`  armed on the way   ${everLeftDisarmed}`)
+  // Expected now, and not a failure. Commands are sent one at a time, so the
+  // arm runs to completion before the disarm that countermands it goes out.
+  // The panel really does arm and then disarm; what matters is where it stops.
   stdout.write(everLeftDisarmed
-    ? '  <- the abandoned arm reached the panel; see the timeline\n'
-    : '  <- no reading caught it arming (a short exit delay could hide between samples)\n')
+    ? '  <- expected: the arm completes before the held disarm is sent\n'
+    : '  <- the arm never reached the panel\n')
   stdout.write(`  re-read requested  ${refreshedAfterSupersede}\n`)
 
   // What the user asked for last was Disarmed, so the only acceptable ending
   // is a disarmed panel. This was computed, printed in capitals, and then left
   // out of the verdict, which is how a run that ended with the panel ARMED
   // while HomeKit had been told "Disarmed, confirmed" was reported as PASS.
-  const isPanelWhereAsked = stateAfter === PartitionState.DISARMED && !everLeftDisarmed
+  const isPanelWhereAsked = isSettled && stateAfter === PartitionState.DISARMED
   const isReportedHonestly = errors.length === 0
     && superseded.length === 1
     && disarmConfirmed
@@ -536,10 +563,10 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
 
   let summary
   if (isPass) {
-    summary = 'the panel ended where it was last told to, and the tile was told the truth'
+    summary = 'the panel ended disarmed, where it was last told to be'
   } else if (!isPanelWhereAsked) {
-    summary = 'THE PANEL DID NOT END WHERE IT WAS LAST TOLD. Alarm.com applied the '
-      + 'abandoned arm after the disarm, and HomeKit was told Disarmed'
+    summary = 'THE PANEL DID NOT END DISARMED. Alarm.com applied the abandoned arm '
+      + 'after the disarm the user asked for last'
   } else {
     summary = 'the panel ended correctly but the reporting did not; see the counts above'
   }
