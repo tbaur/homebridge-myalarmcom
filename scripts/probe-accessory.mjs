@@ -74,7 +74,15 @@ Drive the compiled PartitionAccessory against a live Alarm.com account.
 asks for typed confirmation, and a disarm is always attempted on the way out.
 `)
 
-requireBuild()
+const isEntryPoint = process.argv[1] === fileURLToPath(import.meta.url)
+
+// Only when this is the thing being run. Importing the file to rehearse its
+// pure helpers must not demand a fresh build of compiled code those helpers
+// never touch — the staleness check exists to stop a *live* run testing
+// yesterday's plugin.
+if (isEntryPoint) {
+  requireBuild()
+}
 
 const require = createRequire(import.meta.url)
 const { SessionManager } = require(join(DIST_DIR, 'api/session-manager.js'))
@@ -217,6 +225,32 @@ function targetCharacteristic(service) {
  * them. A panel counting down an exit delay still reports `state` 1 while
  * `desiredState` has already moved to the mode it is heading for.
  */
+/**
+ * Run a cleanup at most once at a time, letting later callers join the one
+ * already running.
+ *
+ * Separated out because it is the part that decides whether a panel gets put
+ * back. Interrupts, crashes and the normal end of a run can all arrive while a
+ * disarm is already going; each must wait for it rather than start a second or
+ * exit through it. Once it settles the slot is freed, because every armed
+ * scenario needs its own.
+ *
+ * @returns The cleanup in progress, or a resolved promise when none is needed.
+ */
+function coordinateCleanup(readSlot, writeSlot, isNeeded, runCleanup) {
+  const running = readSlot()
+  if (running !== null && running !== undefined) {
+    return running
+  }
+  if (!isNeeded()) {
+    return Promise.resolve()
+  }
+
+  const started = runCleanup().finally(() => writeSlot(null))
+  writeSlot(started)
+  return started
+}
+
 /**
  * Poll the partition until its state stops changing, and return that state.
  *
@@ -752,7 +786,10 @@ async function main() {
   // Armed inside the commandPartition wrapper, so it is set the instant a
   // command really leaves rather than wherever someone remembered to set it.
   const disarmAfter = { armed: false }
-  let isCleaningUp = false
+  // Holds the disarm while it runs, so anything else wanting the panel put
+  // back joins it instead of starting a second one or, worse, exiting through
+  // it. Cleared when it settles, because each armed scenario needs its own.
+  let cleanupInFlight = null
 
   /**
    * Return the panel to disarmed, and confirm it rather than assume it.
@@ -762,46 +799,66 @@ async function main() {
    * interrupt handler, leaving a printed sentence as the only safeguard on a
    * live security panel.
    */
-  const putItBack = async () => {
-    if (!disarmAfter.armed || isCleaningUp) {return}
-    isCleaningUp = true
+  const runCleanup = async () => {
     stdout.write('\n── Putting it back ──\n')
 
-    try {
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          await client.commandPartition(partition.id, 'disarm', { nightArming: false, forceBypass: false })
-        } catch (error) {
-          stdout.write(`  disarm attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)}\n`)
-        }
-
-        // Read until it stops moving, not once. A single read lands inside the
-        // several seconds the panel takes to act, so it returns the state from
-        // before the command — which is how a run once reported a disarmed
-        // panel and then armed itself after the script had exited.
-        const state = await readUntilSettled(client, partition.id)
-        stdout.write(`  state after attempt ${attempt}: ${state}\n`)
-
-        if (state === PartitionState.DISARMED) {
-          disarmAfter.armed = false
-          return
-        }
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await client.commandPartition(partition.id, 'disarm', { nightArming: false, forceBypass: false })
+      } catch (error) {
+        stdout.write(`  disarm attempt ${attempt} failed: ${error instanceof Error ? error.message : String(error)}\n`)
       }
 
-      stdout.write('\n  COULD NOT DISARM. The panel may still be armed.\n')
-      stdout.write('  Disarm at the keypad or in the Alarm.com app now.\n')
-    } finally {
-      isCleaningUp = false
+      // Read until it stops moving, not once. A single read lands inside the
+      // several seconds the panel takes to act, so it returns the state from
+      // before the command — which is how a run once reported a disarmed
+      // panel and then armed itself after the script had exited.
+      const state = await readUntilSettled(client, partition.id)
+      stdout.write(`  state after attempt ${attempt}: ${state}\n`)
+
+      if (state === PartitionState.DISARMED) {
+        disarmAfter.armed = false
+        return
+      }
     }
+
+    stdout.write('\n  COULD NOT DISARM. THE PANEL MAY STILL BE ARMED.\n')
+    stdout.write('  Disarm at the keypad or in the Alarm.com app now.\n')
   }
 
-  // A second interrupt must not cut short the disarm the first one started.
-  process.on('SIGINT', () => {
-    if (isCleaningUp) {
-      stdout.write('\n  Still disarming — interrupt again only if you will disarm by hand.\n')
-      return
-    }
-    void putItBack().then(() => process.exit(130))
+  const putItBack = () => coordinateCleanup(
+    () => cleanupInFlight,
+    (promise) => { cleanupInFlight = promise },
+    () => disarmAfter.armed,
+    runCleanup,
+  )
+
+  /**
+   * Leave, but not before the panel is back where it was found.
+   *
+   * Every one of these paths ends the process, and the default behaviour for
+   * all of them is to end it at once. This script can be holding a panel in an
+   * armed state when they fire, so each has to go through the disarm first. A
+   * second interrupt joins the disarm already running rather than exiting
+   * through it.
+   */
+  const leaveSafely = (reason, code) => {
+    stdout.write(`\n  ${reason}\n`)
+    putItBack()
+      .catch(() => stdout.write('\n  CLEANUP FAILED. Check the panel.\n'))
+      .finally(() => process.exit(code))
+  }
+
+  process.on('SIGINT', () => leaveSafely('Interrupted; disarming before exit.', 130))
+  process.on('SIGTERM', () => leaveSafely('Terminated; disarming before exit.', 143))
+  // Node's default for either of these is to terminate immediately, which
+  // would skip the disarm entirely and leave the panel armed with nothing
+  // running to put it back.
+  process.on('unhandledRejection', (reason) => {
+    leaveSafely(`Unhandled rejection: ${reason instanceof Error ? reason.message : String(reason)}`, 1)
+  })
+  process.on('uncaughtException', (error) => {
+    leaveSafely(`Uncaught exception: ${error.message}`, 1)
   })
 
   try {
@@ -842,11 +899,11 @@ async function main() {
 // Exported so the waiting helpers can be rehearsed against a fake panel rather
 // than against a real one. Three live runs were spent on helpers that returned
 // too early, one of which left the panel arming after the script had exited.
-export { readUntilSettled, waitForLogLine, waitForPanelToSettle }
+export { coordinateCleanup, readUntilSettled, waitForLogLine, waitForPanelToSettle }
 
 // Only when run directly, so importing this file to test those helpers does not
 // try to sign in to Alarm.com.
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isEntryPoint) {
   main().catch((error) => {
     stdout.write(`\nFailed: ${error instanceof Error ? error.message : String(error)}\n`)
     process.exitCode = 1
