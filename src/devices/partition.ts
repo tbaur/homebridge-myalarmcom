@@ -653,12 +653,17 @@ export class PartitionAccessory {
         `${this.#name}: superseded ${label} request settled after ${toSeconds(elapsedMs)} `
         + `(${outcome.isOk ? 'accepted' : 'failed'}); a newer request owns the tile`,
       )
-      // Owning the tile is not the same as knowing the panel. Alarm.com accepts
-      // both commands and applies them in completion order, not request order:
-      // measured live, a disarm returned in 1.3s as a no-op and the away arm it
-      // replaced came back accepted 2.2s later. The newer command's own read
-      // had already happened by then, so without this the tile keeps showing
-      // the newer target while the panel holds the older one.
+      // Owning the tile is not the same as knowing the panel. A superseded
+      // command is still accepted by Alarm.com and still reports "accepted"
+      // after the command replacing it has finished: measured live at 17s for
+      // an arm whose replacing disarm had already confirmed at 13.6s.
+      //
+      // That panel resolved the race in the user's favour and stayed disarmed,
+      // so this is not known to have shown a wrong state to anyone. But the
+      // response says nothing about which command the panel honoured, the
+      // newer command's own read has already run by this point, and every
+      // other exit from this method reads back. Guessing from a hollow
+      // "accepted" is the part to avoid; one debounced read settles it.
       this.#platform.requestDeviceRefresh(this.deviceId)
       return
     }

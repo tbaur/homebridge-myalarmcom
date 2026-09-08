@@ -192,6 +192,64 @@ function targetCharacteristic(service) {
 }
 
 /**
+ * Sample the partition for as long as a scenario runs.
+ *
+ * One reading at the end is not enough, and reporting it as though it were is
+ * how this probe drew a wrong conclusion: a panel found disarmed afterwards
+ * may never have armed, may have armed and been reverted, or may have started
+ * an exit delay that the second command cancelled. Those are three different
+ * findings and the end state is identical in all three.
+ *
+ * `desiredState` is sampled alongside `state` because it is what separates
+ * them. A panel counting down an exit delay still reports `state` 1 while
+ * `desiredState` has already moved to the mode it is heading for.
+ */
+function watchPartitionStates(client, partitionId, startedAt) {
+  const samples = []
+  let isStopped = false
+
+  const loop = (async () => {
+    while (!isStopped) {
+      try {
+        const [resource] = await client.getPartitions([partitionId])
+        const attributes = resource?.attributes ?? {}
+        const signature = `${attributes.state}/${attributes.desiredState}/${attributes.hasActiveAlarm}`
+        if (samples[samples.length - 1]?.signature !== signature) {
+          samples.push({
+            atMs: Date.now() - startedAt,
+            signature,
+            state: attributes.state,
+            desiredState: attributes.desiredState,
+            hasActiveAlarm: attributes.hasActiveAlarm === true,
+          })
+        }
+      } catch {
+        // A read that fails mid-scenario is not worth abandoning the run for.
+      }
+      await sleep(3_000)
+    }
+  })()
+
+  return { samples, stop: async () => { isStopped = true; await loop } }
+}
+
+/** Print what the panel actually did, next to what the accessory said. */
+function reportStateTimeline(samples) {
+  stdout.write('\n  Panel, as Alarm.com reported it:\n')
+  if (samples.length === 0) {
+    stdout.write('    (no readings)\n')
+    return
+  }
+  for (const sample of samples) {
+    const seconds = (sample.atMs / 1000).toFixed(1)
+    stdout.write(
+      `    +${seconds.padStart(5)}s  state=${sample.state} desired=${sample.desiredState}`
+      + `  alarm=${sample.hasActiveAlarm}\n`,
+    )
+  }
+}
+
+/**
  * Perform a HomeKit write, recording how long it took and how it ended.
  *
  * A rejection is an outcome, not a failure of the probe: refusing a write is
@@ -347,13 +405,17 @@ async function probeBypass({ client, partition, openContacts, disarmAfter }) {
   mounted.accessory.update(partition)
 
   const startedAt = Date.now()
+  const watcher = watchPartitionStates(client, partition.id, startedAt)
   disarmAfter.armed = true
   const result = await writeTarget(mounted.service, HomeKitSecurityTarget.STAY_ARM)
 
   // The write returns at the HAP deadline while the command runs on. The
   // confirmation is the line worth reading, and it arrives around 20s in.
   await sleep(30_000)
+  await watcher.stop()
+
   reportLog(mounted.log, startedAt)
+  reportStateTimeline(watcher.samples)
 
   const sentBypass = mounted.sent[0]?.options?.forceBypass === true
   const errors = mounted.log.entries.filter((entry) => entry.level === 'error')
@@ -402,6 +464,7 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
   mounted.accessory.update(partition)
 
   const startedAt = Date.now()
+  const watcher = watchPartitionStates(client, partition.id, startedAt)
   disarmAfter.armed = true
   await writeTarget(mounted.service, HomeKitSecurityTarget.AWAY_ARM)
   await sleep(waitSeconds * 1_000 - (Date.now() - startedAt))
@@ -409,14 +472,18 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
 
   // Both commands have to finish before the evidence is complete.
   await sleep(40_000)
-  reportLog(mounted.log, startedAt)
+  await watcher.stop()
 
-  // Read before the safety disarm, or the answer is destroyed by the cleanup.
-  // The open question is whether the abandoned arm still reached the panel:
-  // Alarm.com accepts both commands, and a disarm returning in about a second
-  // is the signature of a no-op against a panel that had not armed yet.
-  const [settled] = await client.getPartitions([partition.id])
-  const stateAfter = settled?.attributes?.state
+  reportLog(mounted.log, startedAt)
+  // The panel's own account of the window, printed next to the accessory's, so
+  // the two can be compared rather than one being taken on trust.
+  reportStateTimeline(watcher.samples)
+
+  const stateAfter = watcher.samples[watcher.samples.length - 1]?.state
+  const everLeftDisarmed = watcher.samples.some(
+    (sample) => sample.state !== PartitionState.DISARMED
+      || sample.desiredState !== PartitionState.DISARMED,
+  )
   const refreshedAfterSupersede = mounted.refreshes.length > 0
 
   const errors = mounted.log.entries.filter((entry) => entry.level === 'error')
@@ -428,9 +495,11 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
   stdout.write(`\n  errors             ${errors.length}\n`)
   stdout.write(`  superseded notices ${superseded.length}\n`)
   stdout.write(`  disarm confirmed   ${disarmConfirmed}\n`)
-  stdout.write(`  panel state now    ${stateAfter} (${stateAfter === PartitionState.DISARMED
-    ? 'the abandoned arm did not take effect'
-    : 'THE ABANDONED ARM REACHED THE PANEL'})\n`)
+  stdout.write(`  panel state at end ${stateAfter}\n`)
+  stdout.write(`  ever left disarmed ${everLeftDisarmed}`)
+  stdout.write(everLeftDisarmed
+    ? '  <- the abandoned arm reached the panel; see the timeline\n'
+    : '  <- no reading caught it arming (a short exit delay could hide between samples)\n')
   stdout.write(`  re-read requested  ${refreshedAfterSupersede}\n`)
 
   return {
@@ -445,6 +514,8 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
       superseded,
       disarmConfirmed,
       stateAfter,
+      everLeftDisarmed,
+      samples: watcher.samples,
       refreshes: mounted.refreshes.length,
       log: mounted.log.entries,
     },
