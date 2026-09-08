@@ -411,6 +411,14 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
   await sleep(40_000)
   reportLog(mounted.log, startedAt)
 
+  // Read before the safety disarm, or the answer is destroyed by the cleanup.
+  // The open question is whether the abandoned arm still reached the panel:
+  // Alarm.com accepts both commands, and a disarm returning in about a second
+  // is the signature of a no-op against a panel that had not armed yet.
+  const [settled] = await client.getPartitions([partition.id])
+  const stateAfter = settled?.attributes?.state
+  const refreshedAfterSupersede = mounted.refreshes.length > 0
+
   const errors = mounted.log.entries.filter((entry) => entry.level === 'error')
   const superseded = mounted.log.entries.filter((entry) => entry.text.includes('superseded'))
   const disarmConfirmed = mounted.log.entries.some(
@@ -420,6 +428,10 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
   stdout.write(`\n  errors             ${errors.length}\n`)
   stdout.write(`  superseded notices ${superseded.length}\n`)
   stdout.write(`  disarm confirmed   ${disarmConfirmed}\n`)
+  stdout.write(`  panel state now    ${stateAfter} (${stateAfter === PartitionState.DISARMED
+    ? 'the abandoned arm did not take effect'
+    : 'THE ABANDONED ARM REACHED THE PANEL'})\n`)
+  stdout.write(`  re-read requested  ${refreshedAfterSupersede}\n`)
 
   return {
     isPass: verdict(
@@ -428,7 +440,14 @@ async function probeSupersede({ client, partition, openContacts, waitSeconds, di
         ? 'the abandoned arm kept quiet and the disarm was reported cleanly'
         : 'the superseded command interfered; see the counts above',
     ),
-    detail: { errors, superseded, disarmConfirmed, log: mounted.log.entries },
+    detail: {
+      errors,
+      superseded,
+      disarmConfirmed,
+      stateAfter,
+      refreshes: mounted.refreshes.length,
+      log: mounted.log.entries,
+    },
   }
 }
 

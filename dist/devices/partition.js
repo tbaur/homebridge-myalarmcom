@@ -493,6 +493,13 @@ class PartitionAccessory {
         if (attempt.token !== this.#commandSequence) {
             this.#log.debug(`${this.#name}: superseded ${label} request settled after ${toSeconds(elapsedMs)} `
                 + `(${outcome.isOk ? 'accepted' : 'failed'}); a newer request owns the tile`);
+            // Owning the tile is not the same as knowing the panel. Alarm.com accepts
+            // both commands and applies them in completion order, not request order:
+            // measured live, a disarm returned in 1.3s as a no-op and the away arm it
+            // replaced came back accepted 2.2s later. The newer command's own read
+            // had already happened by then, so without this the tile keeps showing
+            // the newer target while the panel holds the older one.
+            this.#platform.requestDeviceRefresh(this.deviceId);
             return;
         }
         if (!outcome.isOk) {

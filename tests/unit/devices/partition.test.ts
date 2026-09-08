@@ -871,6 +871,30 @@ describe('PartitionAccessory', () => {
       )
       expect(bed.recordCommand).not.toHaveBeenCalled()
     })
+
+    /**
+     * Alarm.com applies both commands, in completion order rather than request
+     * order. Measured live: a disarm returned in 1.3s as a no-op and the away
+     * arm it replaced came back accepted 2.2s later, so the panel acted on the
+     * abandoned request last. The newer command's own read had already run by
+     * then, which left the tile showing Disarmed over a panel that had just
+     * armed itself.
+     */
+    it('re-reads the panel after a superseded command settles', async () => {
+      const away = deferCommand()
+      await armPastTheDeadline()
+
+      deferCommand()
+      const secondWrite = requestTarget(HomeKitSecurityTarget.DISARM)
+      await jest.advanceTimersByTimeAsync(PARTITION_COMMAND_DEADLINE_MS)
+      await secondWrite
+
+      bed.requestDeviceRefresh.mockClear()
+      away.resolve()
+      await jest.advanceTimersByTimeAsync(0)
+
+      expect(bed.requestDeviceRefresh).toHaveBeenCalledWith('1234567-127')
+    })
   })
 
   describe('when the command cannot be sent', () => {
