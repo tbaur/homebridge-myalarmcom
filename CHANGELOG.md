@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.6...v2.1.0) (2026-09-13)
+
+
+### Features
+
+* add opt-out for HomeKit panel arming ([#86](https://github.com/tbaur/homebridge-myalarmcom/issues/86)) ([a3def13](https://github.com/tbaur/homebridge-myalarmcom/commit/a3def13545721803f1a1c2c6bb4c89cef4ac87be))
+
 ## [2.0.6](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.5...v2.0.6) (2026-09-08)
 
 
