@@ -27,6 +27,7 @@ const CONFIG: ResolvedConfig = {
   ignoredDeviceIds: new Set(),
   includeUnmonitoredSensors: false,
   allowSensorBypass: false,
+  allowHomeKitArming: true,
   debug: true,
   diagnosticsInterval: 60,
 }

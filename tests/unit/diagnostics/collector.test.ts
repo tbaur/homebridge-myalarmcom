@@ -20,6 +20,7 @@ const baseConfig = (): ResolvedConfig => ({
   ignoredDeviceIds: new Set(['1234567-99']),
   includeUnmonitoredSensors: false,
   allowSensorBypass: false,
+  allowHomeKitArming: true,
   debug: false,
   diagnosticsInterval: 60,
 })
@@ -169,6 +170,7 @@ describe('DiagnosticsCollector', () => {
       useEventStream: true,
       includeUnmonitoredSensors: false,
       allowSensorBypass: false,
+      allowHomeKitArming: true,
       ignoredDeviceIds: 1,
       debug: false,
     })

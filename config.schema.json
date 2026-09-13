@@ -78,6 +78,12 @@
         "default": false,
         "description": "Let an arming command bypass sensors that are open, rather than failing. The Alarm.com app asks you before bypassing; HomeKit gives the plugin no way to ask, so with this enabled an arm from Siri or the Home app can leave an open door unmonitored and say so only in the Homebridge log. Left off, the panel refuses to arm over an open sensor and the Home app tile returns to its previous state after about a minute."
       },
+      "allowHomeKitArming": {
+        "title": "Allow HomeKit to arm and disarm",
+        "type": "boolean",
+        "default": true,
+        "description": "On by default: the Home app tile is the keypad. HomeKit has no PIN prompt, so anyone who can control this accessory can change the panel. Turn this off to keep the tile as a display of the panel's state."
+      },
       "ignoredDeviceIds": {
         "title": "Ignored Device IDs",
         "type": "array",
@@ -126,6 +132,7 @@
       "expandable": true,
       "expanded": false,
       "items": [
+        "allowHomeKitArming",
         "allowSensorBypass"
       ]
     },

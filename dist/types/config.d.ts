@@ -46,6 +46,14 @@ export interface MyAlarmComPlatformConfig {
      * an open door unmonitored without confirmation.
      */
     allowSensorBypass?: unknown;
+    /**
+     * Let HomeKit arm and disarm the panel.
+     *
+     * On by default: HomeKit is the keypad. HomeKit has no PIN prompt, so anyone
+     * who can control this accessory can change the panel. Turn this off to keep
+     * the tile as a display of the panel's state.
+     */
+    allowHomeKitArming?: unknown;
     /** Emit verbose diagnostics. */
     debug?: unknown;
     /**
@@ -67,6 +75,7 @@ export interface ResolvedConfig {
     ignoredDeviceIds: ReadonlySet<string>;
     includeUnmonitoredSensors: boolean;
     allowSensorBypass: boolean;
+    allowHomeKitArming: boolean;
     debug: boolean;
     /** Seconds between diagnostics heartbeats; `0` means emission is off. */
     diagnosticsInterval: number;

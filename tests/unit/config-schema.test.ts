@@ -89,6 +89,7 @@ describe('config.schema.json', () => {
       'useEventStream',
       'includeUnmonitoredSensors',
       'allowSensorBypass',
+      'allowHomeKitArming',
       'debug',
     ] as const)('%s', (option) => {
       const { config } = validateConfig({

@@ -81,7 +81,11 @@ export interface PlatformTestBed {
 
 export function createPlatformTestBed(
   context: Record<string, unknown>,
-  options: { isSensorBypassAllowed?: boolean, openContacts?: string[] } = {},
+  options: {
+    isSensorBypassAllowed?: boolean
+    isHomeKitArmingAllowed?: boolean
+    openContacts?: string[]
+  } = {},
 ): PlatformTestBed {
   const commandPartition = jest.fn()
   const requestDeviceRefresh = jest.fn()
@@ -98,6 +102,7 @@ export function createPlatformTestBed(
     requestDeviceRefresh,
     recordCommand,
     isSensorBypassAllowed: options.isSensorBypassAllowed ?? false,
+    isHomeKitArmingAllowed: options.isHomeKitArmingAllowed ?? true,
     listOpenContacts: () => options.openContacts ?? [],
   } as unknown as MyAlarmComPlatform
 

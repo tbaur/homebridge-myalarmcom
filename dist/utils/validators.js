@@ -237,6 +237,7 @@ function validateConfig(raw) {
         ignoredDeviceIds: parseIgnoredIds(raw.ignoredDeviceIds, warnings),
         includeUnmonitoredSensors: parseBoolean(raw.includeUnmonitoredSensors, false),
         allowSensorBypass: parseBoolean(raw.allowSensorBypass, false),
+        allowHomeKitArming: parseBoolean(raw.allowHomeKitArming, true),
         debug: parseBoolean(raw.debug, false),
         diagnosticsInterval: parseDiagnosticsInterval(raw.diagnosticsInterval, warnings),
     };

@@ -12,10 +12,10 @@ Expose your [Alarm.com](https://www.alarm.com) security panel and sensors in App
 ## Features
 
 ### Device Support
-- **Security System:** panel arm / disarm, including a true triggered-alarm state
+- **Security System:** panel arm / disarm when `allowHomeKitArming` is on (the default), including a true triggered-alarm state
 - **Contact, motion, and smoke sensors**
 - **Night arming** offered when the panel advertises `ArmedNight`, and still displayed when a panel is night-armed at its keypad
-- **Read-only accounts:** the panel is exposed as read-only when the login cannot change arming state
+- **Display-only tile:** turn off `allowHomeKitArming`, or use a login that cannot change arming state
 
 ### Reliability
 - **Push events over WebSocket** (on by default), with polling as a safety net
@@ -77,7 +77,7 @@ Your panel and sensors appear in the Home app.
 
 | Alarm.com device | HomeKit accessory | Notes |
 | --- | --- | --- |
-| Partition (panel) | Security System | Arm/disarm, plus a triggered-alarm state |
+| Partition (panel) | Security System | Arm/disarm when `allowHomeKitArming` is on, plus a triggered-alarm state |
 | Contact sensor | Contact Sensor | Doors, windows, garage door position |
 | Motion sensor | Motion Sensor | |
 | Smoke detector | Smoke Sensor | |
@@ -97,6 +97,7 @@ Lights, locks, thermostats, garage door *openers*, cameras, and doorbells are no
 | `pollIntervalSeconds` | `60` | Full state refresh. Clamped to `60`–`86400`. |
 | `authIntervalMinutes` | `10` | Session reuse before signing in again. Clamped to `10`–`1440`. |
 | `useEventStream` | `true` | Subscribe to push events. Polling continues regardless. |
+| `allowHomeKitArming` | `true` | Let the Home app arm and disarm. HomeKit has no PIN prompt. Turn off for a display-only tile. |
 | `allowSensorBypass` | `false` | Let arming bypass open sensors instead of failing. Arms the house with that zone unmonitored, without asking. |
 | `includeUnmonitoredSensors` | `false` | Expose sensors Alarm.com reports as unmonitored (marked inactive). |
 | `ignoredDeviceIds` | `[]` | Device IDs to leave out of HomeKit. |
@@ -110,7 +111,7 @@ Clamp rules, the unmonitored-sensor warning, and the `debug` flag are explained 
 1. **`TwoFactorRequiredError`:** cookie missing, expired, or for a different account. Capture a fresh one ([docs/AUTH.md](docs/AUTH.md)) and restart.
 2. **Rejected username or password:** fix credentials before restarting repeatedly. Alarm.com locks accounts after failed sign-ins.
 3. **Sensor missing:** unsupported type, monitoring disabled, or listed in `ignoredDeviceIds`.
-4. **Panel is read-only:** the login cannot change arming state.
+4. **Panel is read-only:** the login cannot change arming state, or `allowHomeKitArming` is off.
 5. **Circuit breaker OPEN:** repeated failures, so requests are refused locally for 30 seconds at a time.
 
 The [full troubleshooting list](docs/README-DETAILED.md#troubleshooting) covers thirteen cases, how to collect a `Health:` log, and how to read that line.

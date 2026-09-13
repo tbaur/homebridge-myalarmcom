@@ -59,6 +59,7 @@ This plugin implements:
 ## Credential Handling
 
 - The Alarm.com username, password, and `twoFactorAuthenticationId` cookie are read from the Homebridge platform config. Homebridge stores that config in plain text on the host, so **host hardening is the primary mitigation** for all three.
+- HomeKit can arm and disarm without an extra PIN. That is the product: the Home app tile is the keypad. `allowHomeKitArming` (default on) turns the tile display-only when you do not want that. The Alarm.com login's own arm/disarm permission still applies either way.
 - The plugin holds session cookies in memory only; they are not persisted, and nothing is written to disk.
 - No credentials or cookies are written to logs, at any level — not values, not truncations, not fingerprints. Debug may list cookie *names* after login; nothing that could identify a secret's contents.
 - **Device names and Alarm.com identifiers are logged.** They are what makes a log diagnosable, so this is deliberate — but it means a log describes your home: `Master Bedroom Window: Open` is a labelled floor plan with live occupancy. Review any log before sharing it, and note that `debug: true` adds considerably more of it.
@@ -95,7 +96,7 @@ This is an availability risk rather than a confidentiality one, but it is the fa
 
 1. Treat the `twoFactorAuthenticationId` cookie and your Alarm.com password as equivalent secrets
 2. Restrict filesystem permissions on the Homebridge `config.json` and on any backups of it
-3. If you only want HomeKit to observe system state, use an Alarm.com login that lacks permission to change arming state; the plugin warns that the account used cannot change arming state and exposes the panel as read-only rather than attempting the command
+3. If you only want HomeKit to observe system state, turn off `allowHomeKitArming`. That is the simpler path. A login that lacks permission to change arming state is still defense in depth: the plugin warns and exposes the panel as read-only rather than attempting the command
 4. Keep Homebridge and this plugin updated
 5. Run Homebridge with minimal system privileges
 6. Use Homebridge's secure remote access features rather than exposing it directly to the internet

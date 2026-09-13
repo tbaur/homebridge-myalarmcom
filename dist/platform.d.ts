@@ -31,6 +31,14 @@ export declare class MyAlarmComPlatform implements DynamicPlatformPlugin {
      */
     get isSensorBypassAllowed(): boolean;
     /**
+     * Whether HomeKit may arm or disarm the panel.
+     *
+     * On by default. Exposed as a single flag so an accessory cannot grow a
+     * dependency on unrelated settings. HomeKit has no PIN prompt; turning this
+     * off leaves the tile as a display of the panel's state.
+     */
+    get isHomeKitArmingAllowed(): boolean;
+    /**
      * Names of contacts standing open, which a panel will not arm over.
      *
      * Empty when the account has more than one partition. Alarm.com reports

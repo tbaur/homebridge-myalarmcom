@@ -240,6 +240,7 @@ describe('defaults', () => {
       useEventStream: true,
       includeUnmonitoredSensors: false,
       allowSensorBypass: false,
+      allowHomeKitArming: true,
       debug: false,
       diagnosticsInterval: 0,
     })
@@ -262,6 +263,7 @@ describe('defaults', () => {
       useEventStream: false,
       includeUnmonitoredSensors: true,
       allowSensorBypass: true,
+      allowHomeKitArming: false,
       debug: true,
     })
 
@@ -269,6 +271,7 @@ describe('defaults', () => {
       useEventStream: false,
       includeUnmonitoredSensors: true,
       allowSensorBypass: true,
+      allowHomeKitArming: false,
       debug: true,
     })
   })
