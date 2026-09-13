@@ -293,7 +293,7 @@ export class PartitionAccessory {
     const { Perms } = this.#platform.api.hap
     const readOnly = [Perms.PAIRED_READ, Perms.NOTIFY]
 
-    // An account without permission to arm gets a read-only tile rather than
+    // A partition HomeKit may not command gets a read-only tile rather than
     // controls that always fail. The test matches the one guarding the write
     // deliberately: anything other than a literal `true` refuses the command,
     // so anything other than a literal `true` must also present as read-only.
@@ -310,14 +310,16 @@ export class PartitionAccessory {
   }
 
   /**
-   * Whether this account may arm or disarm the panel.
+   * Whether HomeKit may arm or disarm this partition.
    *
-   * Fails closed. Responses are parsed without runtime validation, so an
-   * absent, null or renamed field arrives as `undefined`, and the safe answer
-   * to "may this account disarm a physical alarm?" when nobody knows is no.
+   * Both gates must pass: `allowHomeKitArming` (the install opted into a keypad)
+   * and a literal `hasPermissionToChangeState: true` from Alarm.com. Fails
+   * closed. Responses are parsed without runtime validation, so an absent, null
+   * or renamed field arrives as `undefined`, and the safe answer to "may this
+   * account disarm a physical alarm?" when nobody knows is no.
    */
   #canChangeState(attributes: PartitionAttributes): boolean {
-    return attributes.hasPermissionToChangeState === true
+    return this.#platform.isHomeKitArmingAllowed && attributes.hasPermissionToChangeState === true
   }
 
   /**
@@ -347,9 +349,15 @@ export class PartitionAccessory {
     this.#applyValidTargetStates(attributes)
 
     if (isFirstApply && !canChangeState) {
-      this.#log.warn(
-        `The Alarm.com account used cannot change the arming state of "${this.#name}".`,
-      )
+      if (!this.#platform.isHomeKitArmingAllowed) {
+        this.#log.info(
+          `HomeKit arming is turned off for "${this.#name}"; the tile is display-only.`,
+        )
+      } else {
+        this.#log.warn(
+          `The Alarm.com account used cannot change the arming state of "${this.#name}".`,
+        )
+      }
     }
   }
 
@@ -538,8 +546,9 @@ export class PartitionAccessory {
   }
 
   /**
-   * Refuse the command unless this account is known to be allowed to arm.
+   * Refuse the command unless HomeKit is allowed to arm this partition.
    *
+   * Both `allowHomeKitArming` and a known Alarm.com arm permission must pass.
    * Fails closed. Responses are parsed without runtime validation, so an
    * absent, null or renamed field arrives as `undefined` here. Testing for
    * literal `false` would let a read-only account silently regain the ability
@@ -551,7 +560,11 @@ export class PartitionAccessory {
     const attributes = this.#attributes
 
     if (attributes === null || !this.#canChangeState(attributes)) {
-      this.#log.error(new ReadOnlyPartitionError(this.#name).message)
+      if (attributes !== null && !this.#platform.isHomeKitArmingAllowed) {
+        this.#log.error(`HomeKit arming is turned off; "${this.#name}" is display-only.`)
+      } else {
+        this.#log.error(new ReadOnlyPartitionError(this.#name).message)
+      }
       throw new this.#platform.api.hap.HapStatusError(HAPStatus.INSUFFICIENT_PRIVILEGES)
     }
 

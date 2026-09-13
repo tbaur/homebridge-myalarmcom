@@ -45,6 +45,7 @@ const DISABLED_CONFIG = {
     ignoredDeviceIds: new Set(),
     includeUnmonitoredSensors: false,
     allowSensorBypass: false,
+    allowHomeKitArming: true,
     debug: false,
     diagnosticsInterval: 0,
 };
@@ -182,6 +183,16 @@ class MyAlarmComPlatform {
      */
     get isSensorBypassAllowed() {
         return this.#config.allowSensorBypass;
+    }
+    /**
+     * Whether HomeKit may arm or disarm the panel.
+     *
+     * On by default. Exposed as a single flag so an accessory cannot grow a
+     * dependency on unrelated settings. HomeKit has no PIN prompt; turning this
+     * off leaves the tile as a display of the panel's state.
+     */
+    get isHomeKitArmingAllowed() {
+        return this.#config.allowHomeKitArming;
     }
     /**
      * Names of contacts standing open, which a panel will not arm over.

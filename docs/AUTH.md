@@ -24,7 +24,7 @@ The plugin refuses to start — with an error naming the field, and without affe
 
 ## Treat it as a password
 
-Anyone who has the cookie can sign in as you without your password and without a two-factor prompt. Homebridge stores it in plaintext in `config.json` next to your username and password.
+Anyone who has the cookie can sign in as you without your password and without a two-factor prompt. Homebridge stores it in plaintext in `config.json` next to your username and password. This plugin does not copy it to another file: [SECURITY.md](../SECURITY.md) promises the plugin never writes to disk, and the cookie has to be entered somewhere the settings page can persist.
 
 - Do not paste it into issues, logs, screenshots, or chat.
 - Prefer a dedicated Alarm.com login for Homebridge, with only the permissions you need.

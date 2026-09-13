@@ -462,6 +462,7 @@ function redactConfig(config: ResolvedConfig): Record<string, unknown> {
     useEventStream: config.useEventStream,
     includeUnmonitoredSensors: config.includeUnmonitoredSensors,
     allowSensorBypass: config.allowSensorBypass,
+    allowHomeKitArming: config.allowHomeKitArming,
     ignoredDeviceIds: config.ignoredDeviceIds.size,
     debug: config.debug,
   }

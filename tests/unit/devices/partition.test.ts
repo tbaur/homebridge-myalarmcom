@@ -39,7 +39,11 @@ describe('PartitionAccessory', () => {
   let accessory: PartitionAccessory
 
   function mount(
-    options: { isSensorBypassAllowed?: boolean, openContacts?: string[] } = {},
+    options: {
+      isSensorBypassAllowed?: boolean
+      isHomeKitArmingAllowed?: boolean
+      openContacts?: string[]
+    } = {},
   ): PartitionAccessory {
     const context: PartitionAccessoryContext = {
       deviceId: livePartition.id,
@@ -321,6 +325,17 @@ describe('PartitionAccessory', () => {
       expect(log.warn).not.toHaveBeenCalled()
     })
 
+    it('makes a controllable panel read-only when HomeKit arming is turned off', () => {
+      mount({ isHomeKitArmingAllowed: false })
+      accessory.update(controllable)
+
+      expect(targetCharacteristic().props.perms).toEqual(['pr', 'ev'])
+      expect(messagesAt(log, 'info')).toEqual([
+        'HomeKit arming is turned off for "Home"; the tile is display-only.',
+      ])
+      expect(log.warn).not.toHaveBeenCalled()
+    })
+
     /**
      * The tile must agree with the guard on the write path. That guard refuses
      * anything but a literal `true`, so presenting controls for anything less
@@ -424,6 +439,18 @@ describe('PartitionAccessory', () => {
   describe('arming from HomeKit', () => {
     beforeEach(() => {
       accessory.update(controllable)
+    })
+
+    it('refuses a HomeKit write when HomeKit arming is turned off', async () => {
+      mount({ isHomeKitArmingAllowed: false })
+      accessory.update(controllable)
+
+      await expect(requestTarget(HomeKitSecurityTarget.AWAY_ARM))
+        .rejects.toBe(HAPStatus.INSUFFICIENT_PRIVILEGES)
+      expect(bed.commandPartition).not.toHaveBeenCalled()
+      expect(messagesAt(log, 'error')).toEqual([
+        'HomeKit arming is turned off; "Home" is display-only.',
+      ])
     })
 
     it('sends the matching command verb', async () => {

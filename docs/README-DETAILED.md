@@ -26,6 +26,7 @@ Install and a short options table live in the [README](../README.md). This page 
       "pollIntervalSeconds": 60,
       "authIntervalMinutes": 10,
       "useEventStream": true,
+      "allowHomeKitArming": true,
       "allowSensorBypass": false,
       "includeUnmonitoredSensors": false,
       "ignoredDeviceIds": [],
@@ -49,6 +50,7 @@ Invalid configuration never takes the bridge down. A missing credential, a six-d
 | `pollIntervalSeconds` | `60` | Full state refresh interval. Clamped to `60`–`86400` (24h). |
 | `authIntervalMinutes` | `10` | Session reuse before signing in again. Clamped to `10`–`1440` (24h). |
 | `useEventStream` | `true` | Subscribe to push events. Polling continues regardless. |
+| `allowHomeKitArming` | `true` | Let the Home app arm and disarm the panel. HomeKit has no PIN prompt, so anyone who can control this accessory can change the panel. Turn this off to keep the tile as a display of the panel's state. Existing installs keep the current behaviour: the field defaults to on. |
 | `allowSensorBypass` | `false` | Let an arming command bypass sensors that are open, rather than failing. The Alarm.com app asks before bypassing and HomeKit gives the plugin no way to ask, so enabling this lets an arm from Siri or the Home app leave an open door unmonitored, reported only in the Homebridge log. Left off, the panel refuses and the tile returns to its previous state after about a minute. |
 | `includeUnmonitoredSensors` | `false` | Expose sensors Alarm.com reports as unmonitored. They appear marked inactive in the Home app, because an unsupervised sensor's state cannot be trusted. |
 | `ignoredDeviceIds` | `[]` | Device IDs to leave out of HomeKit. Each ID is logged when its accessory is added, and is also the accessory's Serial Number in the Home app. |
@@ -59,14 +61,14 @@ Invalid configuration never takes the bridge down. A missing credential, a six-d
 
 | Alarm.com device | HomeKit accessory | Notes |
 | --- | --- | --- |
-| Partition (panel) | Security System | Arm/disarm, plus a true triggered-alarm state. Night arming is offered as a control only when the panel advertises `ArmedNight`, but is always displayed when the panel reports it, since it can be set at the keypad. |
+| Partition (panel) | Security System | Arm/disarm when `allowHomeKitArming` is on (the default), plus a true triggered-alarm state. Turn that option off for a display-only tile. Night arming is offered as a control only when the panel advertises `ArmedNight`, but is always displayed when the panel reports it, since it can be set at the keypad. |
 | Contact sensor | Contact Sensor | Doors, windows, garage door position |
 | Motion sensor | Motion Sensor | |
 | Smoke detector | Smoke Sensor | |
 
 Lights, locks, thermostats, garage door *openers*, cameras, and doorbells are not supported. They were left out on purpose, not written blind against untested hardware.
 
-If the Alarm.com account cannot change arming state, the plugin warns and exposes the panel as read-only.
+If the Alarm.com account cannot change arming state, or `allowHomeKitArming` is off, the plugin exposes the panel as read-only.
 
 An unrecognised panel state keeps the previous tile and raises a fault rather than showing a safe-looking "disarmed". An unrecognised sensor state is cross-checked against Alarm.com's normalised open/closed reading and the ambiguity is logged.
 
@@ -90,7 +92,7 @@ Architecture: [DEVELOPMENT.md](../DEVELOPMENT.md). Wire-level notes: [PROTOCOL.m
 2. **Rejected username or password.** Fix credentials before restarting repeatedly. Alarm.com locks accounts after failed sign-ins. The plugin will not retry a rejected credential on its own.
 3. **Login form parse error.** Alarm.com changed its sign-in page. Please open an issue.
 4. **Sensor missing.** Check discovery logs: unsupported type, monitoring disabled (unless `includeUnmonitoredSensors`), or listed in `ignoredDeviceIds`.
-5. **Panel is read-only / cannot arm.** The Alarm.com account used lacks permission to change arming state. Use a login that can arm/disarm, or keep it read-only for monitoring.
+5. **Panel is read-only / cannot arm.** The Alarm.com account used lacks permission to change arming state, or `allowHomeKitArming` is off. Use a login that can arm/disarm, leave the tile display-only, or turn `allowHomeKitArming` back on.
 6. **`Alarm.com has failed N times in a row`.** A sustained outage. Nothing to do but wait. Polling keeps retrying and a matching "reachable again" line follows. Alarm.com is being left alone on purpose in the meantime.
 7. **`Circuit breaker CLOSED -> OPEN`.** Repeated failures, so requests are being refused locally for 30 seconds at a time. This protects your account from looking like a scraper, which Alarm.com locks accounts for.
 8. **`Continuing with polling only`.** The push event stream gave up after repeated failures. State still updates, just on the poll interval instead of within a second or two. The stream is retried every 15 minutes.

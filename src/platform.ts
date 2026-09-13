@@ -77,6 +77,7 @@ const DISABLED_CONFIG: ResolvedConfig = {
   ignoredDeviceIds: new Set(),
   includeUnmonitoredSensors: false,
   allowSensorBypass: false,
+  allowHomeKitArming: true,
   debug: false,
   diagnosticsInterval: 0,
 }
@@ -231,6 +232,17 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
    */
   get isSensorBypassAllowed(): boolean {
     return this.#config.allowSensorBypass
+  }
+
+  /**
+   * Whether HomeKit may arm or disarm the panel.
+   *
+   * On by default. Exposed as a single flag so an accessory cannot grow a
+   * dependency on unrelated settings. HomeKit has no PIN prompt; turning this
+   * off leaves the tile as a display of the panel's state.
+   */
+  get isHomeKitArmingAllowed(): boolean {
+    return this.#config.allowHomeKitArming
   }
 
   /**
