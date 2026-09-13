@@ -41,7 +41,7 @@
     "ws": "^8.19.0"
   },
   "overrides": {
-    "js-yaml": "3.15.1"
+    "js-yaml": "^3.15.2"
   },
   "devDependencies": {
     "@homebridge/hap-nodejs": "^2.1.9",
