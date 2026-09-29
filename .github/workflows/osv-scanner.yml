@@ -33,12 +33,9 @@ jobs:
       security-events: write
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
     with:
-      # `--skip-git` because the scan is of declared dependencies, not of commit
-      # history; without it the scanner also reports advisories against the
-      # repository's own git submodule metadata, which there is none of here.
+      # v2.6.0 dropped --skip-git. Git roots are skipped unless --include-git-root is set, so the scan stays on declared dependencies rather than commit history.
       scan-args: |-
         -r
-        --skip-git
         ./
 
   scan-pr:
@@ -51,5 +48,4 @@ jobs:
     with:
       scan-args: |-
         -r
-        --skip-git
         ./
