@@ -6,25 +6,29 @@
 # re-pointed by its upstream, and this workflow holds `security-events: write`.
 #
 # Runs on pull requests and merge queues (fail on newly introduced advisories),
-# and weekly so an advisory published against an unchanged dependency is still
-# caught.
+# on every push to main, and weekly. The main scan uploads SARIF to the default
+# branch, so fixed alerts close on merge instead of waiting for the next weekly run.
+# The weekly run still catches an advisory published against an unchanged dependency.
 
 name: OSV-Scanner
 
 on:
+  push:
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
   merge_group:
     branches: [ "main" ]
   schedule:
     - cron: '22 4 * * 1'
+  workflow_dispatch:
 
 # Least privilege at the workflow level; each job opts into what it needs.
 permissions: {}
 
 jobs:
   scan-scheduled:
-    if: ${{ github.event_name == 'schedule' }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: read
       # Uploading a SARIF file to the security tab needs both of these.
