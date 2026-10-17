@@ -79,8 +79,8 @@ describe('re-enumerating the account while running', () => {
   /** Per-id attribute overrides applied by the persistent sensor interceptor. */
   let sensorAttributeOverrides: Record<string, Record<string, unknown>>
 
-  function requestedIds(uri: string): string[] {
-    return new URL(uri, BASE_URL).searchParams.getAll('ids[]')
+  function requestedIds(request: Request): string[] {
+    return new URL(request.url).searchParams.getAll('ids[]')
   }
 
   function interceptSignInAndDevices(): void {
@@ -95,16 +95,16 @@ describe('re-enumerating the account while running', () => {
       .persist()
       .get('/web/api/devices/partitions')
       .query(true)
-      .reply(200, (uri: string) => ({
-        data: partitionsFixture.data.filter((p) => requestedIds(uri).includes(p.id)),
+      .reply(200, (request: Request) => ({
+        data: partitionsFixture.data.filter((p) => requestedIds(request).includes(p.id)),
       }))
 
     nock(BASE_URL)
       .persist()
       .get('/web/api/devices/sensors')
       .query(true)
-      .reply(200, (uri: string) => {
-        const ids = requestedIds(uri)
+      .reply(200, (request: Request) => {
+        const ids = requestedIds(request)
         sensorReads.push(ids)
         return {
           data: sensorsFixture.data

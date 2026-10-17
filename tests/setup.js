@@ -21,6 +21,9 @@ afterEach(() => {
 })
 
 afterAll(() => {
+  nock.cleanAll()
   nock.enableNetConnect()
-  nock.restore()
+  // nock 15's restore() disposes the process-wide fetch interceptor.
+  // Jest runs every file in one worker, and nothing can install that
+  // interceptor again, so a later file would talk to the real network.
 })

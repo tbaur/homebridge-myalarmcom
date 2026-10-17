@@ -117,8 +117,8 @@ describe('staying up to date after discovery', () => {
   let log: RecordingLogging
   let sensorReads: string[][]
 
-  function requestedIds(uri: string): string[] {
-    return new URL(uri, BASE_URL).searchParams.getAll('ids[]')
+  function requestedIds(request: Request): string[] {
+    return new URL(request.url).searchParams.getAll('ids[]')
   }
 
   function interceptEverything(): void {
@@ -137,16 +137,16 @@ describe('staying up to date after discovery', () => {
       .persist()
       .get('/web/api/devices/partitions')
       .query(true)
-      .reply(200, (uri: string) => ({
-        data: partitionsFixture.data.filter((partition) => requestedIds(uri).includes(partition.id)),
+      .reply(200, (request: Request) => ({
+        data: partitionsFixture.data.filter((partition) => requestedIds(request).includes(partition.id)),
       }))
 
     nock(BASE_URL)
       .persist()
       .get('/web/api/devices/sensors')
       .query(true)
-      .reply(200, (uri: string) => {
-        const ids = requestedIds(uri)
+      .reply(200, (request: Request) => {
+        const ids = requestedIds(request)
         sensorReads.push(ids)
         return { data: sensorsFixture.data.filter((sensor) => ids.includes(sensor.id)) }
       })
