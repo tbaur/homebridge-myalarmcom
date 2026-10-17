@@ -167,8 +167,8 @@ describe('authenticate', () => {
   it('sends the configured trust token with the postback', async () => {
     let sentCookie: string | undefined
     interceptLoginPage()
-    nock(BASE_URL).post('/web/Default.aspx').reply(302, function (this: nock.ReplyFnContext) {
-      sentCookie = this.req.headers.cookie
+    nock(BASE_URL).post('/web/Default.aspx').reply(302, (request: Request) => {
+      sentCookie = request.headers.get('cookie') ?? undefined
       return ''
     }, SUCCESSFUL_LOGIN_COOKIES)
 
@@ -180,8 +180,8 @@ describe('authenticate', () => {
   it('sends no cookie at all when no trust token is configured', async () => {
     let sentCookie: string | undefined
     interceptLoginPage()
-    nock(BASE_URL).post('/web/Default.aspx').reply(302, function (this: nock.ReplyFnContext) {
-      sentCookie = this.req.headers.cookie
+    nock(BASE_URL).post('/web/Default.aspx').reply(302, (request: Request) => {
+      sentCookie = request.headers.get('cookie') ?? undefined
       return ''
     }, SUCCESSFUL_LOGIN_COOKIES)
 
@@ -193,8 +193,8 @@ describe('authenticate', () => {
   it('posts the scraped hidden fields and the credentials', async () => {
     let postedBody = ''
     interceptLoginPage()
-    nock(BASE_URL).post('/web/Default.aspx').reply(302, (_uri, body) => {
-      postedBody = String(body)
+    nock(BASE_URL).post('/web/Default.aspx').reply(302, async (request: Request) => {
+      postedBody = await request.text()
       return ''
     }, SUCCESSFUL_LOGIN_COOKIES)
 

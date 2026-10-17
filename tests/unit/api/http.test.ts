@@ -9,6 +9,7 @@
  * event stream token in one.
  */
 
+import { PassThrough } from 'node:stream'
 import nock from 'nock'
 import { httpRequest, USER_AGENT } from '../../../src/api/http'
 import {
@@ -46,8 +47,8 @@ describe('httpRequest', () => {
     nock(BASE_URL)
       .matchHeader('content-type', 'application/x-www-form-urlencoded')
       .post('/web/Default.aspx')
-      .reply(200, (_uri, body) => {
-        seenBody = String(body)
+      .reply(200, async (request: Request) => {
+        seenBody = await request.text()
         return ''
       })
 
@@ -98,10 +99,17 @@ describe('httpRequest', () => {
    * process with nothing in the log.
    */
   it('holds the deadline over the body, not just the headers', async () => {
+    // nock 15 applies delay() by holding the stream open after the bytes are
+    // already queued, and aborting that races an assertion inside the
+    // interceptor. Hold the bytes themselves so the deadline fires while
+    // the body read is still waiting.
     nock(BASE_URL)
       .get('/web/KeepAlive.aspx')
-      .delayBody(500)
-      .reply(200, 'a slow body')
+      .reply(200, () => {
+        const body = new PassThrough()
+        setTimeout(() => body.end('a slow body'), 500).unref()
+        return body
+      })
 
     const error = await captureRejection(
       httpRequest(`${BASE_URL}/web/KeepAlive.aspx`, { timeoutMs: 40 }),
@@ -183,7 +191,11 @@ describe('httpRequest', () => {
   })
 
   it('raises a NetworkError when the request fails below the HTTP layer', async () => {
-    nock(BASE_URL).get('/web/KeepAlive.aspx').replyWithError({ code: 'ECONNREFUSED' })
+    // nock 15's replyWithError never settles the fetch, so the transport
+    // failure is injected at the same boundary the client actually awaits.
+    jest.spyOn(globalThis, 'fetch').mockRejectedValue(
+      Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+    )
 
     await expect(httpRequest(`${BASE_URL}/web/KeepAlive.aspx`)).rejects.toThrow(NetworkError)
   })
@@ -200,7 +212,9 @@ describe('httpRequest', () => {
 
   it('keeps the query string out of failure messages', async () => {
     const url = `${BASE_URL}/web/api/websockets/token?auth=super-secret-token`
-    nock(BASE_URL).get('/web/api/websockets/token').query(true).replyWithError({ code: 'ECONNRESET' })
+    jest.spyOn(globalThis, 'fetch').mockRejectedValue(
+      Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
+    )
 
     const error = await captureRejection(httpRequest(url))
 

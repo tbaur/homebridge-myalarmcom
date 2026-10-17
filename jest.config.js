@@ -82,6 +82,7 @@ module.exports = {
   ],
 
   moduleNameMapper: {
+    '^nock$': '<rootDir>/tests/nock-bridge.js',
     '^@/(.*)$': '<rootDir>/src/$1',
   },
 
@@ -92,7 +93,7 @@ module.exports = {
   // forceExit guarantees a clean shutdown after the suite. detectOpenHandles is
   // intentionally left off the standing config: it is a debugging aid (run via
   // `jest --detectOpenHandles` when chasing a hang) that reports false positives
-  // for nock 14's mock sockets, which are not real leaks. Timer cleanup is
+  // for nock's mock sockets, which are not real leaks. Timer cleanup is
   // asserted directly instead — see the platform shutdown tests — so forceExit
   // is not standing in for that.
   forceExit: true,

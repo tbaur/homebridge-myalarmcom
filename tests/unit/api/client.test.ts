@@ -219,8 +219,8 @@ describe('AlarmComClient', () => {
         .get('/web/api/devices/sensors')
         .query(true)
         .times(3)
-        .reply(200, (uri) => {
-          batches.push(new URL(uri, BASE_URL).searchParams.getAll('ids[]'))
+        .reply(200, (request: Request) => {
+          batches.push(new URL(request.url).searchParams.getAll('ids[]'))
           return { data: [] }
         })
 
@@ -296,10 +296,8 @@ describe('AlarmComClient', () => {
     const partitionId = '1234567-127'
     const partitionResponse = { data: fixtureAt(partitionsFixture.data, 0, 'partitions') }
 
-    // Both forms are handled because nock decides by content type. It hands
-    // over a parsed object now that the body is labelled application/json, and
-    // handed over raw text back when it was mislabelled application/vnd.api+json
-    // — a media type nock does not recognise as JSON either.
+    // nock 15 hands the reply callback a Fetch Request. The body is the raw
+    // text the client sent, whatever content type labelled it.
     async function captureCommandBody(
       run: (client: AlarmComClient) => Promise<Resource<PartitionAttributes>>,
       action: string,
@@ -309,10 +307,8 @@ describe('AlarmComClient', () => {
 
       nock(BASE_URL)
         .post(`/web/api/devices/partitions/${partitionId}/${action}`)
-        .reply(200, (_uri, requestBody) => {
-          body = (typeof requestBody === 'string'
-            ? JSON.parse(requestBody)
-            : requestBody) as Record<string, unknown>
+        .reply(200, async (request: Request) => {
+          body = JSON.parse(await request.text()) as Record<string, unknown>
           return partitionResponse
         })
 

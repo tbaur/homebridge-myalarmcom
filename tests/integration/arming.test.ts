@@ -86,8 +86,8 @@ describe('arming from HomeKit, over real HTTP', () => {
   let api: FakeHomebridgeApi
   let log: RecordingLogging
 
-  function requestedIds(uri: string): string[] {
-    return new URL(uri, BASE_URL).searchParams.getAll('ids[]')
+  function requestedIds(request: Request): string[] {
+    return new URL(request.url).searchParams.getAll('ids[]')
   }
 
   function interceptSignInAndDiscovery(sensors = shutSensors()): void {
@@ -109,8 +109,8 @@ describe('arming from HomeKit, over real HTTP', () => {
       .persist()
       .get('/web/api/devices/sensors')
       .query(true)
-      .reply(200, (uri: string) => ({
-        data: sensors.filter((sensor) => requestedIds(uri).includes(String(sensor.id))),
+      .reply(200, (request: Request) => ({
+        data: sensors.filter((sensor) => requestedIds(request).includes(String(sensor.id))),
       }))
   }
 

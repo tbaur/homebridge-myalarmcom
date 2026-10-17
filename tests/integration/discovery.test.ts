@@ -69,8 +69,8 @@ function interceptSignIn(): void {
 
 /** Answer a batched read with only the resources that were asked for. */
 function replyWithRequested(resources: { id: string }[]) {
-  return (uri: string): { data: { id: string }[] } => {
-    const requested = new URL(uri, BASE_URL).searchParams.getAll('ids[]')
+  return (request: Request): { data: { id: string }[] } => {
+    const requested = new URL(request.url).searchParams.getAll('ids[]')
     return { data: resources.filter((resource) => requested.includes(resource.id)) }
   }
 }

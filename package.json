@@ -55,7 +55,7 @@
     "globals": "^17.7.0",
     "homebridge": "^2.1.0",
     "jest": "^30.4.2",
-    "nock": "^14.0.16",
+    "nock": "^15.0.1",
     "ts-jest": "29.4.14",
     "typescript": "^6.0.3"
   },
@@ -73,10 +73,10 @@
     "prepublishOnly": "npm run clean && npm run build",
     "probe": "node scripts/probe.mjs",
     "probe-command": "node scripts/probe-command.mjs",
-    "test": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --coverage",
-    "test:integration": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --testPathPatterns=tests/integration --collectCoverage=false",
-    "test:unit": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --coverage --testPathPatterns=tests/unit",
-    "test:watch": "NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --watch",
+    "test": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --require=./tests/preload-nock.js\" jest --coverage",
+    "test:integration": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --require=./tests/preload-nock.js\" jest --testPathPatterns=tests/integration --collectCoverage=false",
+    "test:unit": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --require=./tests/preload-nock.js\" jest --coverage --testPathPatterns=tests/unit",
+    "test:watch": "NODE_ENV=test NODE_OPTIONS=\"--experimental-vm-modules --require=./tests/preload-nock.js\" jest --watch",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "verify": "npm run build && node scripts/verify.mjs",
     "watch-arming": "npm run build && node scripts/watch-arming.mjs"
