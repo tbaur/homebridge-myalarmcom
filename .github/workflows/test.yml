@@ -1,6 +1,10 @@
 name: Tests
 
+# The README badge shows the latest run on main. A pull-request run does not
+# count, so this push is what keeps the badge current after each merge.
 on:
+  push:
+    branches: [ main ]
   pull_request:
     branches: [ main ]
   merge_group:
