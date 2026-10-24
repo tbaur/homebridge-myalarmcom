@@ -144,6 +144,10 @@ Alarm.com publishes no consumer API and can change or lock accounts without noti
 - [Development scripts](scripts/README.md)
 - [Report issues](https://github.com/tbaur/homebridge-myalarmcom/issues)
 
+## Trademarks
+
+homebridge-myalarmcom is an independent project. It is not affiliated with or endorsed by Alarm.com. Alarm.com is a trademark of Alarm.com Incorporated.
+
 ## License
 
 Copyright 2026 tbaur
