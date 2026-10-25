@@ -337,6 +337,7 @@ function redactConfig(config) {
         allowHomeKitArming: config.allowHomeKitArming,
         ignoredDeviceIds: config.ignoredDeviceIds.size,
         debug: config.debug,
+        pagerdutySignals: config.pagerdutySignals,
     };
 }
 //# sourceMappingURL=collector.js.map
