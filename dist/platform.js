@@ -9,6 +9,7 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MyAlarmComPlatform = void 0;
+const alarmcom_signals_1 = require("./alarmcom-signals");
 const client_1 = require("./api/client");
 const event_stream_1 = require("./api/event-stream");
 const session_manager_1 = require("./api/session-manager");
@@ -48,6 +49,7 @@ const DISABLED_CONFIG = {
     allowHomeKitArming: true,
     debug: false,
     diagnosticsInterval: 0,
+    pagerdutySignals: false,
 };
 /** Homebridge platform exposing Alarm.com partitions and sensors. */
 class MyAlarmComPlatform {
@@ -63,6 +65,11 @@ class MyAlarmComPlatform {
     /** Both `null` when the configuration is unusable, so nothing can sign in. */
     #client;
     #sessionManager;
+    /**
+     * Absent unless `pagerdutySignals` is on and Homebridge provided a storage
+     * path. Nothing touches the signal store while this is absent.
+     */
+    #signals;
     #cachedAccessories = new Map();
     #partitions = new Map();
     #sensors = new Map();
@@ -97,6 +104,8 @@ class MyAlarmComPlatform {
     #hasWarnedAboutOutage = false;
     /** Last user-actionable failure reported loudly, so it is not repeated. */
     #lastReportedError = null;
+    /** The PagerDuty startup line is once per process, including discovery retries. */
+    #hasLoggedPagerDutySupport = false;
     constructor(log, config, api) {
         this.api = api;
         this.Service = api.hap.Service;
@@ -133,6 +142,7 @@ class MyAlarmComPlatform {
                 + 'Fix the problems above and restart Homebridge; the rest of your bridge is unaffected.');
             this.#client = null;
             this.#sessionManager = null;
+            this.#signals = undefined;
             return;
         }
         this.#sessionManager = new session_manager_1.SessionManager({
@@ -155,6 +165,7 @@ class MyAlarmComPlatform {
             onRetry: () => this.#diagnostics.retry(),
             signal: this.#abortController.signal,
         });
+        this.#signals = resolved.pagerdutySignals ? this.#openSignals(api) : undefined;
         api.on('didFinishLaunching', () => {
             // Nothing in #start rejects today, but an unhandled rejection here would
             // terminate the bridge rather than log, so the guarantee is enforced
@@ -222,6 +233,10 @@ class MyAlarmComPlatform {
         if (!sessionManager) {
             return;
         }
+        // Before the first request, so the line is still there when sign-in fails.
+        // Discovery retries stay inside #awaitInitialDiscovery and do not log again.
+        this.#logPagerDutySupport();
+        this.#signals?.start();
         if (!(await this.#awaitInitialDiscovery())) {
             // INFO start waits until Ready so it is not a wall of zeros. A permanent
             // boot failure still gets a debug snapshot (config echo) when diagnostics
@@ -274,6 +289,7 @@ class MyAlarmComPlatform {
                 if (this.#isShuttingDown) {
                     return false;
                 }
+                this.#noteSignalFailure(error);
                 const detail = (0, sanitizers_1.sanitizeError)(error);
                 const delayMs = (0, discovery_retry_1.initialDiscoveryRetryDelayMs)(error, attempt + 1);
                 if (delayMs === null) {
@@ -346,6 +362,7 @@ class MyAlarmComPlatform {
         // their panel for a fault that is not there.
         this.#removeStaleAccessories(new Set([...requestedPartitionIds, ...requestedSensorIds]), this.#config.ignoredDeviceIds);
         await this.#publishDevices(requestedPartitionIds, requestedSensorIds, reason, signal);
+        this.#publishDeviceSignals();
     }
     #withoutIgnored(deviceIds) {
         return deviceIds.filter((id) => !this.#config.ignoredDeviceIds.has(id));
@@ -698,6 +715,7 @@ class MyAlarmComPlatform {
         for (const resource of await this.client.getSensors(sensorIds, signal)) {
             this.#sensors.get(resource.id)?.update(resource);
         }
+        this.#publishDeviceSignals();
         return partitionIds.length + sensorIds.length;
     }
     /**
@@ -778,6 +796,7 @@ class MyAlarmComPlatform {
      * cookie is logged loudly, because nothing will improve until it is fixed.
      */
     #reportFailure(context, error) {
+        this.#noteSignalFailure(error);
         const detail = (0, sanitizers_1.sanitizeError)(error);
         // User-actionable problems are rare and never self-heal, so they are loud —
         // but only once per distinct problem. A rejected password re-raises on every
@@ -840,11 +859,73 @@ class MyAlarmComPlatform {
             ignored: this.#config.ignoredDeviceIds.size,
         };
     }
+    /**
+     * Open the signal writer.
+     *
+     * The setting alone is not enough: without a storage path the file would
+     * be created in the process's current directory.
+     */
+    #openSignals(api) {
+        const storagePath = (0, alarmcom_signals_1.homebridgeStoragePath)(api);
+        if (storagePath === undefined) {
+            this.#log.warn('Send Signals to PagerDuty is on, but Homebridge did not provide a storage path. Not writing signals.');
+            return undefined;
+        }
+        return (0, alarmcom_signals_1.createAlarmComSignals)({
+            plugin: settings_1.PLUGIN_NAME,
+            storagePath,
+            log: this.#log,
+        });
+    }
+    /** Once per process, and only when a writer actually exists. */
+    #logPagerDutySupport() {
+        if (!this.#signals || this.#hasLoggedPagerDutySupport) {
+            return;
+        }
+        this.#hasLoggedPagerDutySupport = true;
+        this.#log.info(alarmcom_signals_1.PAGERDUTY_STARTUP_LOG);
+    }
+    /**
+     * Tell the signal store what a failure was.
+     *
+     * A rejected sign-in and a missed read are different pages. Cancelling the
+     * work at shutdown is neither.
+     */
+    #noteSignalFailure(error) {
+        const failure = (0, alarmcom_signals_1.signalFailureFrom)(error);
+        if (failure === undefined) {
+            return;
+        }
+        if (failure === 'unreachable') {
+            this.#signals?.noteUnreachable();
+            return;
+        }
+        this.#signals?.noteSignInStopped(failure);
+    }
+    /**
+     * Write alarm and smoke from the devices this plugin is publishing, and
+     * record that Alarm.com answered.
+     *
+     * Runs only after a read finishes. A sensor this plugin declined to publish
+     * is not in the map, so it cannot page.
+     */
+    #publishDeviceSignals() {
+        if (!this.#signals) {
+            return;
+        }
+        this.#signals.noteDevices({
+            alarmActive: [...this.#partitions.values()].some((partition) => partition.hasActiveAlarm),
+            smokeActive: [...this.#sensors.values()].some((sensor) => sensor.kind === 'smoke' && sensor.isTriggered === true),
+        });
+        this.#signals.noteReached();
+    }
     #shutdown() {
         if (this.#isShuttingDown) {
             return;
         }
         this.#isShuttingDown = true;
+        // Before abort, so a request cancelled by shutdown cannot open or clear a page.
+        this.#signals?.close();
         const resolveStartupRetry = this.#startupRetryResolve;
         this.#startupRetryResolve = null;
         resolveStartupRetry?.();

@@ -38,6 +38,13 @@ export declare class SensorAccessory {
      */
     get isOpenContact(): boolean;
     /**
+     * Latest reading, or null before the first one.
+     *
+     * The smoke PagerDuty signal follows this value, which is also what HomeKit
+     * is showing. A missing reading is not a clear.
+     */
+    get isTriggered(): boolean | null;
+    /**
      * Republish the name when Alarm.com reports a different one.
      *
      * The constructor sets it once and does not re-run for an existing handler, so

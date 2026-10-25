@@ -7,6 +7,7 @@ Install and a short options table live in the [README](../README.md). This page 
 - [Full configuration reference](#full-configuration-reference)
 - [How devices appear](#how-devices-appear)
 - [How it works](#how-it-works)
+- [PagerDuty](#pagerduty)
 - [Troubleshooting](#troubleshooting)
 - [Collecting diagnostics](#collecting-diagnostics)
 - [Reading a Health line](#reading-a-health-line)
@@ -31,6 +32,7 @@ Install and a short options table live in the [README](../README.md). This page 
       "includeUnmonitoredSensors": false,
       "ignoredDeviceIds": [],
       "diagnosticsInterval": 0,
+      "pagerdutySignals": false,
       "debug": false
     }
   ]
@@ -55,6 +57,7 @@ Invalid configuration never takes the bridge down. A missing credential, a six-d
 | `includeUnmonitoredSensors` | `false` | Expose sensors Alarm.com reports as unmonitored. They appear marked inactive in the Home app, because an unsupervised sensor's state cannot be trusted. |
 | `ignoredDeviceIds` | `[]` | Device IDs to leave out of HomeKit. Each ID is logged when its accessory is added, and is also the accessory's Serial Number in the Home app. |
 | `diagnosticsInterval` | `0` | Seconds between health heartbeats in the log. `0` is off. Otherwise `30`–`86400` (24h). At 30 that is about 2,880 lines/day; prefer `300` or higher. |
+| `pagerdutySignals` | `false` | Write this plugin's alert conditions to homebridge-pagerduty. Off until turned on. See [PagerDuty](#pagerduty). Needs Node 22.13 or later. |
 | `debug` | `false` | Verbose logging. **Also requires Homebridge Debug Mode** (the `-D` flag, or Settings → Homebridge Debug Mode in the UI). Homebridge discards DEBUG lines otherwise, so this option alone produces no extra output. Credentials are redacted; device names and Alarm.com IDs are not. |
 
 ## How devices appear
@@ -85,6 +88,36 @@ A circuit breaker fails fast during a sustained outage rather than retrying into
 Homebridge already tags each line with the plugin name (for example `[myalarmcom]`). API lines also carry a short request tag and a duration, like `[3f9c1e, 412ms]`. Every retry and every failure belonging to the same request shares one tag.
 
 Architecture: [DEVELOPMENT.md](../DEVELOPMENT.md). Wire-level notes: [PROTOCOL.md](PROTOCOL.md). Capturing the two-factor cookie: [AUTH.md](AUTH.md).
+
+## PagerDuty
+
+This plugin can page through [homebridge-pagerduty](https://github.com/tbaur/homebridge-pagerduty) when something needs attention. It needs Node 22.13 or later. The setting is off until you turn it on.
+
+1. Turn on **Send Signals to PagerDuty** (`pagerdutySignals`) in this plugin's settings, under **Advanced**.
+2. Restart Homebridge.
+3. In homebridge-pagerduty's settings, allow homebridge-myalarmcom to page, save, and restart Homebridge again. [Signals from other plugins](https://github.com/tbaur/homebridge-pagerduty/blob/main/docs/SIGNALS.md#let-a-plugin-page) explains each step and what else you can set for each signal.
+
+Each condition below then opens a PagerDuty alert while it is present, and resolves it when it clears. A fire can open both `alarm-active` and `smoke-active`. Mute either one in homebridge-pagerduty if you only want one of them.
+
+| Signal | Severity | Active when |
+| --- | --- | --- |
+| `alarm-active` | critical | Any partition this plugin publishes has an active alarm |
+| `smoke-active` | critical | Any smoke sensor this plugin publishes is tripped |
+| `auth-failed` | error | Sign-in has stopped and will not be retried |
+| `cloud-offline` | error | No successful device read for 5 minutes |
+
+How the signals behave:
+
+- `alarm-active` follows `hasActiveAlarm` on a partition this plugin publishes. The page waits until that read finishes, so the panel's entry delay is already over. An open door, motion, or an arm or disarm does not page.
+- `smoke-active` follows a smoke sensor this plugin publishes. A smoke detector Alarm.com reports as unmonitored is not published unless `includeUnmonitoredSensors` is on, and it does not page while it is unpublished. The page does not name the detector.
+- `auth-failed` turns on when Alarm.com rejects the username or password, rejects the two-factor cookie, or serves a sign-in page this plugin cannot read. The first two use the sentence about correcting the username, password, or cookie. The unreadable page uses a sentence that says the plugin has to be updated. A network failure, an expired session that will sign in again, a 403, or an open circuit breaker does not turn this on.
+- `cloud-offline` turns on only after 5 minutes with no successful device read, counted from launch and again from the start of a later outage. It stays off while `auth-failed` is on, so one cause sends one page. The event stream falling back to polling does not turn it on, because polling is still a device read. It clears on the next successful read.
+- Alarm and smoke are written when the first device read succeeds, including when they are clear, and again when a later read changes them. They are left untouched when sign-in never succeeds, so a restart during an alarm does not resolve the page before the panel has been read.
+- At startup the plugin logs one line, `homebridge-pagerduty support is enabled (alarm-active, smoke-active, auth-failed, cloud-offline)`, before it signs in. The line is logged once, including when sign-in then fails, and it is not logged when the setting is off.
+- Shutdown closes the store and does not clear a signal. The next startup writes the current state once Alarm.com has answered.
+- The store needs `node:sqlite`, which Node provides from 22.13. On an older Node the plugin logs one warning and keeps running without signals. Nothing is written until the setting is on.
+
+Summaries are fixed sentences. They do not include a zone name, an account, or an address.
 
 ## Troubleshooting
 

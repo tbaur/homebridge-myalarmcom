@@ -23,6 +23,7 @@ const baseConfig = (): ResolvedConfig => ({
   allowHomeKitArming: true,
   debug: false,
   diagnosticsInterval: 60,
+  pagerdutySignals: false,
 })
 
 interface MutableReaders {
@@ -173,6 +174,7 @@ describe('DiagnosticsCollector', () => {
       allowHomeKitArming: true,
       ignoredDeviceIds: 1,
       debug: false,
+      pagerdutySignals: false,
     })
     expect(JSON.stringify(report)).not.toContain('superSecretPassword')
     expect(JSON.stringify(report)).not.toContain('user@example.com')

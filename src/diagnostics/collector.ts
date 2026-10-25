@@ -465,5 +465,6 @@ function redactConfig(config: ResolvedConfig): Record<string, unknown> {
     allowHomeKitArming: config.allowHomeKitArming,
     ignoredDeviceIds: config.ignoredDeviceIds.size,
     debug: config.debug,
+    pagerdutySignals: config.pagerdutySignals,
   }
 }

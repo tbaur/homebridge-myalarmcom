@@ -111,6 +111,12 @@
           "type": "number"
         },
         "description": "Seconds between health/activity heartbeats in the Homebridge log. `0` disables (default). Allowed range 0–86400 (24h); values 1–29 are raised to 30. At 30 that is roughly 2,880 lines a day, so prefer 300 or more unless you are actively debugging. Boot and shutdown snapshots are included when enabled. Credentials are never included."
+      },
+      "pagerdutySignals": {
+        "title": "Send Signals to PagerDuty",
+        "type": "boolean",
+        "default": false,
+        "description": "Write this plugin's alert conditions to homebridge-pagerduty's signal store. Then allow homebridge-myalarmcom to page in homebridge-pagerduty's settings. Needs Node 22.13 or later."
       }
     }
   },
@@ -172,7 +178,8 @@
           "key": "diagnosticsInterval",
           "type": "number"
         },
-        "debug"
+        "debug",
+        "pagerdutySignals"
       ]
     }
   ]

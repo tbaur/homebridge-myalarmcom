@@ -91,6 +91,7 @@ describe('config.schema.json', () => {
       'allowSensorBypass',
       'allowHomeKitArming',
       'debug',
+      'pagerdutySignals',
     ] as const)('%s', (option) => {
       const { config } = validateConfig({
         platform: PLATFORM_NAME,
