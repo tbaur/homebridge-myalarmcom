@@ -15,6 +15,13 @@ import type {
   PlatformAccessory,
   Service,
 } from 'homebridge'
+import {
+  createAlarmComSignals,
+  homebridgeStoragePath,
+  PAGERDUTY_STARTUP_LOG,
+  signalFailureFrom,
+  type AlarmComSignals,
+} from './alarmcom-signals'
 import { AlarmComClient, type SystemDevices } from './api/client'
 import { EventStream } from './api/event-stream'
 import { SessionManager } from './api/session-manager'
@@ -80,6 +87,7 @@ const DISABLED_CONFIG: ResolvedConfig = {
   allowHomeKitArming: true,
   debug: false,
   diagnosticsInterval: 0,
+  pagerdutySignals: false,
 }
 
 /** Homebridge platform exposing Alarm.com partitions and sensors. */
@@ -97,6 +105,11 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   /** Both `null` when the configuration is unusable, so nothing can sign in. */
   readonly #client: AlarmComClient | null
   readonly #sessionManager: SessionManager | null
+  /**
+   * Absent unless `pagerdutySignals` is on and Homebridge provided a storage
+   * path. Nothing touches the signal store while this is absent.
+   */
+  readonly #signals: AlarmComSignals | undefined
   readonly #cachedAccessories = new Map<string, PlatformAccessory>()
   readonly #partitions = new Map<string, PartitionAccessory>()
   readonly #sensors = new Map<string, SensorAccessory>()
@@ -132,6 +145,8 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   #hasWarnedAboutOutage = false
   /** Last user-actionable failure reported loudly, so it is not repeated. */
   #lastReportedError: string | null = null
+  /** The PagerDuty startup line is once per process, including discovery retries. */
+  #hasLoggedPagerDutySupport = false
 
   constructor(log: Logging, config: MyAlarmComPlatformConfig, api: API) {
     this.api = api
@@ -176,6 +191,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       )
       this.#client = null
       this.#sessionManager = null
+      this.#signals = undefined
       return
     }
 
@@ -201,6 +217,8 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       onRetry: () => this.#diagnostics.retry(),
       signal: this.#abortController.signal,
     })
+
+    this.#signals = resolved.pagerdutySignals ? this.#openSignals(api) : undefined
 
     api.on('didFinishLaunching', () => {
       // Nothing in #start rejects today, but an unhandled rejection here would
@@ -277,6 +295,11 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       return
     }
 
+    // Before the first request, so the line is still there when sign-in fails.
+    // Discovery retries stay inside #awaitInitialDiscovery and do not log again.
+    this.#logPagerDutySupport()
+    this.#signals?.start()
+
     if (!(await this.#awaitInitialDiscovery())) {
       // INFO start waits until Ready so it is not a wall of zeros. A permanent
       // boot failure still gets a debug snapshot (config echo) when diagnostics
@@ -337,6 +360,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
           return false
         }
 
+        this.#noteSignalFailure(error)
         const detail = sanitizeError(error)
         const delayMs = initialDiscoveryRetryDelayMs(error, attempt + 1)
 
@@ -429,6 +453,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     )
 
     await this.#publishDevices(requestedPartitionIds, requestedSensorIds, reason, signal)
+    this.#publishDeviceSignals()
   }
 
   #withoutIgnored(deviceIds: readonly string[]): string[] {
@@ -854,6 +879,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       this.#sensors.get(resource.id)?.update(resource)
     }
 
+    this.#publishDeviceSignals()
     return partitionIds.length + sensorIds.length
   }
 
@@ -942,6 +968,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
    * cookie is logged loudly, because nothing will improve until it is fixed.
    */
   #reportFailure(context: string, error: unknown): void {
+    this.#noteSignalFailure(error)
     const detail = sanitizeError(error)
 
     // User-actionable problems are rare and never self-heal, so they are loud —
@@ -1014,11 +1041,81 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     }
   }
 
+  /**
+   * Open the signal writer.
+   *
+   * The setting alone is not enough: without a storage path the file would
+   * be created in the process's current directory.
+   */
+  #openSignals(api: API): AlarmComSignals | undefined {
+    const storagePath = homebridgeStoragePath(api)
+    if (storagePath === undefined) {
+      this.#log.warn(
+        'Send Signals to PagerDuty is on, but Homebridge did not provide a storage path. Not writing signals.',
+      )
+      return undefined
+    }
+    return createAlarmComSignals({
+      plugin: PLUGIN_NAME,
+      storagePath,
+      log: this.#log,
+    })
+  }
+
+  /** Once per process, and only when a writer actually exists. */
+  #logPagerDutySupport(): void {
+    if (!this.#signals || this.#hasLoggedPagerDutySupport) {
+      return
+    }
+    this.#hasLoggedPagerDutySupport = true
+    this.#log.info(PAGERDUTY_STARTUP_LOG)
+  }
+
+  /**
+   * Tell the signal store what a failure was.
+   *
+   * A rejected sign-in and a missed read are different pages. Cancelling the
+   * work at shutdown is neither.
+   */
+  #noteSignalFailure(error: unknown): void {
+    const failure = signalFailureFrom(error)
+    if (failure === undefined) {
+      return
+    }
+    if (failure === 'unreachable') {
+      this.#signals?.noteUnreachable()
+      return
+    }
+    this.#signals?.noteSignInStopped(failure)
+  }
+
+  /**
+   * Write alarm and smoke from the devices this plugin is publishing, and
+   * record that Alarm.com answered.
+   *
+   * Runs only after a read finishes. A sensor this plugin declined to publish
+   * is not in the map, so it cannot page.
+   */
+  #publishDeviceSignals(): void {
+    if (!this.#signals) {
+      return
+    }
+    this.#signals.noteDevices({
+      alarmActive: [...this.#partitions.values()].some((partition) => partition.hasActiveAlarm),
+      smokeActive: [...this.#sensors.values()].some(
+        (sensor) => sensor.kind === 'smoke' && sensor.isTriggered === true,
+      ),
+    })
+    this.#signals.noteReached()
+  }
+
   #shutdown(): void {
     if (this.#isShuttingDown) {
       return
     }
     this.#isShuttingDown = true
+    // Before abort, so a request cancelled by shutdown cannot open or clear a page.
+    this.#signals?.close()
 
     const resolveStartupRetry = this.#startupRetryResolve
     this.#startupRetryResolve = null

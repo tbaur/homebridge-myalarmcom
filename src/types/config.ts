@@ -75,6 +75,14 @@ export interface MyAlarmComPlatformConfig {
    * values above one day (`86400`) are lowered to that ceiling.
    */
   diagnosticsInterval?: unknown
+
+  /**
+   * Write alert conditions to homebridge-pagerduty's signal store.
+   *
+   * Off unless set to `true`. Homebridge-pagerduty still ignores the rows
+   * until that plugin is allowed to page.
+   */
+  pagerdutySignals?: unknown
 }
 
 /** Configuration after validation, with every value present and in range. */
@@ -92,6 +100,8 @@ export interface ResolvedConfig {
   debug: boolean
   /** Seconds between diagnostics heartbeats; `0` means emission is off. */
   diagnosticsInterval: number
+  /** Write alert conditions to the homebridge-pagerduty signal store. */
+  pagerdutySignals: boolean
 }
 
 /** Outcome of validating user configuration. */

@@ -243,6 +243,7 @@ describe('defaults', () => {
       allowHomeKitArming: true,
       debug: false,
       diagnosticsInterval: 0,
+      pagerdutySignals: false,
     })
     expect(warnings).toEqual([])
   })
@@ -265,6 +266,7 @@ describe('defaults', () => {
       allowSensorBypass: true,
       allowHomeKitArming: false,
       debug: true,
+      pagerdutySignals: true,
     })
 
     expect(config).toMatchObject({
@@ -273,14 +275,16 @@ describe('defaults', () => {
       allowSensorBypass: true,
       allowHomeKitArming: false,
       debug: true,
+      pagerdutySignals: true,
     })
   })
 
   it('falls back for booleans given as something other than a boolean', () => {
-    const { config } = resolve({ useEventStream: 'yes', debug: 1 })
+    const { config } = resolve({ useEventStream: 'yes', debug: 1, pagerdutySignals: 'yes' })
 
     expect(config.useEventStream).toBe(true)
     expect(config.debug).toBe(false)
+    expect(config.pagerdutySignals).toBe(false)
   })
 })
 

@@ -25,6 +25,7 @@ Expose your [Alarm.com](https://www.alarm.com) security panel and sensors in App
 - **Hourly rediscovery** so sensors added or removed at the panel show up without a Homebridge restart
 - **Fail-closed mapping:** an unrecognised panel state keeps the previous tile and raises a fault
 - **Diagnostics** *(optional):* health heartbeats in the Homebridge log
+- **PagerDuty** *(optional, off by default):* page when the system is in alarm, a smoke detector is active, sign-in has stopped, or Alarm.com has been unreachable for 5 minutes
 
 ### Quality
 - **Jest suite** gated at 95% statements and 87% branches, against captured fixtures, no network
@@ -102,6 +103,7 @@ Lights, locks, thermostats, garage door *openers*, cameras, and doorbells are no
 | `includeUnmonitoredSensors` | `false` | Expose sensors Alarm.com reports as unmonitored (marked inactive). |
 | `ignoredDeviceIds` | `[]` | Device IDs to leave out of HomeKit. |
 | `diagnosticsInterval` | `0` | Seconds between health heartbeats; `0` off, else `30`–`86400`. |
+| `pagerdutySignals` | `false` | Page through homebridge-pagerduty. Off until turned on. See [PagerDuty](docs/README-DETAILED.md#pagerduty). |
 | `debug` | `false` | Verbose logging. Also requires Homebridge Debug Mode (`-D`). |
 
 Clamp rules, the unmonitored-sensor warning, and the `debug` flag are explained in the [detailed documentation](docs/README-DETAILED.md#full-configuration-reference).

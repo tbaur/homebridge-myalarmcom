@@ -327,6 +327,7 @@ export function validateConfig(raw: MyAlarmComPlatformConfig): ConfigValidationR
     allowHomeKitArming: parseBoolean(raw.allowHomeKitArming, true),
     debug: parseBoolean(raw.debug, false),
     diagnosticsInterval: parseDiagnosticsInterval(raw.diagnosticsInterval, warnings),
+    pagerdutySignals: parseBoolean(raw.pagerdutySignals, false),
   }
 
   return {

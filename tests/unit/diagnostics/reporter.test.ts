@@ -30,6 +30,7 @@ const CONFIG: ResolvedConfig = {
   allowHomeKitArming: true,
   debug: true,
   diagnosticsInterval: 60,
+  pagerdutySignals: false,
 }
 
 describe('DiagnosticsReporter', () => {

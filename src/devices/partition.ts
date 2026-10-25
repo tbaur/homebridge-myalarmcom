@@ -158,6 +158,16 @@ export class PartitionAccessory {
   }
 
   /**
+   * Whether Alarm.com reports this partition in alarm.
+   *
+   * False until the first reading. Only a literal `true` counts, which is the
+   * same rule the HomeKit tile uses.
+   */
+  get hasActiveAlarm(): boolean {
+    return this.#attributes?.hasActiveAlarm === true
+  }
+
+  /**
    * Republish the name when Alarm.com reports a different one.
    *
    * The constructor sets it once, and the constructor does not re-run for an

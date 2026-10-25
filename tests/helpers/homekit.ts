@@ -119,6 +119,16 @@ export function createPlatformTestBed(
 export class FakeHomebridgeApi extends EventEmitter {
   readonly hap = { Service, Characteristic, uuid, Perms: PERMS, HapStatusError }
   readonly platformAccessory = FakePlatformAccessory
+  /**
+   * Directory `api.user.storagePath()` returns.
+   *
+   * Empty until a test sets it. The PagerDuty writer treats an empty path as
+   * missing, so a test that never opts in does not create a store.
+   */
+  storageDirectory = ''
+  readonly user = {
+    storagePath: (): string => this.storageDirectory,
+  }
 
   readonly registered: FakePlatformAccessory[] = []
   readonly unregistered: FakePlatformAccessory[] = []

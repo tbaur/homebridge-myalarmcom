@@ -158,6 +158,17 @@ module.exports = [
     },
   },
   {
+    // Copied verbatim from homebridge-pagerduty's docs/SIGNALS-AGENT.md.
+    // Restyling it would make the next copy a silent fork of the store interface.
+    files: ['src/pagerduty-signals.ts'],
+    rules: {
+      'semi': 'off',
+      'comma-dangle': 'off',
+      'quotes': 'off',
+      'max-len': 'off',
+    },
+  },
+  {
     files: ['tests/**/*.ts'],
     rules: {
       // Non-null assertions on values the test itself has just arranged. There
