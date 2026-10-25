@@ -52,12 +52,12 @@ export interface SignalWriter {
  */
 export declare function signalFailureFrom(error: unknown): SignalFailure | undefined;
 /**
- * `api.user.storagePath()`, or undefined when Homebridge did not provide one.
+ * Whether a house-level signal is active after a read.
  *
- * An empty string is missing. Joining it would create the store in the
- * process's current directory.
+ * A positive reading is enough to page. A clear is written only when every
+ * requested device came back, so a missing detail cannot resolve an open page.
  */
-export declare function homebridgeStoragePath(api: object): string | undefined;
+export declare function observedSignal(sawActive: boolean, isComplete: boolean): boolean | undefined;
 /**
  * Tracks this plugin's four PagerDuty signals.
  *
@@ -102,7 +102,7 @@ export declare class AlarmComSignals {
      * Call this only after the read has finished. Writing a clear part way
      * through would resolve an open alarm and open it again a moment later.
      */
-    noteDevices(state: DeviceSignalState): void;
+    noteDevices(state: Partial<DeviceSignalState>): void;
     /** Close the store and stop the grace timer. Does not clear any signal. */
     close(): void;
 }

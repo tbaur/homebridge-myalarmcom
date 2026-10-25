@@ -14,7 +14,7 @@ import {
   AUTH_REJECTED_SUMMARY,
   CLOUD_OFFLINE_GRACE_MS,
   CLOUD_OFFLINE_SUMMARY,
-  homebridgeStoragePath,
+  observedSignal,
   PAGERDUTY_STARTUP_LOG,
   SIGNAL_ALARM_ACTIVE,
   SIGNAL_AUTH_FAILED,
@@ -72,19 +72,17 @@ describe('signalFailureFrom', () => {
   })
 })
 
-describe('homebridgeStoragePath', () => {
-  it('returns undefined when Homebridge did not provide a path', () => {
-    expect(homebridgeStoragePath({})).toBeUndefined()
-    expect(homebridgeStoragePath({ user: null })).toBeUndefined()
-    expect(homebridgeStoragePath({ user: {} })).toBeUndefined()
-    expect(homebridgeStoragePath({ user: { storagePath: 'not-a-function' } })).toBeUndefined()
-    expect(homebridgeStoragePath({ user: { storagePath: () => '' } })).toBeUndefined()
-    expect(homebridgeStoragePath({ user: { storagePath: () => 12 } })).toBeUndefined()
+describe('observedSignal', () => {
+  it('pages as soon as one device shows the condition', () => {
+    expect(observedSignal(true, false)).toBe(true)
   })
 
-  it('returns the path Homebridge provided', () => {
-    expect(homebridgeStoragePath({ user: { storagePath: () => '/tmp/homebridge' } }))
-      .toBe('/tmp/homebridge')
+  it('writes a clear only when every requested device came back', () => {
+    expect(observedSignal(false, true)).toBe(false)
+  })
+
+  it('leaves the signal untouched when the read is incomplete and nothing is active', () => {
+    expect(observedSignal(false, false)).toBeUndefined()
   })
 })
 
@@ -223,6 +221,13 @@ describe('AlarmComSignals', () => {
   })
 
   describe('alarm and smoke', () => {
+    it('does not write the signal that this read did not settle', () => {
+      signals.noteDevices({ alarmActive: true })
+
+      expect(lastState(writer, SIGNAL_ALARM_ACTIVE)).toMatchObject({ active: true })
+      expect(lastState(writer, SIGNAL_SMOKE_ACTIVE)).toBeUndefined()
+    })
+
     it('writes both from a finished device read', () => {
       signals.noteDevices({ alarmActive: true, smokeActive: true })
 

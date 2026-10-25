@@ -14,7 +14,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AlarmComSignals = exports.CLOUD_OFFLINE_SUMMARY = exports.AUTH_LOGIN_FORM_SUMMARY = exports.AUTH_REJECTED_SUMMARY = exports.SMOKE_ACTIVE_SUMMARY = exports.ALARM_ACTIVE_SUMMARY = exports.CLOUD_OFFLINE_GRACE_MS = exports.SIGNAL_CLOUD_OFFLINE = exports.SIGNAL_AUTH_FAILED = exports.SIGNAL_SMOKE_ACTIVE = exports.SIGNAL_ALARM_ACTIVE = exports.PAGERDUTY_STARTUP_LOG = void 0;
 exports.signalFailureFrom = signalFailureFrom;
-exports.homebridgeStoragePath = homebridgeStoragePath;
+exports.observedSignal = observedSignal;
 exports.createAlarmComSignals = createAlarmComSignals;
 const errors_1 = require("./errors");
 const pagerduty_signals_1 = require("./pagerduty-signals");
@@ -56,28 +56,19 @@ function signalFailureFrom(error) {
     return 'unreachable';
 }
 /**
- * `api.user.storagePath()`, or undefined when Homebridge did not provide one.
+ * Whether a house-level signal is active after a read.
  *
- * An empty string is missing. Joining it would create the store in the
- * process's current directory.
+ * A positive reading is enough to page. A clear is written only when every
+ * requested device came back, so a missing detail cannot resolve an open page.
  */
-function homebridgeStoragePath(api) {
-    if (!('user' in api)) {
-        return undefined;
+function observedSignal(sawActive, isComplete) {
+    if (sawActive) {
+        return true;
     }
-    const user = api.user;
-    if (typeof user !== 'object' || user === null || !('storagePath' in user)) {
-        return undefined;
+    if (isComplete) {
+        return false;
     }
-    const readPath = user.storagePath;
-    if (typeof readPath !== 'function') {
-        return undefined;
-    }
-    const storagePath = readPath.call(user);
-    if (typeof storagePath !== 'string' || storagePath.length === 0) {
-        return undefined;
-    }
-    return storagePath;
+    return undefined;
 }
 /**
  * Tracks this plugin's four PagerDuty signals.
@@ -167,16 +158,20 @@ class AlarmComSignals {
         if (this.#isClosed) {
             return;
         }
-        this.#writer.write(exports.SIGNAL_ALARM_ACTIVE, {
-            active: state.alarmActive,
-            severity: 'critical',
-            summary: exports.ALARM_ACTIVE_SUMMARY,
-        });
-        this.#writer.write(exports.SIGNAL_SMOKE_ACTIVE, {
-            active: state.smokeActive,
-            severity: 'critical',
-            summary: exports.SMOKE_ACTIVE_SUMMARY,
-        });
+        if (state.alarmActive !== undefined) {
+            this.#writer.write(exports.SIGNAL_ALARM_ACTIVE, {
+                active: state.alarmActive,
+                severity: 'critical',
+                summary: exports.ALARM_ACTIVE_SUMMARY,
+            });
+        }
+        if (state.smokeActive !== undefined) {
+            this.#writer.write(exports.SIGNAL_SMOKE_ACTIVE, {
+                active: state.smokeActive,
+                severity: 'critical',
+                summary: exports.SMOKE_ACTIVE_SUMMARY,
+            });
+        }
     }
     /** Close the store and stop the grace timer. Does not clear any signal. */
     close() {

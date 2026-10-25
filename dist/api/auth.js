@@ -152,6 +152,11 @@ function assertLoginSucceeded(status) {
     if (status === 200) {
         throw new errors_1.AuthenticationError('Alarm.com rejected the username or password. Note that repeated failures will lock the account.');
     }
+    // Success is a redirect. Any other status is the service answering with
+    // something other than a rejected password, and must not be reported as one.
+    if (status < 300 || status >= 400) {
+        throw (0, errors_1.createApiError)(status, `Alarm.com returned ${status} when signing in`);
+    }
 }
 /**
  * Warn when Alarm.com hands back a different trust token than the one supplied.

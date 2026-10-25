@@ -65,10 +65,7 @@ class MyAlarmComPlatform {
     /** Both `null` when the configuration is unusable, so nothing can sign in. */
     #client;
     #sessionManager;
-    /**
-     * Absent unless `pagerdutySignals` is on and Homebridge provided a storage
-     * path. Nothing touches the signal store while this is absent.
-     */
+    /** Absent unless `pagerdutySignals` is on. Nothing touches the store while it is absent. */
     #signals;
     #cachedAccessories = new Map();
     #partitions = new Map();
@@ -362,7 +359,6 @@ class MyAlarmComPlatform {
         // their panel for a fault that is not there.
         this.#removeStaleAccessories(new Set([...requestedPartitionIds, ...requestedSensorIds]), this.#config.ignoredDeviceIds);
         await this.#publishDevices(requestedPartitionIds, requestedSensorIds, reason, signal);
-        this.#publishDeviceSignals();
     }
     #withoutIgnored(deviceIds) {
         return deviceIds.filter((id) => !this.#config.ignoredDeviceIds.has(id));
@@ -387,21 +383,34 @@ class MyAlarmComPlatform {
      * every automation bound to that accessory.
      */
     async #publishDevices(partitionIds, sensorIds, reason, signal) {
-        const partitions = await this.client.getPartitions(partitionIds, signal);
-        const sensors = await this.client.getSensors(sensorIds, signal);
-        const read = new Set();
+        const readPartitions = new Set();
+        const readSensors = new Set();
         /** Read successfully but deliberately not published, by policy. */
         const skipped = new Set();
-        for (const partition of partitions) {
-            this.#syncPartition(partition);
-            read.add(partition.id);
-        }
-        for (const sensor of sensors) {
-            if (!this.#syncSensor(sensor, reason)) {
-                skipped.add(sensor.id);
+        let reached = false;
+        try {
+            for (const partition of await this.client.getPartitions(partitionIds, signal)) {
+                this.#syncPartition(partition);
+                readPartitions.add(partition.id);
             }
-            read.add(sensor.id);
+            reached = true;
+            for (const sensor of await this.client.getSensors(sensorIds, signal)) {
+                if (!this.#syncSensor(sensor, reason)) {
+                    skipped.add(sensor.id);
+                }
+                readSensors.add(sensor.id);
+            }
         }
+        finally {
+            this.#recordDeviceSignals({
+                partitionIds,
+                readPartitions,
+                sensorIds,
+                readSensors,
+                reached,
+            });
+        }
+        const read = new Set([...readPartitions, ...readSensors]);
         const unreadable = [...partitionIds, ...sensorIds].filter((id) => !read.has(id));
         if (unreadable.length > 0) {
             this.#log.warn(`Alarm.com returned no detail for ${unreadable.length} device(s); keeping their HomeKit accessories until it does.`);
@@ -709,13 +718,29 @@ class MyAlarmComPlatform {
         if (partitionIds.length === 0 && sensorIds.length === 0) {
             return 0;
         }
-        for (const resource of await this.client.getPartitions(partitionIds, signal)) {
-            this.#partitions.get(resource.id)?.update(resource);
+        const readPartitions = new Set();
+        const readSensors = new Set();
+        let reached = false;
+        try {
+            for (const resource of await this.client.getPartitions(partitionIds, signal)) {
+                this.#partitions.get(resource.id)?.update(resource);
+                readPartitions.add(resource.id);
+            }
+            reached = true;
+            for (const resource of await this.client.getSensors(sensorIds, signal)) {
+                this.#sensors.get(resource.id)?.update(resource);
+                readSensors.add(resource.id);
+            }
         }
-        for (const resource of await this.client.getSensors(sensorIds, signal)) {
-            this.#sensors.get(resource.id)?.update(resource);
+        finally {
+            this.#recordDeviceSignals({
+                partitionIds,
+                readPartitions,
+                sensorIds,
+                readSensors,
+                reached,
+            });
         }
-        this.#publishDeviceSignals();
         return partitionIds.length + sensorIds.length;
     }
     /**
@@ -859,21 +884,11 @@ class MyAlarmComPlatform {
             ignored: this.#config.ignoredDeviceIds.size,
         };
     }
-    /**
-     * Open the signal writer.
-     *
-     * The setting alone is not enough: without a storage path the file would
-     * be created in the process's current directory.
-     */
+    /** Open the signal writer in Homebridge's storage directory. */
     #openSignals(api) {
-        const storagePath = (0, alarmcom_signals_1.homebridgeStoragePath)(api);
-        if (storagePath === undefined) {
-            this.#log.warn('Send Signals to PagerDuty is on, but Homebridge did not provide a storage path. Not writing signals.');
-            return undefined;
-        }
         return (0, alarmcom_signals_1.createAlarmComSignals)({
             plugin: settings_1.PLUGIN_NAME,
-            storagePath,
+            storagePath: api.user.storagePath(),
             log: this.#log,
         });
     }
@@ -903,21 +918,27 @@ class MyAlarmComPlatform {
         this.#signals?.noteSignInStopped(failure);
     }
     /**
-     * Write alarm and smoke from the devices this plugin is publishing, and
-     * record that Alarm.com answered.
+     * Write alarm and smoke from the devices actually read.
      *
-     * Runs only after a read finishes. A sensor this plugin declined to publish
-     * is not in the map, so it cannot page.
+     * A device Alarm.com omitted stays out of the clear. Seeing an alarm or a
+     * tripped smoke detector still pages. `reached` means a read call returned.
      */
-    #publishDeviceSignals() {
-        if (!this.#signals) {
+    #recordDeviceSignals(read) {
+        const signals = this.#signals;
+        if (!signals) {
             return;
         }
-        this.#signals.noteDevices({
-            alarmActive: [...this.#partitions.values()].some((partition) => partition.hasActiveAlarm),
-            smokeActive: [...this.#sensors.values()].some((sensor) => sensor.kind === 'smoke' && sensor.isTriggered === true),
-        });
-        this.#signals.noteReached();
+        const alarmActive = (0, alarmcom_signals_1.observedSignal)([...this.#partitions.values()].some((partition) => partition.hasActiveAlarm), read.partitionIds.every((id) => read.readPartitions.has(id)));
+        const smokeActive = (0, alarmcom_signals_1.observedSignal)([...this.#sensors.values()].some((sensor) => sensor.kind === 'smoke' && sensor.isTriggered === true), read.sensorIds.every((id) => read.readSensors.has(id)));
+        if (alarmActive !== undefined || smokeActive !== undefined) {
+            signals.noteDevices({
+                ...(alarmActive !== undefined ? { alarmActive } : {}),
+                ...(smokeActive !== undefined ? { smokeActive } : {}),
+            });
+        }
+        if (read.reached) {
+            signals.noteReached();
+        }
     }
     #shutdown() {
         if (this.#isShuttingDown) {

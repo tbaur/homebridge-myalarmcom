@@ -320,16 +320,4 @@ describeWithSqlite('PagerDuty signals from a live discovery', () => {
     expect(close).toHaveBeenCalledTimes(1)
     expect(row('alarm-active')).toMatchObject({ active: 1 })
   })
-
-  it('warns and does not write when Homebridge provides no storage path', async () => {
-    api.storageDirectory = ''
-    interceptSignIn()
-    interceptAccount()
-
-    await launch()
-
-    expect(log.warnings.some((message) => message.includes('did not provide a storage path'))).toBe(true)
-    expect(log.infoMessages.some((message) => message.includes('homebridge-pagerduty support is enabled'))).toBe(false)
-    expect(existsSync(join(process.cwd(), 'homebridge-pagerduty'))).toBe(false)
-  })
 })
