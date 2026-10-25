@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.2.0...v2.2.1) (2026-10-25)
+
+
+### Bug Fixes
+
+* do not clear an alarm page before the panel is read ([320de57](https://github.com/tbaur/homebridge-myalarmcom/commit/320de573961cc90db4c9b2d1873a3d80cdb461b6))
+
 ## [2.2.0](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.1.0...v2.2.0) (2026-10-25)
 
 
