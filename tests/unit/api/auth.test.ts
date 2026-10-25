@@ -18,6 +18,7 @@ import {
   type Credentials,
 } from '../../../src/api/auth'
 import {
+  ApiResponseError,
   AuthenticationError,
   LoginFormError,
   TwoFactorRequiredError,
@@ -215,6 +216,16 @@ describe('authenticate', () => {
     expect(error).toBeInstanceOf(AuthenticationError)
     expect(error.message).toMatch(/rejected the username or password/)
     expect(error.message).toMatch(/lock the account/)
+  })
+
+  it('does not treat a server error on the sign-in post as a rejected password', async () => {
+    interceptLoginPage()
+    nock(BASE_URL).post('/web/Default.aspx').reply(503, 'unavailable')
+
+    const error = await captureRejection(authenticate(CREDENTIALS, log))
+
+    expect(error).toBeInstanceOf(ApiResponseError)
+    expect(error).not.toBeInstanceOf(AuthenticationError)
   })
 
   it('raises a two-factor error on a 409', async () => {

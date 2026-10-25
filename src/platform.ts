@@ -17,7 +17,7 @@ import type {
 } from 'homebridge'
 import {
   createAlarmComSignals,
-  homebridgeStoragePath,
+  observedSignal,
   PAGERDUTY_STARTUP_LOG,
   signalFailureFrom,
   type AlarmComSignals,
@@ -105,10 +105,7 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   /** Both `null` when the configuration is unusable, so nothing can sign in. */
   readonly #client: AlarmComClient | null
   readonly #sessionManager: SessionManager | null
-  /**
-   * Absent unless `pagerdutySignals` is on and Homebridge provided a storage
-   * path. Nothing touches the signal store while this is absent.
-   */
+  /** Absent unless `pagerdutySignals` is on. Nothing touches the store while it is absent. */
   readonly #signals: AlarmComSignals | undefined
   readonly #cachedAccessories = new Map<string, PlatformAccessory>()
   readonly #partitions = new Map<string, PartitionAccessory>()
@@ -453,7 +450,6 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     )
 
     await this.#publishDevices(requestedPartitionIds, requestedSensorIds, reason, signal)
-    this.#publishDeviceSignals()
   }
 
   #withoutIgnored(deviceIds: readonly string[]): string[] {
@@ -488,23 +484,35 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     reason: 'startup' | 'periodic',
     signal?: AbortSignal,
   ): Promise<void> {
-    const partitions = await this.client.getPartitions(partitionIds, signal)
-    const sensors = await this.client.getSensors(sensorIds, signal)
-
-    const read = new Set<string>()
+    const readPartitions = new Set<string>()
+    const readSensors = new Set<string>()
     /** Read successfully but deliberately not published, by policy. */
     const skipped = new Set<string>()
+    let reached = false
 
-    for (const partition of partitions) {
-      this.#syncPartition(partition)
-      read.add(partition.id)
-    }
-    for (const sensor of sensors) {
-      if (!this.#syncSensor(sensor, reason)) {
-        skipped.add(sensor.id)
+    try {
+      for (const partition of await this.client.getPartitions(partitionIds, signal)) {
+        this.#syncPartition(partition)
+        readPartitions.add(partition.id)
       }
-      read.add(sensor.id)
+      reached = true
+      for (const sensor of await this.client.getSensors(sensorIds, signal)) {
+        if (!this.#syncSensor(sensor, reason)) {
+          skipped.add(sensor.id)
+        }
+        readSensors.add(sensor.id)
+      }
+    } finally {
+      this.#recordDeviceSignals({
+        partitionIds,
+        readPartitions,
+        sensorIds,
+        readSensors,
+        reached,
+      })
     }
+
+    const read = new Set([...readPartitions, ...readSensors])
 
     const unreadable = [...partitionIds, ...sensorIds].filter((id) => !read.has(id))
     if (unreadable.length > 0) {
@@ -872,14 +880,29 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
       return 0
     }
 
-    for (const resource of await this.client.getPartitions(partitionIds, signal)) {
-      this.#partitions.get(resource.id)?.update(resource)
-    }
-    for (const resource of await this.client.getSensors(sensorIds, signal)) {
-      this.#sensors.get(resource.id)?.update(resource)
+    const readPartitions = new Set<string>()
+    const readSensors = new Set<string>()
+    let reached = false
+    try {
+      for (const resource of await this.client.getPartitions(partitionIds, signal)) {
+        this.#partitions.get(resource.id)?.update(resource)
+        readPartitions.add(resource.id)
+      }
+      reached = true
+      for (const resource of await this.client.getSensors(sensorIds, signal)) {
+        this.#sensors.get(resource.id)?.update(resource)
+        readSensors.add(resource.id)
+      }
+    } finally {
+      this.#recordDeviceSignals({
+        partitionIds,
+        readPartitions,
+        sensorIds,
+        readSensors,
+        reached,
+      })
     }
 
-    this.#publishDeviceSignals()
     return partitionIds.length + sensorIds.length
   }
 
@@ -1041,23 +1064,11 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  /**
-   * Open the signal writer.
-   *
-   * The setting alone is not enough: without a storage path the file would
-   * be created in the process's current directory.
-   */
-  #openSignals(api: API): AlarmComSignals | undefined {
-    const storagePath = homebridgeStoragePath(api)
-    if (storagePath === undefined) {
-      this.#log.warn(
-        'Send Signals to PagerDuty is on, but Homebridge did not provide a storage path. Not writing signals.',
-      )
-      return undefined
-    }
+  /** Open the signal writer in Homebridge's storage directory. */
+  #openSignals(api: API): AlarmComSignals {
     return createAlarmComSignals({
       plugin: PLUGIN_NAME,
-      storagePath,
+      storagePath: api.user.storagePath(),
       log: this.#log,
     })
   }
@@ -1090,23 +1101,39 @@ export class MyAlarmComPlatform implements DynamicPlatformPlugin {
   }
 
   /**
-   * Write alarm and smoke from the devices this plugin is publishing, and
-   * record that Alarm.com answered.
+   * Write alarm and smoke from the devices actually read.
    *
-   * Runs only after a read finishes. A sensor this plugin declined to publish
-   * is not in the map, so it cannot page.
+   * A device Alarm.com omitted stays out of the clear. Seeing an alarm or a
+   * tripped smoke detector still pages. `reached` means a read call returned.
    */
-  #publishDeviceSignals(): void {
-    if (!this.#signals) {
+  #recordDeviceSignals(read: {
+    partitionIds: readonly string[]
+    readPartitions: ReadonlySet<string>
+    sensorIds: readonly string[]
+    readSensors: ReadonlySet<string>
+    reached: boolean
+  }): void {
+    const signals = this.#signals
+    if (!signals) {
       return
     }
-    this.#signals.noteDevices({
-      alarmActive: [...this.#partitions.values()].some((partition) => partition.hasActiveAlarm),
-      smokeActive: [...this.#sensors.values()].some(
-        (sensor) => sensor.kind === 'smoke' && sensor.isTriggered === true,
-      ),
-    })
-    this.#signals.noteReached()
+    const alarmActive = observedSignal(
+      [...this.#partitions.values()].some((partition) => partition.hasActiveAlarm),
+      read.partitionIds.every((id) => read.readPartitions.has(id)),
+    )
+    const smokeActive = observedSignal(
+      [...this.#sensors.values()].some((sensor) => sensor.kind === 'smoke' && sensor.isTriggered === true),
+      read.sensorIds.every((id) => read.readSensors.has(id)),
+    )
+    if (alarmActive !== undefined || smokeActive !== undefined) {
+      signals.noteDevices({
+        ...(alarmActive !== undefined ? { alarmActive } : {}),
+        ...(smokeActive !== undefined ? { smokeActive } : {}),
+      })
+    }
+    if (read.reached) {
+      signals.noteReached()
+    }
   }
 
   #shutdown(): void {

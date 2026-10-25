@@ -80,28 +80,19 @@ export function signalFailureFrom(error: unknown): SignalFailure | undefined {
 }
 
 /**
- * `api.user.storagePath()`, or undefined when Homebridge did not provide one.
+ * Whether a house-level signal is active after a read.
  *
- * An empty string is missing. Joining it would create the store in the
- * process's current directory.
+ * A positive reading is enough to page. A clear is written only when every
+ * requested device came back, so a missing detail cannot resolve an open page.
  */
-export function homebridgeStoragePath(api: object): string | undefined {
-  if (!('user' in api)) {
-    return undefined
+export function observedSignal(sawActive: boolean, isComplete: boolean): boolean | undefined {
+  if (sawActive) {
+    return true
   }
-  const user: unknown = api.user
-  if (typeof user !== 'object' || user === null || !('storagePath' in user)) {
-    return undefined
+  if (isComplete) {
+    return false
   }
-  const readPath: unknown = user.storagePath
-  if (typeof readPath !== 'function') {
-    return undefined
-  }
-  const storagePath: unknown = (readPath as () => unknown).call(user)
-  if (typeof storagePath !== 'string' || storagePath.length === 0) {
-    return undefined
-  }
-  return storagePath
+  return undefined
 }
 
 /**
@@ -194,20 +185,24 @@ export class AlarmComSignals {
    * Call this only after the read has finished. Writing a clear part way
    * through would resolve an open alarm and open it again a moment later.
    */
-  noteDevices(state: DeviceSignalState): void {
+  noteDevices(state: Partial<DeviceSignalState>): void {
     if (this.#isClosed) {
       return
     }
-    this.#writer.write(SIGNAL_ALARM_ACTIVE, {
-      active: state.alarmActive,
-      severity: 'critical',
-      summary: ALARM_ACTIVE_SUMMARY,
-    })
-    this.#writer.write(SIGNAL_SMOKE_ACTIVE, {
-      active: state.smokeActive,
-      severity: 'critical',
-      summary: SMOKE_ACTIVE_SUMMARY,
-    })
+    if (state.alarmActive !== undefined) {
+      this.#writer.write(SIGNAL_ALARM_ACTIVE, {
+        active: state.alarmActive,
+        severity: 'critical',
+        summary: ALARM_ACTIVE_SUMMARY,
+      })
+    }
+    if (state.smokeActive !== undefined) {
+      this.#writer.write(SIGNAL_SMOKE_ACTIVE, {
+        active: state.smokeActive,
+        severity: 'critical',
+        summary: SMOKE_ACTIVE_SUMMARY,
+      })
+    }
   }
 
   /** Close the store and stop the grace timer. Does not clear any signal. */
