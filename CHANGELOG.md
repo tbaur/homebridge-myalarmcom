@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.1.0...v2.2.0) (2026-10-25)
+
+
+### Features
+
+* page alarm, smoke, sign-in, and outage through PagerDuty ([af14805](https://github.com/tbaur/homebridge-myalarmcom/commit/af14805ad4fdca1030ed47927ae8ad08af96ef7e))
+
 ## [2.1.0](https://github.com/tbaur/homebridge-myalarmcom/compare/v2.0.6...v2.1.0) (2026-09-13)
 
 
