@@ -42,6 +42,7 @@
   },
   "overrides": {
     "js-yaml": "^4.3.1",
+    "deepmerge": "4.1.2",
     "handlebars": "^4.7.10"
   },
   "devDependencies": {
