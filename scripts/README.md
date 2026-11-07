@@ -37,11 +37,7 @@ These need a build. `npm run verify` builds first; running the file directly doe
 
 ## Verifying the accessory, not just the client
 
-`verify.mjs` stops at the client. Every HomeKit-facing decision lives in
-`PartitionAccessory`, and none of it is reachable from a script that only calls
-`client.commandPartition` — `verify.mjs` goes as far as hand-copying
-`buildCommandOptions`, so it can agree with a bug in the original. Use
-`probe-accessory.mjs` when the question is about behaviour the user would see.
+`verify.mjs` stops at the client. Every HomeKit-facing decision lives in `PartitionAccessory`, and none of it is reachable from a script that only calls `client.commandPartition` — `verify.mjs` goes as far as hand-copying `buildCommandOptions`, so it can agree with a bug in the original. Use `probe-accessory.mjs` when the question is about behaviour the user would see.
 
 ### Rehearse before you spend a live run
 
@@ -49,16 +45,9 @@ These need a build. `npm run verify` builds first; running the file directly doe
 node scripts/rehearse-probe.mjs
 ```
 
-Deciding when a scenario has finished is the part of this script that is worth
-testing, because getting it wrong costs an arm/disarm cycle on a real house to
-discover. Three runs were spent that way. The worst of them waited for the panel
-to be "disarmed" and so returned instantly, the panel being disarmed already: the
-run wrote its report twelve seconds in and exited while the arm was still on its
-way, leaving the panel to arm itself with nobody left to disarm it.
+Deciding when a scenario has finished is the part of this script that is worth testing, because getting it wrong costs an arm/disarm cycle on a real house to discover. Three runs were spent that way. The worst of them waited for the panel to be "disarmed" and so returned instantly, the panel being disarmed already: the run wrote its report twelve seconds in and exited while the arm was still on its way, leaving the panel to arm itself with nobody left to disarm it.
 
-The shape that catches this is a panel that starts and ends in the same state
-with a different one in between, which is exactly what `--supersede` does. Wait
-for the readings to go *quiet*, never for a value.
+The shape that catches this is a panel that starts and ends in the same state with a different one in between, which is exactly what `--supersede` does. Wait for the readings to go *quiet*, never for a value.
 
 ```bash
 node scripts/probe-accessory.mjs --night-display  # read-only: sends nothing
@@ -68,14 +57,9 @@ node scripts/probe-accessory.mjs --supersede      # really arms, then disarms
 node scripts/probe-accessory.mjs --all            # all four, in that order
 ```
 
-Services and characteristics are the genuine hap-nodejs classes, so a write goes
-through the same validation and the same `HapStatusError` path it would in a
-running Homebridge. Only the Homebridge shell is faked.
+Services and characteristics are the genuine hap-nodejs classes, so a write goes through the same validation and the same `HapStatusError` path it would in a running Homebridge. Only the Homebridge shell is faked.
 
-`--refusal` and `--bypass` need a contact sensor held open, and the script says
-so and stops if everything is shut. `--refusal` is the odd one: a correct run
-sends nothing at all, so it still asks for confirmation because an *incorrect*
-run arms your panel.
+`--refusal` and `--bypass` need a contact sensor held open, and the script says so and stops if everything is shut. `--refusal` is the odd one: a correct run sends nothing at all, so it still asks for confirmation because an *incorrect* run arms your panel.
 
 It prints each sensor's raw `state` and `openClosedStatus` alongside the HomeKit value the plugin derives, so a mapping error is visible by reading it against what you can see with your own eyes. Anything the plugin cannot resolve confidently is flagged `AMBIGUOUS`.
 
