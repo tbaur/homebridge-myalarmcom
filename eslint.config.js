@@ -120,6 +120,17 @@ module.exports = [
       '@typescript-eslint/explicit-function-return-type': 'off',
       '@typescript-eslint/explicit-module-boundary-types': 'off',
       '@typescript-eslint/consistent-type-imports': ['error', { prefer: 'type-imports' }],
+      // Homebridge is a dev dependency, not a runtime one. A value import such
+      // as `HAPStatus` compiles to `require('homebridge')`, which loads
+      // Homebridge's plugin manager inside the plugin. Values come from
+      // `api.hap` at runtime instead.
+      '@typescript-eslint/no-restricted-imports': ['error', {
+        paths: [{
+          name: 'homebridge',
+          allowTypeImports: true,
+          message: 'Import types only from homebridge; read runtime values from api.hap.',
+        }],
+      }],
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-misused-promises': 'error',
       '@typescript-eslint/await-thenable': 'error',

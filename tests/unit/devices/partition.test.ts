@@ -8,8 +8,7 @@
  * codes the Home app would see are what these tests assert on.
  */
 
-import { Characteristic, Service } from '@homebridge/hap-nodejs'
-import { HAPStatus } from 'homebridge'
+import { Characteristic, HAPStatus, Service } from '@homebridge/hap-nodejs'
 import { PartitionAccessory, type PartitionAccessoryContext } from '../../../src/devices/partition'
 import type { PartitionAttributes, Resource } from '../../../src/types/alarm'
 import { HomeKitSecurityState, HomeKitSecurityTarget } from '../../../src/utils/mappers'

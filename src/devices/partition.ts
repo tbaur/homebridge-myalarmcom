@@ -7,7 +7,7 @@
  * @fileoverview Security panel accessory.
  */
 
-import { HAPStatus, type CharacteristicValue, type PlatformAccessory, type Service } from 'homebridge'
+import type { CharacteristicValue, PlatformAccessory, Service } from 'homebridge'
 import { ReadOnlyPartitionError, TimeoutError } from '../errors'
 import {
   MS_PER_SECOND,
@@ -241,7 +241,7 @@ export class PartitionAccessory {
   #readTargetState(): number {
     const target = this.#targetToShow(this.#requireDisplayedState())
     if (target === undefined) {
-      throw new this.#platform.api.hap.HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      throw new this.#platform.api.hap.HapStatusError(this.#platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE)
     }
     return target
   }
@@ -266,7 +266,7 @@ export class PartitionAccessory {
   #requireDisplayedState(): number {
     const displayedState = this.#displayedState()
     if (displayedState === undefined) {
-      throw new this.#platform.api.hap.HapStatusError(HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+      throw new this.#platform.api.hap.HapStatusError(this.#platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE)
     }
     return displayedState
   }
@@ -492,7 +492,7 @@ export class PartitionAccessory {
     const action = toPartitionAction(target)
 
     if (!action) {
-      throw new this.#platform.api.hap.HapStatusError(HAPStatus.INVALID_VALUE_IN_REQUEST)
+      throw new this.#platform.api.hap.HapStatusError(this.#platform.api.hap.HAPStatus.INVALID_VALUE_IN_REQUEST)
     }
 
     if (action !== 'disarm') {
@@ -552,7 +552,7 @@ export class PartitionAccessory {
       + `${formatNameList(open)} ${isSingle ? 'is' : 'are'} open. ${remedy}`,
     )
 
-    throw new this.#platform.api.hap.HapStatusError(HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE)
+    throw new this.#platform.api.hap.HapStatusError(this.#platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE)
   }
 
   /**
@@ -575,7 +575,7 @@ export class PartitionAccessory {
       } else {
         this.#log.error(new ReadOnlyPartitionError(this.#name).message)
       }
-      throw new this.#platform.api.hap.HapStatusError(HAPStatus.INSUFFICIENT_PRIVILEGES)
+      throw new this.#platform.api.hap.HapStatusError(this.#platform.api.hap.HAPStatus.INSUFFICIENT_PRIVILEGES)
     }
 
     return attributes
@@ -655,8 +655,8 @@ export class PartitionAccessory {
     if (!settled.isOk) {
       throw new this.#platform.api.hap.HapStatusError(
         settled.error instanceof TimeoutError
-          ? HAPStatus.OPERATION_TIMED_OUT
-          : HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+          ? this.#platform.api.hap.HAPStatus.OPERATION_TIMED_OUT
+          : this.#platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE,
       )
     }
   }
@@ -720,7 +720,7 @@ export class PartitionAccessory {
     } catch (error) {
       this.#recordOutcome({ isOk: false, error }, attempt)
       throw new this.#platform.api.hap.HapStatusError(
-        HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+        this.#platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE,
       )
     }
   }
