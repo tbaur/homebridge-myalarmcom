@@ -15,6 +15,7 @@
 import { EventEmitter } from 'node:events'
 import {
   Characteristic,
+  HAPStatus,
   HapStatusError,
   Perms,
   Service,
@@ -97,7 +98,7 @@ export function createPlatformTestBed(
   const platform = {
     Service,
     Characteristic,
-    api: { hap: { uuid, Perms: PERMS, HapStatusError } },
+    api: { hap: { uuid, Perms: PERMS, HAPStatus, HapStatusError } },
     client: { commandPartition },
     requestDeviceRefresh,
     recordCommand,
@@ -117,7 +118,7 @@ export function createPlatformTestBed(
 
 /** A Homebridge `API` double recording everything the platform publishes. */
 export class FakeHomebridgeApi extends EventEmitter {
-  readonly hap = { Service, Characteristic, uuid, Perms: PERMS, HapStatusError }
+  readonly hap = { Service, Characteristic, uuid, Perms: PERMS, HAPStatus, HapStatusError }
   readonly platformAccessory = FakePlatformAccessory
   /**
    * Directory `api.user.storagePath()` returns.

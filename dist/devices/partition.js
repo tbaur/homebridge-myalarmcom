@@ -163,7 +163,7 @@ class PartitionAccessory {
     #readTargetState() {
         const target = this.#targetToShow(this.#requireDisplayedState());
         if (target === undefined) {
-            throw new this.#platform.api.hap.HapStatusError(-70402 /* HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
+            throw new this.#platform.api.hap.HapStatusError(this.#platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
         }
         return target;
     }
@@ -187,7 +187,7 @@ class PartitionAccessory {
     #requireDisplayedState() {
         const displayedState = this.#displayedState();
         if (displayedState === undefined) {
-            throw new this.#platform.api.hap.HapStatusError(-70402 /* HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
+            throw new this.#platform.api.hap.HapStatusError(this.#platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
         }
         return displayedState;
     }
@@ -367,7 +367,7 @@ class PartitionAccessory {
         const target = Number(value);
         const action = (0, mappers_1.toPartitionAction)(target);
         if (!action) {
-            throw new this.#platform.api.hap.HapStatusError(-70410 /* HAPStatus.INVALID_VALUE_IN_REQUEST */);
+            throw new this.#platform.api.hap.HapStatusError(this.#platform.api.hap.HAPStatus.INVALID_VALUE_IN_REQUEST);
         }
         if (action !== 'disarm') {
             this.#refuseArmOverOpenSensors(attributes, target);
@@ -413,7 +413,7 @@ class PartitionAccessory {
                 + 'to have the panel bypass them.';
         this.#log.error(`${this.#name}: cannot reach ${(0, mappers_1.toSecurityStateLabel)(target)} because `
             + `${formatNameList(open)} ${isSingle ? 'is' : 'are'} open. ${remedy}`);
-        throw new this.#platform.api.hap.HapStatusError(-70412 /* HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE */);
+        throw new this.#platform.api.hap.HapStatusError(this.#platform.api.hap.HAPStatus.NOT_ALLOWED_IN_CURRENT_STATE);
     }
     /**
      * Refuse the command unless HomeKit is allowed to arm this partition.
@@ -435,7 +435,7 @@ class PartitionAccessory {
             else {
                 this.#log.error(new errors_1.ReadOnlyPartitionError(this.#name).message);
             }
-            throw new this.#platform.api.hap.HapStatusError(-70401 /* HAPStatus.INSUFFICIENT_PRIVILEGES */);
+            throw new this.#platform.api.hap.HapStatusError(this.#platform.api.hap.HAPStatus.INSUFFICIENT_PRIVILEGES);
         }
         return attributes;
     }
@@ -498,8 +498,8 @@ class PartitionAccessory {
         this.#settle(settled, attempt);
         if (!settled.isOk) {
             throw new this.#platform.api.hap.HapStatusError(settled.error instanceof errors_1.TimeoutError
-                ? -70408 /* HAPStatus.OPERATION_TIMED_OUT */
-                : -70402 /* HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
+                ? this.#platform.api.hap.HAPStatus.OPERATION_TIMED_OUT
+                : this.#platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
         }
     }
     /**
@@ -551,7 +551,7 @@ class PartitionAccessory {
         }
         catch (error) {
             this.#recordOutcome({ isOk: false, error }, attempt);
-            throw new this.#platform.api.hap.HapStatusError(-70402 /* HAPStatus.SERVICE_COMMUNICATION_FAILURE */);
+            throw new this.#platform.api.hap.HapStatusError(this.#platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
         }
     }
     /**

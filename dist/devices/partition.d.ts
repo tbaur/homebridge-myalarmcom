@@ -6,7 +6,7 @@
  *
  * @fileoverview Security panel accessory.
  */
-import { type PlatformAccessory } from 'homebridge';
+import type { PlatformAccessory } from 'homebridge';
 import { type PartitionAttributes, type Resource } from '../types/alarm';
 import type { Logger } from '../utils/logger';
 import type { MyAlarmComPlatform } from '../platform';
