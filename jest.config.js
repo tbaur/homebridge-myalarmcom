@@ -83,6 +83,7 @@ module.exports = {
 
   moduleNameMapper: {
     '^nock$': '<rootDir>/tests/nock-bridge.js',
+    '^@homebridge/hap-nodejs$': '<rootDir>/tests/hap-nodejs-bridge.js',
     '^@/(.*)$': '<rootDir>/src/$1',
   },
 
